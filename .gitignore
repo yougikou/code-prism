@@ -1,0 +1,25 @@
+# Rust
+/target/
+# Cargo.lock
+
+
+# CodePrism specific
+.codeprism.db
+.codeprism.db-shm
+.codeprism.db-wal
+*.log
+*.txt
+.env
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# MacOS
+.DS_Store
+
+# Tmp
+tmp/
+artifacts/

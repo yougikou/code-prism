@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO scans (project_id, commit_hash, branch_name, scan_mode, base_commit_hash) \n             VALUES (?, ?, ?, ?, ?) \n             RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "2ad49b225bc0f3f98447e486afb19c91521a9e1c0ce3bb8b2095ce6b4e44bccb"
+}

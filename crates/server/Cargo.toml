@@ -1,0 +1,20 @@
+[package]
+name = "codeprism-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+codeprism-core = { path = "../core" }
+codeprism-database = { path = "../database" }
+sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio", "macros"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+axum = "0.7"
+utoipa = { version = "4.2", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "7.1", features = ["axum"] }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["fs", "trace", "cors"] }
+rust-embed = "8.11.0"
+mime_guess = "2.0.5"

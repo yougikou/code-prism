@@ -1,0 +1,38 @@
+# CodePrism Configuration Sample
+database_url: "sqlite:.codeprism.db"
+
+# 1. 全局排除设置 (Global Excludes)
+global_excludes:
+  # 排除所有根目录下的文件 (例如: README.md, package.json, .gitignore)
+  # 注意: "*" 只匹配不包含路径分隔符的名称，因此不会排除子文件夹中的文件 (如 src/main.rs)
+  - "*"
+
+  # 排除特定的常用忽略目录
+  - "**/.git/**"
+  - "**/node_modules/**"
+  - "**/target/**"
+  - "**/build/**"
+
+# Define custom regex analyzers here (Name -> Pattern)
+custom_analyzers:
+  todo_finder: "(TODO|FIXME):.*"
+  api_key_finder: "sk-[a-zA-Z0-9]{32,}"
+
+# 2. 技术栈定义 (Tech Stacks)
+tech_stacks:
+  - name: "Java Source"
+    extensions: ["java"]
+    analyzers: ["char_count"]
+
+    # 即使全局排除了 "*", 如果这里显式指定了路径(paths)，这些路径下的文件仍然会被【强制扫描】
+    # 这里的 paths 优先级高于 global_excludes
+    paths: ["src/main/java/**"]
+
+  - name: "Configuration"
+    extensions: ["xml", "yaml", "yml", "properties"]
+    analyzers: ["char_count"]
+
+    # 如果 paths 为空，则遵循默认规则（会被 global_excludes 过滤）
+    paths: [] 
+
+

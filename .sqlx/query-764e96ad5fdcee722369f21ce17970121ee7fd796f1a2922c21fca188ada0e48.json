@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO metrics (scan_id, file_path, change_type, old_file_path, tech_stack, analyzer_id, metric_key, category, value_before, value_after, scope)\n                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "764e96ad5fdcee722369f21ce17970121ee7fd796f1a2922c21fca188ada0e48"
+}

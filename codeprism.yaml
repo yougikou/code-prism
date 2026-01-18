@@ -1,0 +1,38 @@
+# CodePrism Configuration Sample
+
+# Optional: Override DB URL
+database_url: "sqlite:.codeprism.db"
+# Or using an absolute path if needed:
+# database_url: "sqlite:E:/path/to/.codeprism.db"
+
+global_excludes:
+  # 1. 排除根目录下的所有文件
+  - "*"
+  
+  # 2. 排除常见的构建和临时目录
+  - "**/.git/**"
+  - "**/node_modules/**"
+  - "**/target/**"
+
+# Define custom regex analyzers here (Name -> Pattern)
+custom_analyzers:
+  todo_finder: "(TODO|FIXME):.*"
+  api_key_finder: "sk-[a-zA-Z0-9]{32,}"
+
+tech_stacks:
+  - name: "Rust"
+    extensions: ["rs", "toml"]
+    analyzers: ["char_count"]
+
+
+  - name: "Web"
+    extensions: ["js", "ts", "jsx", "tsx", "html", "css"]
+    analyzers: ["char_count"]
+
+
+  - name: "Java"
+    extensions: ["java", "jsp", "xml"]
+    analyzers: ["char_count"]
+
+
+

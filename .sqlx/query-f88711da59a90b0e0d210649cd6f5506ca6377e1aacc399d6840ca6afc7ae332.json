@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO projects (name, repo_path) VALUES (?, ?)\n             ON CONFLICT(repo_path) DO UPDATE SET name = excluded.name\n             RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f88711da59a90b0e0d210649cd6f5506ca6377e1aacc399d6840ca6afc7ae332"
+}
