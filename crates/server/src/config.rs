@@ -3,20 +3,33 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
 pub struct AppConfig {
     pub views: Vec<ViewConfig>,
+    pub tech_stacks: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
 pub struct ViewConfig {
     pub id: String,
-    pub tech_stack: String,
+    pub title: String,
+    pub tech_stacks: Vec<String>,
+    pub category: Option<String>,
+    #[serde(default = "default_include_children")]
+    pub include_children: bool,
+    #[serde(default)]
+    pub group_by: Vec<String>,
+    #[serde(default)]
+    pub chart_type: Option<String>,
     #[serde(flatten)]
     pub kind: ViewKind,
 }
 
-#[derive(Debug, Deserialize)]
+fn default_include_children() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
 #[serde(tag = "type")]
 pub enum ViewKind {
     #[serde(rename = "top_n")]
@@ -28,13 +41,13 @@ pub enum ViewKind {
     Sum { source: SourceConfig },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
 pub struct SourceConfig {
     pub analyzer_id: String,
     pub metric_key: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
 pub struct TopNParams {
     pub limit: u32,
 }
@@ -56,7 +69,8 @@ mod tests {
         let yaml = r#"
 views:
   - id: "top_file_size"
-    tech_stack: "Gosu"
+    tech_stacks: ["Gosu"]
+    category: "maintainability"
     type: "top_n"
     source: { analyzer_id: "char_count", metric_key: "length" }
     params: { limit: 10 }
@@ -65,7 +79,8 @@ views:
         assert_eq!(config.views.len(), 1);
         let view = &config.views[0];
         assert_eq!(view.id, "top_file_size");
-        assert_eq!(view.tech_stack, "Gosu");
+        assert_eq!(view.tech_stacks, vec!["Gosu"]);
+        assert_eq!(view.category, Some("maintainability".to_string()));
 
         match &view.kind {
             ViewKind::TopN { source, params } => {

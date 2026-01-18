@@ -51,8 +51,7 @@ impl TopNAggregator {
             query.push_str(" AND analyzer_id = ?");
         }
 
-        if !view_config.tech_stack.is_empty() {
-            // Using view_config.tech_stack as category filter as per current adapter logic
+        if view_config.category.is_some() {
             query.push_str(" AND category = ?");
         }
 
@@ -75,8 +74,8 @@ impl TopNAggregator {
             sql_query = sql_query.bind(&source.analyzer_id);
         }
 
-        if !view_config.tech_stack.is_empty() {
-            sql_query = sql_query.bind(&view_config.tech_stack);
+        if let Some(cat) = &view_config.category {
+            sql_query = sql_query.bind(cat);
         }
 
         // Bind dynamic filters
@@ -114,21 +113,35 @@ impl TopNAggregator {
             .collect();
 
         // Perform grouping if requested
-        if let Some(group_by_str) = &filters.group_by {
+        let effective_group_by = if let Some(g) = &filters.group_by {
+            Some(g.clone())
+        } else if !view_config.group_by.is_empty() {
+            Some(view_config.group_by.join(","))
+        } else {
+            None
+        };
+
+        if let Some(group_by_str) = effective_group_by {
             let keys: Vec<&str> = group_by_str
                 .split(',')
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .collect();
             if !keys.is_empty() {
-                results = Self::group_recursive(results, &keys);
+                if !keys.is_empty() {
+                    results = Self::group_recursive(results, &keys, view_config.include_children);
+                }
             }
         }
 
         Ok(results)
     }
 
-    pub fn group_recursive(items: Vec<AggregationResult>, keys: &[&str]) -> Vec<AggregationResult> {
+    pub fn group_recursive(
+        items: Vec<AggregationResult>,
+        keys: &[&str],
+        include_children: bool,
+    ) -> Vec<AggregationResult> {
         if keys.is_empty() || items.is_empty() {
             return items;
         }
@@ -164,21 +177,41 @@ impl TopNAggregator {
         for (group_val, mut children) in groups {
             // Apply recursion
             if !remaining_keys.is_empty() {
-                children = Self::group_recursive(children, remaining_keys);
+                children = Self::group_recursive(children, remaining_keys, include_children);
             }
 
             // Calculate aggregate value (SUM of immediate children values)
             let total_value: f64 = children.iter().map(|c| c.value).sum();
 
-            group_nodes.push(AggregationResult {
+            // Filter children if requested
+            // Only strictly apply exclusion if we are at the bottom (no more grouping keys).
+            // If there ARE remaining keys, 'children' are the sub-groups, which we almost certainly want to keep
+            // to show the hierarchy, otherwise grouping is useless.
+            let children_val = if !remaining_keys.is_empty() || include_children {
+                Some(children)
+            } else {
+                None
+            };
+
+            let mut node = AggregationResult {
                 label: group_val.clone(),
                 value: total_value,
-                tech_stack: None, // Or could infer if homogeneous
+                tech_stack: None,
                 category: None,
                 change_type: None,
-                children: Some(children),
+                children: children_val,
                 group_key: Some(current_key.to_string()),
-            });
+            };
+
+            // Populate the specific field for this group
+            match current_key {
+                "tech_stack" => node.tech_stack = Some(group_val.clone()),
+                "category" => node.category = Some(group_val.clone()),
+                "change_type" => node.change_type = Some(group_val.clone()),
+                _ => {}
+            }
+
+            group_nodes.push(node);
         }
 
         // Sort groups by value desc
@@ -223,7 +256,7 @@ impl SumAggregator {
             query.push_str(" AND analyzer_id = ?");
         }
 
-        if !view_config.tech_stack.is_empty() {
+        if view_config.category.is_some() {
             query.push_str(" AND category = ?");
         }
 
@@ -245,8 +278,8 @@ impl SumAggregator {
             sql_query = sql_query.bind(&source.analyzer_id);
         }
 
-        if !view_config.tech_stack.is_empty() {
-            sql_query = sql_query.bind(&view_config.tech_stack);
+        if let Some(cat) = &view_config.category {
+            sql_query = sql_query.bind(cat);
         }
 
         if let Some(ts) = &filters.tech_stack {
@@ -281,7 +314,15 @@ impl SumAggregator {
             .collect();
 
         // Perform grouping
-        if let Some(group_by_str) = &filters.group_by {
+        let effective_group_by = if let Some(g) = &filters.group_by {
+            Some(g.clone())
+        } else if !view_config.group_by.is_empty() {
+            Some(view_config.group_by.join(","))
+        } else {
+            None
+        };
+
+        if let Some(group_by_str) = effective_group_by {
             let keys: Vec<&str> = group_by_str
                 .split(',')
                 .map(|s| s.trim())
@@ -289,7 +330,8 @@ impl SumAggregator {
                 .collect();
             if !keys.is_empty() {
                 // If grouped, return the groups (which are sums by definition of group_recursive)
-                results = TopNAggregator::group_recursive(results, &keys);
+                results =
+                    TopNAggregator::group_recursive(results, &keys, view_config.include_children);
             } else {
                 // If no keys, maybe just one big sum?
                 // But default behavior if group_by string is empty is to return list.

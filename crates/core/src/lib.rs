@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+// use indexmap::IndexMap; // Not needed if using fully qualified path
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricEntry {
@@ -35,7 +36,7 @@ pub struct CodePrismConfig {
     #[serde(default)]
     pub external_analyzers: HashMap<String, String>,
     #[serde(default)]
-    pub aggregation_views: HashMap<String, AggregationView>,
+    pub aggregation_views: indexmap::IndexMap<String, AggregationView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,7 +96,17 @@ pub struct AggregationView {
     pub title: String,
     #[serde(default)]
     pub tech_stacks: Vec<String>,
+    #[serde(default = "default_true")]
+    pub include_children: bool,
+    #[serde(default)]
+    pub group_by: Vec<String>,
+    #[serde(default)]
+    pub chart_type: Option<String>,
     pub func: AggregationFunc,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_metric_key() -> String {

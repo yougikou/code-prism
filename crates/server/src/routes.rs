@@ -98,6 +98,79 @@ pub async fn get_view(
     }
 }
 
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+pub struct ScanFilters {
+    pub mode: Option<String>,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct ScanResponse {
+    id: i64,
+    commit_hash: String,
+    scan_time: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{project_id}/scans",
+    params(
+        ("project_id" = i64, Path, description = "Project ID"),
+        ScanFilters
+    ),
+    responses(
+        (status = 200, description = "List of scans", body = inline(Vec<ScanResponse>)),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_scans(
+    State(state): State<AppState>,
+    Path(project_id): Path<i64>,
+    Query(filters): Query<ScanFilters>,
+) -> impl IntoResponse {
+    let mode = filters.mode.unwrap_or_else(|| "SNAPSHOT".to_string());
+
+    // Query scans from database
+    let query = "SELECT id, commit_hash, scan_time FROM scans WHERE project_id = ? AND scan_mode = ? ORDER BY scan_time DESC";
+
+    match sqlx::query_as::<_, (i64, String, String)>(query)
+        .bind(project_id)
+        .bind(mode)
+        .fetch_all(state.db.pool())
+        .await
+    {
+        Ok(rows) => {
+            let scans: Vec<ScanResponse> = rows
+                .into_iter()
+                .map(|(id, hash, time)| ScanResponse {
+                    id,
+                    commit_hash: hash,
+                    scan_time: time,
+                })
+                .collect();
+            Json(scans).into_response()
+        }
+        Err(e) => {
+            eprintln!("Database Error: {}", e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Database Error",
+            )
+                .into_response()
+        }
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/config",
+    responses(
+        (status = 200, description = "Application Config", body = inline(AppConfig)),
+    )
+)]
+pub async fn get_config(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.config.as_ref()).into_response()
+}
+
 pub async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {
     let path = uri.path().trim_start_matches('/').to_string();
 

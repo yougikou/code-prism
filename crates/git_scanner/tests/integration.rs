@@ -30,7 +30,7 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
         custom_regex_analyzers: HashMap::new(),
         custom_impl_analyzers: HashMap::new(),
         external_analyzers: HashMap::new(),
-        aggregation_views: HashMap::new(),
+        aggregation_views: indexmap::IndexMap::new(),
     };
 
     File::create(&db_path)?; // Create DB file

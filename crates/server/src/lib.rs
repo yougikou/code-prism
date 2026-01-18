@@ -17,9 +17,19 @@ use crate::routes::{AppState, get_view, static_handler};
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(crate::routes::get_view),
-    components(schemas(crate::aggregation::AggregationResult)) // ViewResponse is internal, try inline or expose it?
-    // AggregationResult is public.
+    paths(
+        crate::routes::get_view,
+        crate::routes::get_scans,
+        crate::routes::get_config
+    ),
+    components(schemas(
+        crate::aggregation::AggregationResult,
+        crate::config::AppConfig,
+        crate::config::ViewConfig,
+        crate::config::ViewKind,
+        crate::config::SourceConfig,
+        crate::config::TopNParams
+    ))
 )]
 struct ApiDoc;
 
@@ -40,22 +50,6 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, port: u16) -> Resu
                 limit,
                 order: _,
             } => {
-                // Determine tech stack (first one or specific string if singular)
-                // AppConfig expects singular String tech_stack.
-                // AggregationView has Vec<String> tech_stacks.
-                // Simple logic: Take first one or "Global"?
-                let _tech_stack = view_def
-                    .tech_stacks
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "Global".to_string());
-
-                // AggregationFunc::TopN has optional analyzer_id. SourceConfig needs String.
-                // If analyzer_id is None, we default to empty string or some placeholder?
-                // Or "matches" if implicit regex?
-                // Let's use analyzer_id if present, else empty? Or "any"?
-                // Aggregator uses it to filter.
-
                 let source = SourceConfig {
                     analyzer_id: analyzer_id.clone().unwrap_or_default(),
                     metric_key: metric_key.clone(),
@@ -65,35 +59,21 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, port: u16) -> Resu
                     limit: *limit as u32,
                 };
 
-                // IMPORTANT: The aggregation.rs implementation reads `AppConfig` struct `tech_stack`.
-                // BUT it seems `TopNAggregator` also checks `category`.
-                // We need to ensure logic aligns.
-                // `SourceConfig` matches core `AggregationFunc`.
-                // `category` from Core is missing in `SourceConfig`?
-                // `crates/server/src/config.rs` SourceConfig definition: { analyzer_id, metric_key }.
-                // It does NOT have category!
-                // `AggregationView` (Core) has `category`.
-                // `TopNAggregator` (Server) logic:
-                // SELECT ... WHERE ...
-                // if !view_config.tech_stack.is_empty() { query.push_str(" AND category = ?"); }
-                // So Server uses `tech_stack` field as `category` filter!
-                // This means map `category` (Core) -> `tech_stack` (Server ViewConfig).
-
-                // Wait. `category` in Core is "maintainability".
-                // `tech_stack` in Core is "Gosu".
-                // If Server uses `tech_stack` field to filter `category` column...
-                // Then `ViewConfig.tech_stack` MUST be set to `category` value!
-
-                // Let's verify `TopNAggregator` logic again (Step 2347).
-                // "if !view_config.tech_stack.is_empty() { query.push_str(" AND category = ?"); ... bind(&view_config.tech_stack) }"
-                // Yes. Server maps `tech_stack` field to `category` column.
-                // So we should map `Core::category` -> `Server::tech_stack`.
-
-                let category_val = category.clone().unwrap_or_default();
+                // Map tech_stacks and category directly
+                let tech_stacks = view_def.tech_stacks.clone();
+                let category = category.clone(); // Option<String>
+                let include_children = view_def.include_children;
+                let group_by = view_def.group_by.clone();
+                let chart_type = view_def.chart_type.clone();
 
                 views.push(ViewConfig {
                     id: key.clone(),
-                    tech_stack: category_val, // Mapping category to tech_stack field for filtering
+                    title: view_def.title.clone(),
+                    tech_stacks,
+                    category,
+                    include_children,
+                    group_by,
+                    chart_type,
                     kind: ViewKind::TopN { source, params },
                 });
             }
@@ -102,22 +82,39 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, port: u16) -> Resu
                 metric_key,
                 category,
             } => {
-                let category_val = category.clone().unwrap_or_default();
                 let source = SourceConfig {
                     analyzer_id: analyzer_id.clone().unwrap_or_default(),
                     metric_key: metric_key.clone(),
                 };
 
+                let tech_stacks = view_def.tech_stacks.clone();
+                let category = category.clone();
+                let include_children = view_def.include_children;
+                let group_by = view_def.group_by.clone();
+                let chart_type = view_def.chart_type.clone();
+
                 views.push(ViewConfig {
                     id: key.clone(),
-                    tech_stack: category_val, // Currently using tech_stack field for category storage
+                    title: view_def.title.clone(),
+                    tech_stacks,
+                    category,
+                    include_children,
+                    group_by,
+                    chart_type,
                     kind: ViewKind::Sum { source },
                 });
             }
         }
     }
 
-    let app_config = AppConfig { views };
+    let mut tech_stacks: Vec<String> = core_config
+        .tech_stacks
+        .iter()
+        .map(|ts| ts.name.clone())
+        .collect();
+    tech_stacks.sort();
+
+    let app_config = AppConfig { views, tech_stacks };
 
     // 2. Initialize AppState
     let state = AppState {
@@ -132,6 +129,11 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, port: u16) -> Resu
             "/api/v1/projects/:project_id/scans/:scan_id/views/:view_id",
             get(get_view),
         )
+        .route(
+            "/api/v1/projects/:project_id/scans",
+            get(crate::routes::get_scans),
+        )
+        .route("/api/v1/config", get(crate::routes::get_config))
         .fallback(static_handler)
         .with_state(state)
         .layer(CorsLayer::permissive());
