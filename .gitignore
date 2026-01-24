@@ -4,9 +4,9 @@
 
 
 # CodePrism specific
-.codeprism.db
-.codeprism.db-shm
-.codeprism.db-wal
+codeprism.db
+codeprism.db-shm
+codeprism.db-wal
 *.log
 *.txt
 .env

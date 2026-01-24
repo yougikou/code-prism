@@ -1,9 +1,9 @@
 # CodePrism Configuration Sample
 
 # Optional: Override DB URL
-database_url: "sqlite:.codeprism.db"
+database_url: "sqlite:codeprism.db"
 # Or using an absolute path if needed:
-# database_url: "sqlite:E:/path/to/.codeprism.db"
+# database_url: "sqlite:E:/path/to/codeprism.db"
 
 projects:
   - name: "code-prism"
