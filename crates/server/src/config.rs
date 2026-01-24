@@ -87,7 +87,10 @@ pub enum ViewKind {
 pub struct SourceConfig {
     #[serde(default)]
     pub analyzer_id: String,
-    pub metric_key: String,
+    #[serde(default)]
+    pub metric_key: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
@@ -134,7 +137,7 @@ projects:
         match &view.kind {
             ViewKind::TopN { source, params } => {
                 assert_eq!(source.analyzer_id, "char_count");
-                assert_eq!(source.metric_key, "length");
+                assert_eq!(source.metric_key, Some("length".to_string()));
                 assert_eq!(params.limit, 10);
             }
             _ => panic!("Expected TopN view"),

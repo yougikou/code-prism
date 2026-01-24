@@ -18,6 +18,13 @@ pub struct AppState {
     pub(crate) db: Db,
 }
 
+impl AppState {
+    /// Create a new AppState for use in tests or external builders
+    pub fn new(config: Arc<AppConfig>, db: Db) -> Self {
+        Self { config, db }
+    }
+}
+
 #[derive(Serialize, utoipa::ToSchema)]
 struct ViewResponse {
     view_id: String,

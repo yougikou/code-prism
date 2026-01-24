@@ -12,6 +12,8 @@ pub struct AggregationResult {
     pub tech_stack: Option<String>,
     pub category: Option<String>,
     pub change_type: Option<String>,
+    pub metric_key: Option<String>,
+    pub analyzer_id: Option<String>,
     #[schema(value_type = Option<Vec<AggregationResult>>)]
     pub children: Option<Vec<AggregationResult>>,
     pub group_key: Option<String>,
@@ -43,21 +45,23 @@ impl TopNAggregator {
         };
 
         let mut query = String::from(
-            "SELECT file_path, value_after, tech_stack, category, change_type 
+            "SELECT file_path, value_after, tech_stack, category, change_type, metric_key, analyzer_id
              FROM metrics 
-             WHERE scan_id = ? 
-             AND metric_key = ?",
+             WHERE scan_id = ?",
         );
 
+        // Optional source filters (from view config)
+        if source.metric_key.is_some() {
+            query.push_str(" AND metric_key = ?");
+        }
         if !source.analyzer_id.is_empty() {
             query.push_str(" AND analyzer_id = ?");
         }
-
-        if view_config.category.is_some() {
+        if source.category.is_some() {
             query.push_str(" AND category = ?");
         }
 
-        // Apply dynamic filters
+        // Apply dynamic filters (from request params)
         if filters.tech_stack.is_some() {
             query.push_str(" AND tech_stack = ?");
         }
@@ -73,13 +77,16 @@ impl TopNAggregator {
 
         query.push_str(" ORDER BY value_after DESC LIMIT ?");
 
-        let mut sql_query = sqlx::query(&query).bind(scan_id).bind(&source.metric_key);
+        let mut sql_query = sqlx::query(&query).bind(scan_id);
 
+        // Bind source filters
+        if let Some(mk) = &source.metric_key {
+            sql_query = sql_query.bind(mk);
+        }
         if !source.analyzer_id.is_empty() {
             sql_query = sql_query.bind(&source.analyzer_id);
         }
-
-        if let Some(cat) = &view_config.category {
+        if let Some(cat) = &source.category {
             sql_query = sql_query.bind(cat);
         }
 
@@ -115,6 +122,12 @@ impl TopNAggregator {
                 change_type: row
                     .try_get::<Option<String>, _>("change_type")
                     .unwrap_or_default(),
+                metric_key: row
+                    .try_get::<Option<String>, _>("metric_key")
+                    .unwrap_or_default(),
+                analyzer_id: row
+                    .try_get::<Option<String>, _>("analyzer_id")
+                    .unwrap_or_default(),
                 children: None,
                 group_key: None,
             })
@@ -136,9 +149,7 @@ impl TopNAggregator {
                 .filter(|s| !s.is_empty())
                 .collect();
             if !keys.is_empty() {
-                if !keys.is_empty() {
-                    results = Self::group_recursive(results, &keys, view_config.include_children);
-                }
+                results = Self::group_recursive(results, &keys, view_config.include_children);
             }
         }
 
@@ -171,6 +182,14 @@ impl TopNAggregator {
                     .unwrap_or_else(|| "Unknown".to_string()),
                 "change_type" => item
                     .change_type
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                "metric_key" => item
+                    .metric_key
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                "analyzer_id" => item
+                    .analyzer_id
                     .clone()
                     .unwrap_or_else(|| "Unknown".to_string()),
                 // Add more keys as needed, maybe reflection or map?
@@ -207,6 +226,8 @@ impl TopNAggregator {
                 tech_stack: None,
                 category: None,
                 change_type: None,
+                metric_key: None,
+                analyzer_id: None,
                 children: children_val,
                 group_key: Some(current_key.to_string()),
             };
@@ -216,6 +237,8 @@ impl TopNAggregator {
                 "tech_stack" => node.tech_stack = Some(group_val.clone()),
                 "category" => node.category = Some(group_val.clone()),
                 "change_type" => node.change_type = Some(group_val.clone()),
+                "metric_key" => node.metric_key = Some(group_val.clone()),
+                "analyzer_id" => node.analyzer_id = Some(group_val.clone()),
                 _ => {}
             }
 
@@ -254,20 +277,23 @@ impl SumAggregator {
         // Then we can group or just sum everything.
 
         let mut query = String::from(
-            "SELECT file_path, value_after, tech_stack, category, change_type 
+            "SELECT file_path, value_after, tech_stack, category, change_type, metric_key, analyzer_id
              FROM metrics 
-             WHERE scan_id = ? 
-             AND metric_key = ?",
+             WHERE scan_id = ?",
         );
 
+        // Optional source filters (from view config)
+        if source.metric_key.is_some() {
+            query.push_str(" AND metric_key = ?");
+        }
         if !source.analyzer_id.is_empty() {
             query.push_str(" AND analyzer_id = ?");
         }
-
-        if view_config.category.is_some() {
+        if source.category.is_some() {
             query.push_str(" AND category = ?");
         }
 
+        // Apply dynamic filters (from request params)
         if filters.tech_stack.is_some() {
             query.push_str(" AND tech_stack = ?");
         }
@@ -281,18 +307,22 @@ impl SumAggregator {
             query.push_str(" AND change_type = ?");
         }
 
-        // NO ORDER BY or LIMIT for Sum (unless we want to optimize?)
+        // NO ORDER BY or LIMIT for Sum
 
-        let mut sql_query = sqlx::query(&query).bind(scan_id).bind(&source.metric_key);
+        let mut sql_query = sqlx::query(&query).bind(scan_id);
 
+        // Bind source filters
+        if let Some(mk) = &source.metric_key {
+            sql_query = sql_query.bind(mk);
+        }
         if !source.analyzer_id.is_empty() {
             sql_query = sql_query.bind(&source.analyzer_id);
         }
-
-        if let Some(cat) = &view_config.category {
+        if let Some(cat) = &source.category {
             sql_query = sql_query.bind(cat);
         }
 
+        // Bind dynamic filters
         if let Some(ts) = &filters.tech_stack {
             sql_query = sql_query.bind(ts);
         }
@@ -321,6 +351,12 @@ impl SumAggregator {
                     .unwrap_or_default(),
                 change_type: row
                     .try_get::<Option<String>, _>("change_type")
+                    .unwrap_or_default(),
+                metric_key: row
+                    .try_get::<Option<String>, _>("metric_key")
+                    .unwrap_or_default(),
+                analyzer_id: row
+                    .try_get::<Option<String>, _>("analyzer_id")
                     .unwrap_or_default(),
                 children: None,
                 group_key: None,
@@ -361,6 +397,8 @@ impl SumAggregator {
                     tech_stack: None,
                     category: None,
                     change_type: None,
+                    metric_key: None,
+                    analyzer_id: None,
                     children: None,
                     group_key: None,
                 }];
@@ -374,6 +412,8 @@ impl SumAggregator {
                 tech_stack: None,
                 category: None,
                 change_type: None,
+                metric_key: None,
+                analyzer_id: None,
                 children: None,
                 group_key: None,
             }];
@@ -415,19 +455,24 @@ impl StatAggregator {
         };
 
         let mut query = format!(
-            "SELECT {}(value_after) as stat_value, tech_stack, category
+            "SELECT {}(value_after) as stat_value, tech_stack, category, metric_key, analyzer_id
              FROM metrics
-             WHERE scan_id = ?
-             AND metric_key = ?",
+             WHERE scan_id = ?",
             stat_fn
         );
 
+        // Optional source filters (from view config)
+        if source.metric_key.is_some() {
+            query.push_str(" AND metric_key = ?");
+        }
         if !source.analyzer_id.is_empty() {
             query.push_str(" AND analyzer_id = ?");
         }
-        if view_config.category.is_some() {
+        if source.category.is_some() {
             query.push_str(" AND category = ?");
         }
+
+        // Dynamic filters
         if filters.tech_stack.is_some() {
             query.push_str(" AND tech_stack = ?");
         }
@@ -453,14 +498,20 @@ impl StatAggregator {
             }
         }
 
-        let mut sql_query = sqlx::query(&query).bind(scan_id).bind(&source.metric_key);
+        let mut sql_query = sqlx::query(&query).bind(scan_id);
 
+        // Bind source filters
+        if let Some(mk) = &source.metric_key {
+            sql_query = sql_query.bind(mk);
+        }
         if !source.analyzer_id.is_empty() {
             sql_query = sql_query.bind(&source.analyzer_id);
         }
-        if let Some(cat) = &view_config.category {
+        if let Some(cat) = &source.category {
             sql_query = sql_query.bind(cat);
         }
+
+        // Bind dynamic filters
         if let Some(ts) = &filters.tech_stack {
             sql_query = sql_query.bind(ts);
         }
@@ -487,6 +538,12 @@ impl StatAggregator {
                         .try_get::<Option<String>, _>("category")
                         .unwrap_or_default(),
                     change_type: None,
+                    metric_key: row
+                        .try_get::<Option<String>, _>("metric_key")
+                        .unwrap_or_default(),
+                    analyzer_id: row
+                        .try_get::<Option<String>, _>("analyzer_id")
+                        .unwrap_or_default(),
                     children: None,
                     group_key: None,
                 }
@@ -514,30 +571,41 @@ impl DistributionAggregator {
 
         // Fetch all values
         let mut query = String::from(
-            "SELECT value_after, tech_stack, category
+            "SELECT value_after, tech_stack, category, metric_key, analyzer_id
              FROM metrics
-             WHERE scan_id = ?
-             AND metric_key = ?",
+             WHERE scan_id = ?",
         );
 
+        // Optional source filters (from view config)
+        if source.metric_key.is_some() {
+            query.push_str(" AND metric_key = ?");
+        }
         if !source.analyzer_id.is_empty() {
             query.push_str(" AND analyzer_id = ?");
         }
-        if view_config.category.is_some() {
+        if source.category.is_some() {
             query.push_str(" AND category = ?");
         }
+
+        // Dynamic filters
         if filters.tech_stack.is_some() {
             query.push_str(" AND tech_stack = ?");
         }
 
-        let mut sql_query = sqlx::query(&query).bind(scan_id).bind(&source.metric_key);
+        let mut sql_query = sqlx::query(&query).bind(scan_id);
 
+        // Bind source filters
+        if let Some(mk) = &source.metric_key {
+            sql_query = sql_query.bind(mk);
+        }
         if !source.analyzer_id.is_empty() {
             sql_query = sql_query.bind(&source.analyzer_id);
         }
-        if let Some(cat) = &view_config.category {
+        if let Some(cat) = &source.category {
             sql_query = sql_query.bind(cat);
         }
+
+        // Bind dynamic filters
         if let Some(ts) = &filters.tech_stack {
             sql_query = sql_query.bind(ts);
         }
@@ -580,6 +648,8 @@ impl DistributionAggregator {
                 tech_stack: None,
                 category: None,
                 change_type: None,
+                metric_key: None,
+                analyzer_id: None,
                 children: None,
                 group_key: Some(format!("bucket_{}", i)),
             });

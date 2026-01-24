@@ -110,7 +110,7 @@ codeprism [オプション] <コマンド>
 codeprism init
 ```
 
-SQLite データベース（`.codeprism.db`）を作成し、必要なスキーマを適用します。
+SQLite データベース（`codeprism.db`）を作成し、必要なスキーマを適用します。
 
 #### `scan` - リポジトリをスキャン
 
@@ -206,7 +206,7 @@ codeprism --config my-config.yaml scan .
 ### 設定ファイル形式
 
 ```yaml
-database_url: "sqlite:.codeprism.db"
+database_url: "sqlite:codeprism.db"
 
 global_excludes:
   - "**/.git/**"
@@ -227,6 +227,87 @@ aggregation_views:
       limit: 10
     chart_type: "bar_row"
 ```
+
+**ビュー表示ルール：**
+- `tech_stacks` が**未定義**または**空**のビュー → **Summary** タブに表示
+- `tech_stacks` に `"All"` が含まれるビュー → **Summary** タブに表示
+- `tech_stacks` に特定のスタック名が含まれるビュー → 対応するテックスタックタブに表示
+
+### 集計ビュー func 設定
+
+集計ビューの `func` オブジェクトは以下のフィールドをサポートします：
+
+| フィールド | 型 | 必須 | 説明 |
+|------------|------|------|------|
+| `type` | string | **はい** | 集計タイプ：`sum`, `avg`, `top_n`, `min`, `max`, `distribution` |
+| `metric_key` | string | いいえ | メトリックキーでフィルタ（例：`"char_count"`） |
+| `category` | string | いいえ | カテゴリでフィルタ（例：`"logging"`） |
+| `analyzer_id` | string | いいえ | アナライザー ID でフィルタ |
+| `limit` | integer | `top_n` の場合 | 返す結果数 |
+| `buckets` | float[] | `distribution` の場合 | 分布統計のバケット境界 |
+
+**サポートされているグループ化キー：**
+
+`group_by` フィールドは以下のキーをサポートします：`tech_stack`, `category`, `change_type`, `metric_key`, `analyzer_id`。
+
+**例：**
+
+```yaml
+# metric_key のみでフィルタ
+func:
+  type: "sum"
+  metric_key: "char_count"
+
+# category のみでフィルタ（metric_key 指定なし）
+func:
+  type: "sum"
+  category: "logging"
+group_by: ["metric_key"]
+
+# フィルタなし（全データを集計）
+func:
+  type: "sum"
+```
+
+### 予約済み metric_key
+
+以下の `metric_key` はシステムで予約されており、カスタムアナライザーでの使用は避けてください：
+
+| metric_key | 説明 |
+|------------|------|
+| `file_count` | 組み込みアナライザー、スキャンファイルレコードに対応 |
+| `char_count` | 組み込みアナライザー、ファイルの文字数 |
+
+### カスタムアナライザーガイドライン
+
+カスタムアナライザーを開発する際は、`analyzer_id` と `metric_key` の違いを理解してください：
+
+| フィールド | 用途 | スコープ |
+|------------|------|----------|
+| `analyzer_id` | **どのアナライザー**がメトリクスを生成したかを識別 | アナライザーごとにグローバルで一意 |
+| `metric_key` | **どの種類の測定値**かを識別 | アナライザー間で共有可能 |
+| `category` | 関連メトリクスのグループ化 | フィルタリング/整理用 |
+
+**設計パターン：**
+
+1. **複数のアナライザー、同じ metric_key** - 異なる言語のアナライザーが同じ `metric_key` を出力可能：
+   ```yaml
+   # Python 複雑度アナライザー
+   analyzer_id: "python_complexity"
+   metric_key: "complexity"
+   
+   # Java 複雑度アナライザー
+   analyzer_id: "java_complexity"
+   metric_key: "complexity"  # 同じ metric_key で統一クエリが可能
+   ```
+
+2. **1つのアナライザー、複数の metric_keys** - 単一のアナライザーが複数のメトリクスを出力可能：
+   ```yaml
+   analyzer_id: "code_quality"
+   # 出力:
+   #   metric_key: "todo_count"
+   #   metric_key: "fixme_count"
+   ```
 
 ### マルチプロジェクト設定
 

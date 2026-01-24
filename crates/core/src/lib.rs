@@ -134,8 +134,11 @@ impl Default for SortOrder {
 pub enum AggregationFunc {
     #[serde(rename = "top_n")]
     TopN {
+        #[serde(default)]
         analyzer_id: Option<String>,
-        metric_key: String,
+        #[serde(default)]
+        metric_key: Option<String>,
+        #[serde(default)]
         category: Option<String>,
         limit: usize,
         #[serde(default)]
@@ -143,36 +146,47 @@ pub enum AggregationFunc {
     },
     #[serde(rename = "sum")]
     Sum {
+        #[serde(default)]
         analyzer_id: Option<String>,
-        metric_key: String,
+        #[serde(default)]
+        metric_key: Option<String>,
+        #[serde(default)]
         category: Option<String>,
     },
     #[serde(rename = "avg")]
     Avg {
         #[serde(default)]
         analyzer_id: Option<String>,
-        metric_key: String,
+        #[serde(default)]
+        metric_key: Option<String>,
+        #[serde(default)]
         category: Option<String>,
     },
     #[serde(rename = "min")]
     Min {
         #[serde(default)]
         analyzer_id: Option<String>,
-        metric_key: String,
+        #[serde(default)]
+        metric_key: Option<String>,
+        #[serde(default)]
         category: Option<String>,
     },
     #[serde(rename = "max")]
     Max {
         #[serde(default)]
         analyzer_id: Option<String>,
-        metric_key: String,
+        #[serde(default)]
+        metric_key: Option<String>,
+        #[serde(default)]
         category: Option<String>,
     },
     #[serde(rename = "distribution")]
     Distribution {
         #[serde(default)]
         analyzer_id: Option<String>,
-        metric_key: String,
+        #[serde(default)]
+        metric_key: Option<String>,
+        #[serde(default)]
         category: Option<String>,
         buckets: Vec<f64>,
     },
@@ -381,7 +395,7 @@ tech_stacks:
 
 
 global_excludes: ["**/.git/**", "**/node_modules/**", "**/target/**", "**/dist/**"]
-# database_url: "sqlite:.codeprism.db" # Optional: Override DB URL
+# database_url: "sqlite:codeprism.db" # Optional: Override DB URL
 # custom_analyzers:
 #   todo_finder: "(TODO|FIXME):.*"
 # external_analyzers:

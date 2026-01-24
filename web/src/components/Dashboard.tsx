@@ -75,12 +75,18 @@ const Dashboard = () => {
 
   // Filter Active Views based on selection
   useEffect(() => {
+    // Helper: Check if a view is a "global" view (should appear on Summary tab)
+    const isGlobalView = (v: any) =>
+      !v.tech_stacks || v.tech_stacks.length === 0 || v.tech_stacks.includes('All');
+
     if (selectedTechStack === 'Summary') {
-      // Show views with NO specific tech stack (global views)
-      setActiveViews(viewsConfig.filter(v => !v.tech_stacks || v.tech_stacks.length === 0));
+      // Show views with NO specific tech stack or containing 'All' (global views)
+      setActiveViews(viewsConfig.filter(isGlobalView));
     } else {
-      // Show views that include this tech stack
-      setActiveViews(viewsConfig.filter(v => v.tech_stacks && v.tech_stacks.includes(selectedTechStack)));
+      // Show views that include this tech stack (but not 'All'-only views)
+      setActiveViews(viewsConfig.filter(v =>
+        v.tech_stacks && v.tech_stacks.includes(selectedTechStack)
+      ));
     }
   }, [selectedTechStack, viewsConfig]);
 

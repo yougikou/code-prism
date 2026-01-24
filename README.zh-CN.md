@@ -110,7 +110,7 @@ codeprism [选项] <命令>
 codeprism init
 ```
 
-创建 SQLite 数据库（`.codeprism.db`）并应用所需的表结构。
+创建 SQLite 数据库（`codeprism.db`）并应用所需的表结构。
 
 #### `scan` - 扫描仓库
 
@@ -206,7 +206,7 @@ codeprism --config my-config.yaml scan .
 ### 配置文件格式
 
 ```yaml
-database_url: "sqlite:.codeprism.db"
+database_url: "sqlite:codeprism.db"
 
 global_excludes:
   - "**/.git/**"
@@ -227,6 +227,87 @@ aggregation_views:
       limit: 10
     chart_type: "bar_row"
 ```
+
+**视图显示规则：**
+- `tech_stacks` **未定义**或**为空**的视图 → 显示在 **Summary** 标签页
+- `tech_stacks` 包含 `"All"` 的视图 → 显示在 **Summary** 标签页
+- `tech_stacks` 包含特定技术栈名称的视图 → 显示在对应的技术栈标签页
+
+### 聚合视图 func 配置
+
+聚合视图中的 `func` 对象支持以下字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `type` | string | **是** | 聚合类型：`sum`, `avg`, `top_n`, `min`, `max`, `distribution` |
+| `metric_key` | string | 否 | 按指标键筛选（如 `"char_count"`） |
+| `category` | string | 否 | 按类别筛选（如 `"logging"`） |
+| `analyzer_id` | string | 否 | 按分析器 ID 筛选 |
+| `limit` | integer | `top_n` 需要 | 返回的结果数量 |
+| `buckets` | float[] | `distribution` 需要 | 分布统计的桶边界 |
+
+**支持的分组键：**
+
+`group_by` 字段支持以下键：`tech_stack`, `category`, `change_type`, `metric_key`, `analyzer_id`。
+
+**示例：**
+
+```yaml
+# 仅按 metric_key 筛选
+func:
+  type: "sum"
+  metric_key: "char_count"
+
+# 仅按 category 筛选（不指定 metric_key）
+func:
+  type: "sum"
+  category: "logging"
+group_by: ["metric_key"]
+
+# 无筛选条件（统计所有数据）
+func:
+  type: "sum"
+```
+
+### 保留的 metric_key
+
+以下 `metric_key` 为系统保留，自定义分析器应避免使用：
+
+| metric_key | 说明 |
+|------------|------|
+| `file_count` | 内置分析器，与扫描文件记录对应 |
+| `char_count` | 内置分析器，文件字符数 |
+
+### 自定义分析器指南
+
+开发自定义分析器时，需理解 `analyzer_id` 和 `metric_key` 的区别：
+
+| 字段 | 用途 | 作用域 |
+|------|------|--------|
+| `analyzer_id` | 标识**哪个分析器**产生了指标 | 每个分析器全局唯一 |
+| `metric_key` | 标识**什么类型的测量值** | 可跨分析器共享 |
+| `category` | 指标分组 | 用于过滤/组织 |
+
+**设计模式：**
+
+1. **多个分析器，相同 metric_key** - 不同语言的分析器可以输出相同的 `metric_key`：
+   ```yaml
+   # Python 复杂度分析器
+   analyzer_id: "python_complexity"
+   metric_key: "complexity"
+   
+   # Java 复杂度分析器
+   analyzer_id: "java_complexity"
+   metric_key: "complexity"  # 相同的 metric_key，便于统一查询
+   ```
+
+2. **一个分析器，多个 metric_keys** - 单个分析器可以输出多个指标：
+   ```yaml
+   analyzer_id: "code_quality"
+   # 输出:
+   #   metric_key: "todo_count"
+   #   metric_key: "fixme_count"
+   ```
 
 ### 多项目配置
 

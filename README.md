@@ -110,7 +110,7 @@ Options:
 codeprism init
 ```
 
-Creates the SQLite database (`.codeprism.db`) with the required schema.
+Creates the SQLite database (`codeprism.db`) with the required schema.
 
 #### `scan` - Scan Repository
 
@@ -206,7 +206,7 @@ codeprism --config my-config.yaml scan .
 ### Configuration File Format
 
 ```yaml
-database_url: "sqlite:.codeprism.db"
+database_url: "sqlite:codeprism.db"
 
 global_excludes:
   - "**/.git/**"
@@ -227,6 +227,87 @@ aggregation_views:
       limit: 10
     chart_type: "bar_row"
 ```
+
+**View Display Rules:**
+- Views where `tech_stacks` is **not defined** or **empty** → displayed on the **Summary** tab
+- Views where `tech_stacks` contains `"All"` → displayed on the **Summary** tab
+- Views where `tech_stacks` contains specific stack names → displayed on corresponding tech stack tabs
+
+### Aggregation View func Configuration
+
+The `func` object in aggregation views supports the following fields:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string | **Yes** | Aggregation type: `sum`, `avg`, `top_n`, `min`, `max`, `distribution` |
+| `metric_key` | string | No | Filter by metric key (e.g., `"char_count"`) |
+| `category` | string | No | Filter by category (e.g., `"logging"`) |
+| `analyzer_id` | string | No | Filter by analyzer ID |
+| `limit` | integer | For `top_n` | Number of results to return |
+| `buckets` | float[] | For `distribution` | Bucket boundaries for distribution |
+
+**Supported Grouping Keys:**
+
+The `group_by` field supports the following keys: `tech_stack`, `category`, `change_type`, `metric_key`, `analyzer_id`.
+
+**Examples:**
+
+```yaml
+# Filter by metric_key only
+func:
+  type: "sum"
+  metric_key: "char_count"
+
+# Filter by category only (no metric_key)
+func:
+  type: "sum"
+  category: "logging"
+group_by: ["metric_key"]
+
+# No filters (aggregate all data)
+func:
+  type: "sum"
+```
+
+### Reserved metric_key
+
+The following `metric_key` values are reserved for internal use. Custom analyzers should avoid using these:
+
+| metric_key | Description |
+|------------|-------------|
+| `file_count` | Built-in analyzer, corresponds to scanned file records |
+| `char_count` | Built-in analyzer, character count per file |
+
+### Custom Analyzer Guidelines
+
+When developing custom analyzers, understand the distinction between `analyzer_id` and `metric_key`:
+
+| Field | Purpose | Scope |
+|-------|---------|-------|
+| `analyzer_id` | Identifies **which analyzer** produced the metric | Globally unique per analyzer |
+| `metric_key` | Identifies **what type of measurement** | Can be shared across analyzers |
+| `category` | Groups related metrics | For filtering/organization |
+
+**Design Patterns:**
+
+1. **Multiple analyzers, same metric_key** - Different language analyzers can output the same `metric_key`:
+   ```yaml
+   # Python complexity analyzer
+   analyzer_id: "python_complexity"
+   metric_key: "complexity"
+   
+   # Java complexity analyzer  
+   analyzer_id: "java_complexity"
+   metric_key: "complexity"  # Same metric_key, enables unified queries
+   ```
+
+2. **One analyzer, multiple metric_keys** - A single analyzer can output multiple metrics:
+   ```yaml
+   analyzer_id: "code_quality"
+   # Outputs:
+   #   metric_key: "todo_count"
+   #   metric_key: "fixme_count"
+   ```
 
 ### Multi-Project Configuration
 

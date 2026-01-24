@@ -6,6 +6,7 @@ use codeprism_scanner::Scanner;
 #[derive(Parser)]
 #[command(name = "codeprism")]
 #[command(about = "Code Prism CLI", long_about = None)]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -85,16 +86,23 @@ async fn main() -> Result<()> {
                 match codeprism_core::CodePrismConfig::load_from_file(config_path) {
                     Ok(c) => c
                         .database_url
-                        .unwrap_or_else(|| "sqlite:.codeprism.db".to_string()),
-                    Err(_) => "sqlite:.codeprism.db".to_string(),
+                        .unwrap_or_else(|| "sqlite:codeprism.db".to_string()),
+                    Err(_) => "sqlite:codeprism.db".to_string(),
                 }
             } else {
-                "sqlite:.codeprism.db".to_string()
+                "sqlite:codeprism.db".to_string()
             };
 
             let db = Db::new(&db_url).await?;
             db.migrate().await?;
-            println!("Initialization complete. Database created at .codeprism.db");
+            println!("Database initialized at codeprism.db");
+
+            // Also generate config file if it doesn't exist
+            if !std::path::Path::new(config_path).exists() {
+                let content = codeprism_core::CodePrismConfig::generate_template();
+                std::fs::write(config_path, content)?;
+                println!("Configuration template created at {}", config_path);
+            }
         }
         Commands::InitConfig { output } => {
             let content = codeprism_core::CodePrismConfig::generate_template();
@@ -146,7 +154,7 @@ async fn main() -> Result<()> {
             let db_url = config
                 .database_url
                 .clone()
-                .unwrap_or_else(|| "sqlite:.codeprism.db".to_string());
+                .unwrap_or_else(|| "sqlite:codeprism.db".to_string());
             let db = Db::new(&db_url).await?;
 
             let scanner = Scanner::with_config(db, config);
@@ -235,7 +243,7 @@ async fn main() -> Result<()> {
             let db_url = config
                 .database_url
                 .clone()
-                .unwrap_or_else(|| "sqlite:.codeprism.db".to_string());
+                .unwrap_or_else(|| "sqlite:codeprism.db".to_string());
             let db = Db::new(&db_url).await?;
 
             println!("Starting server...");

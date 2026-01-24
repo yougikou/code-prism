@@ -50,6 +50,7 @@ fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> {
                 let source = SourceConfig {
                     analyzer_id: analyzer_id.clone().unwrap_or_default(),
                     metric_key: metric_key.clone(),
+                    category: category.clone(),
                 };
                 let params = TopNParams {
                     limit: *limit as u32,
@@ -74,6 +75,7 @@ fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> {
                 let source = SourceConfig {
                     analyzer_id: analyzer_id.clone().unwrap_or_default(),
                     metric_key: metric_key.clone(),
+                    category: category.clone(),
                 };
                 views.push(ViewConfig {
                     id: key.clone(),
@@ -95,6 +97,7 @@ fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> {
                 let source = SourceConfig {
                     analyzer_id: analyzer_id.clone().unwrap_or_default(),
                     metric_key: metric_key.clone(),
+                    category: category.clone(),
                 };
                 views.push(ViewConfig {
                     id: key.clone(),
@@ -116,6 +119,7 @@ fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> {
                 let source = SourceConfig {
                     analyzer_id: analyzer_id.clone().unwrap_or_default(),
                     metric_key: metric_key.clone(),
+                    category: category.clone(),
                 };
                 views.push(ViewConfig {
                     id: key.clone(),
@@ -137,6 +141,7 @@ fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> {
                 let source = SourceConfig {
                     analyzer_id: analyzer_id.clone().unwrap_or_default(),
                     metric_key: metric_key.clone(),
+                    category: category.clone(),
                 };
                 views.push(ViewConfig {
                     id: key.clone(),
@@ -159,6 +164,7 @@ fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> {
                 let source = SourceConfig {
                     analyzer_id: analyzer_id.clone().unwrap_or_default(),
                     metric_key: metric_key.clone(),
+                    category: category.clone(),
                 };
                 let params = crate::config::DistributionParams {
                     buckets: buckets.clone(),

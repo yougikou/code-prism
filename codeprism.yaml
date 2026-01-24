@@ -5,132 +5,132 @@ database_url: "sqlite:.codeprism.db"
 # Or using an absolute path if needed:
 # database_url: "sqlite:E:/path/to/.codeprism.db"
 
-global_excludes:
-  # 1. 排除根目录下的所有文件
-  - "*"
-  
-  # 2. 排除常见的构建和临时目录
-  - "**/.git/**"
-  - "**/node_modules/**"
-  - "**/target/**"
+projects:
+  - name: "code-prism"
+    global_excludes:
+      # 1. 排除根目录下的所有文件
+      - "*"
+      
+      # 2. 排除常见的构建和临时目录
+      - "**/.git/**"
+      - "**/node_modules/**"
+      - "**/target/**"
 
-# Define custom regex analyzers here (Name -> Pattern)
-custom_regex_analyzers:
-  log_info_finder: 
-    pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(info)\\b"
-    metric_key: "log_info"
-    category: "logging"
-  log_warn_finder: 
-    pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(warn)\\b"
-    metric_key: "log_warn"
-    category: "logging"
-  log_error_finder: 
-    pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(error|fatal)\\b"
-    metric_key: "log_error"
-    category: "logging"
-  log_trace_finder: 
-    pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(trace)\\b"
-    metric_key: "log_trace"
-    category: "logging"
-  log_debug_finder: 
-    pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(debug)\\b"
-    metric_key: "log_debug"
-    category: "logging"
+    # Define custom regex analyzers here (Name -> Pattern)
+    custom_regex_analyzers:
+      log_info_finder: 
+        pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(info)\\b"
+        metric_key: "log_info"
+        category: "logging"
+      log_warn_finder: 
+        pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(warn)\\b"
+        metric_key: "log_warn"
+        category: "logging"
+      log_error_finder: 
+        pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(error|fatal)\\b"
+        metric_key: "log_error"
+        category: "logging"
+      log_trace_finder: 
+        pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(trace)\\b"
+        metric_key: "log_trace"
+        category: "logging"
+      log_debug_finder: 
+        pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(debug)\\b"
+        metric_key: "log_debug"
+        category: "logging"
 
-custom_impl_analyzers:
-  java_complexity:
-    metric_key: "complexity"
-    category: "maintainability"
+    custom_impl_analyzers:
+      java_complexity:
+        metric_key: "complexity"
+        category: "maintainability"
 
-tech_stacks:
-  - name: "Rust"
-    extensions: ["rs", "toml"]
-    analyzers: ["char_count"]
+    tech_stacks:
+      - name: "Rust"
+        extensions: ["rs", "toml"]
+        analyzers: ["char_count"]
 
-  - name: "Web"
-    extensions: ["js", "ts", "jsx", "tsx", "html", "css"]
-    analyzers: ["char_count"]
+      - name: "Web"
+        extensions: ["js", "ts", "jsx", "tsx", "html", "css"]
+        analyzers: ["char_count"]
 
-  - name: "Python"
-    extensions: ["py"]
-    analyzers: ["char_count"]
+      - name: "Python"
+        extensions: ["py"]
+        analyzers: ["char_count"]
 
-aggregation_views:
-  top_file_size:
-    title: "Top 10 File Size"
-    tech_stacks: ["Rust", "Python", "Web"]
-    change_type_mode: "switchable"  # Enable A/M/D toggle buttons
-    func:
-      type: "top_n"
-      metric_key: "char_count"
-      limit: 10
-      order: "desc"
+    aggregation_views:
+      sum_file_count_by_tech_stack_pie:
+        title: "Total File Count"
+        # change_type_mode: "all"
+        func:
+          type: "sum"
+          metric_key: "file_count"
+          category: "size"
+        group_by: ["tech_stack"]
+        include_children: false
+        chart_type: "pie"
 
-  top_complexity:
-    title: "Top 10 Complexity"
-    tech_stacks: ["Rust", "Python", "Web"]
-    func:
-      type: "top_n"
-      metric_key: "complexity"
-      category: "maintainability"
-      limit: 10
-      order: "desc"
+      top_file_size:
+        title: "Top 10 File Size"
+        tech_stacks: ["All","Rust", "Python", "Web"]
+        change_type_mode: "switchable"  # Enable A/M/D toggle buttons
+        func:
+          type: "top_n"
+          metric_key: "char_count"
+          limit: 10
+          order: "desc"
 
-  sum_file_count_by_tech_stack_pie:
-    title: "Total File Count"
-    # change_type_mode: "all"
-    func:
-      type: "sum"
-      metric_key: "file_count"
-      category: "size"
-    group_by: ["tech_stack"]
-    include_children: false
-    chart_type: "pie"
+      sum_file_count_by_tech_stack_table:
+        title: "Total File Count by Tech Stack"
+        change_type_mode: "switchable"
+        func:
+          type: "sum"
+          metric_key: "file_count"
+          category: "size"
+        group_by: ["tech_stack"]
+        include_children: false
+        chart_type: "table" # table, bar_row, bar_col, pie, line, stacked_bar, heatmap, radar, gauge
 
-  sum_file_count_by_tech_stack_table:
-    title: "Total File Count by Tech Stack"
-    change_type_mode: "switchable"
-    func:
-      type: "sum"
-      metric_key: "file_count"
-      category: "size"
-    group_by: ["tech_stack"]
-    include_children: false
-    chart_type: "table" # table, bar_row, bar_col, pie, line, stacked_bar, heatmap, radar, gauge
+      sum_char_count:
+        title: "Total Char Count"
+        tech_stacks: ["Rust"]
+        func:
+          type: "sum"
+          metric_key: "char_count"
+        chart_type: "gauge"
 
-  sum_char_count:
-    title: "Total Char Count"
-    tech_stacks: ["Rust"]
-    func:
-      type: "sum"
-      metric_key: "char_count"
-    chart_type: "gauge"
+      avg_file_size:
+        title: "Average File Size"
+        func:
+          type: "avg"
+          metric_key: "char_count"
+        group_by: ["tech_stack"]
+        chart_type: "bar_col"
 
-  # === New Aggregation Types (avg, min, max, distribution) ===
+      file_size_distribution:
+        title: "File Size Distribution"
+        func:
+          type: "distribution"
+          metric_key: "char_count"
+          buckets: [1000, 3000, 5000, 10000, 50000]
+        chart_type: "bar_col"
 
-  avg_file_size:
-    title: "Average File Size"
-    func:
-      type: "avg"
-      metric_key: "char_count"
-    group_by: ["tech_stack"]
-    chart_type: "bar_col"
+      top_complexity:
+        title: "Top 10 Complexity"
+        tech_stacks: ["Rust", "Python", "Web"]
+        func:
+          type: "top_n"
+          metric_key: "complexity"
+          category: "maintainability"
+          limit: 10
+          order: "desc"
 
-  file_size_distribution:
-    title: "File Size Distribution"
-    func:
-      type: "distribution"
-      metric_key: "char_count"
-      buckets: [1000, 3000, 5000, 10000, 50000]
-    chart_type: "bar_col"
+      # === New Chart Types Demo ===
 
-  # === New Chart Types Demo ===
-
-  complexity_radar:
-    title: "Complexity Overview (Radar)"
-    tech_stacks: ["Rust", "Python", "Web"]
-    func:
-      type: "top_n"
-      metric_key: "complexity"
-      limit: 6
-    chart_type: "radar"
+      complexity_radar:
+        title: "Complexity Overview (Radar)"
+        tech_stacks: ["Rust", "Python", "Web"]
+        func:
+          type: "top_n"
+          metric_key: "complexity"
+          limit: 6
+        chart_type: "radar"
