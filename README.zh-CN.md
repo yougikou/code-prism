@@ -45,9 +45,7 @@ CodePrism 是一个使用 Rust 构建的**高性能代码分析工具**。它可
 | 平台 | 下载文件 |
 |------|----------|
 | **Linux x86_64** | `codeprism-x86_64-unknown-linux-gnu.tar.gz` |
-| **Linux ARM64** | `codeprism-aarch64-unknown-linux-gnu.tar.gz` |
-| **macOS Intel** | `codeprism-x86_64-apple-darwin.tar.gz` |
-| **macOS Apple Silicon** | `codeprism-aarch64-apple-darwin.tar.gz` |
+| **macOS (Apple Silicon)** | `codeprism-aarch64-apple-darwin.tar.gz` |
 | **Windows x86_64** | `codeprism-x86_64-pc-windows-msvc.zip` |
 
 ```bash

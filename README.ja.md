@@ -42,12 +42,10 @@ CodePrism は Rust で構築された**高性能コード分析ツール**です
 
 [GitHub Releases](https://github.com/yougikou/code-prism/releases) からプラットフォームに合った最新版をダウンロード：
 
-| プラットフォーム | ダウンロードファイル |
-|------------------|----------------------|
+| プラットフォーム | ダウンロード |
+|------------------|------------|
 | **Linux x86_64** | `codeprism-x86_64-unknown-linux-gnu.tar.gz` |
-| **Linux ARM64** | `codeprism-aarch64-unknown-linux-gnu.tar.gz` |
-| **macOS Intel** | `codeprism-x86_64-apple-darwin.tar.gz` |
-| **macOS Apple Silicon** | `codeprism-aarch64-apple-darwin.tar.gz` |
+| **macOS (Apple Silicon)** | `codeprism-aarch64-apple-darwin.tar.gz` |
 | **Windows x86_64** | `codeprism-x86_64-pc-windows-msvc.zip` |
 
 ```bash

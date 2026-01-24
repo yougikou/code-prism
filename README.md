@@ -45,9 +45,7 @@ Download the latest release for your platform from [GitHub Releases](https://git
 | Platform | Download |
 |----------|----------|
 | **Linux x86_64** | `codeprism-x86_64-unknown-linux-gnu.tar.gz` |
-| **Linux ARM64** | `codeprism-aarch64-unknown-linux-gnu.tar.gz` |
-| **macOS Intel** | `codeprism-x86_64-apple-darwin.tar.gz` |
-| **macOS Apple Silicon** | `codeprism-aarch64-apple-darwin.tar.gz` |
+| **macOS (Apple Silicon)** | `codeprism-aarch64-apple-darwin.tar.gz` |
 | **Windows x86_64** | `codeprism-x86_64-pc-windows-msvc.zip` |
 
 ```bash
