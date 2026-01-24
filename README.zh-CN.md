@@ -27,6 +27,8 @@
 
 CodePrism 是一个使用 Rust 构建的**高性能代码分析工具**。它可以扫描 Git 仓库、提取代码指标，并通过直观的 Web 仪表板提供可操作的洞察。
 
+![CodePrism Dashboard](screenshot.png)
+
 ## ✨ 功能特性
 
 - 🚀 **高性能** - 使用 Rust 构建，速度极快

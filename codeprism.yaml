@@ -19,23 +19,23 @@ projects:
     # Define custom regex analyzers here (Name -> Pattern)
     custom_regex_analyzers:
       log_info_finder: 
-        pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(info)\\b"
+        pattern: "\\b(?:(?:info|print(?:ln)?)!|print(?:ln)?\\b|console\\.(?:log|info)\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.info\\b)"
         metric_key: "log_info"
         category: "logging"
       log_warn_finder: 
-        pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(warn)\\b"
+        pattern: "\\b(?:warn!|console\\.warn\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.(?:warn|warning)\\b)"
         metric_key: "log_warn"
         category: "logging"
       log_error_finder: 
-        pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(error|fatal)\\b"
+        pattern: "\\b(?:(?:error|eprint(?:ln)?)!|eprint(?:ln)?\\b|console\\.error\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.(?:error|fatal|exception)\\b)"
         metric_key: "log_error"
         category: "logging"
       log_trace_finder: 
-        pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(trace)\\b"
+        pattern: "\\b(?:trace!|console\\.trace\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.trace\\b)"
         metric_key: "log_trace"
         category: "logging"
       log_debug_finder: 
-        pattern: "\\b[\\w]*(?:[Ll]og|[Ll]ogger)\\.(debug)\\b"
+        pattern: "\\b(?:debug!|console\\.debug\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.debug\\b)"
         metric_key: "log_debug"
         category: "logging"
 
@@ -47,15 +47,15 @@ projects:
     tech_stacks:
       - name: "Rust"
         extensions: ["rs", "toml"]
-        analyzers: ["char_count"]
+        analyzers: ["char_count", "log_info_finder", "log_warn_finder", "log_error_finder", "log_trace_finder", "log_debug_finder"]
 
       - name: "Web"
         extensions: ["js", "ts", "jsx", "tsx", "html", "css"]
-        analyzers: ["char_count"]
+        analyzers: ["char_count", "log_info_finder", "log_warn_finder", "log_error_finder", "log_trace_finder", "log_debug_finder"]
 
       - name: "Python"
         extensions: ["py"]
-        analyzers: ["char_count"]
+        analyzers: ["char_count", "log_info_finder", "log_warn_finder", "log_error_finder", "log_trace_finder", "log_debug_finder"]
 
     aggregation_views:
       sum_file_count_by_tech_stack_pie:
@@ -63,7 +63,7 @@ projects:
         # change_type_mode: "all"
         func:
           type: "sum"
-          metric_key: "file_count"
+          analyzer_id: "file_count"
           category: "size"
         group_by: ["tech_stack"]
         include_children: false
@@ -75,7 +75,7 @@ projects:
         change_type_mode: "switchable"  # Enable A/M/D toggle buttons
         func:
           type: "top_n"
-          metric_key: "char_count"
+          analyzer_id: "char_count"
           limit: 10
           order: "desc"
 
@@ -84,7 +84,7 @@ projects:
         change_type_mode: "switchable"
         func:
           type: "sum"
-          metric_key: "file_count"
+          analyzer_id: "file_count"
           category: "size"
         group_by: ["tech_stack"]
         include_children: false
@@ -95,14 +95,14 @@ projects:
         tech_stacks: ["Rust"]
         func:
           type: "sum"
-          metric_key: "char_count"
+          analyzer_id: "char_count"
         chart_type: "gauge"
 
       avg_file_size:
         title: "Average File Size"
         func:
           type: "avg"
-          metric_key: "char_count"
+          analyzer_id: "char_count"
         group_by: ["tech_stack"]
         chart_type: "bar_col"
 
@@ -110,10 +110,19 @@ projects:
         title: "File Size Distribution"
         func:
           type: "distribution"
-          metric_key: "char_count"
+          analyzer_id: "char_count"
           buckets: [1000, 3000, 5000, 10000, 50000]
         chart_type: "bar_col"
 
+      log_stat_count:
+        title: "Log Stat Count"
+        tech_stacks: ["Rust", "Python", "Web"]
+        func:
+          type: "sum"
+          category: "logging"
+        group_by: ["metric_key"]
+        chart_type: "table"
+      
       top_complexity:
         title: "Top 10 Complexity"
         tech_stacks: ["Rust", "Python", "Web"]
