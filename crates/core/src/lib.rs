@@ -23,12 +23,14 @@ pub struct TechStack {
     pub excludes: Vec<String>,
 }
 
+/// Project-specific configuration (all settings except database_url)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CodePrismConfig {
+pub struct ProjectConfig {
+    pub name: String,
+    #[serde(default)]
     pub tech_stacks: Vec<TechStack>,
     #[serde(default)]
     pub global_excludes: Vec<String>,
-    pub database_url: Option<String>,
     #[serde(default)]
     pub custom_regex_analyzers: HashMap<String, CustomAnalyzerDef>,
     #[serde(default)]
@@ -37,6 +39,62 @@ pub struct CodePrismConfig {
     pub external_analyzers: HashMap<String, String>,
     #[serde(default)]
     pub aggregation_views: indexmap::IndexMap<String, AggregationView>,
+}
+
+/// Root configuration supporting both single-project (legacy) and multi-project formats
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CodePrismConfig {
+    pub database_url: Option<String>,
+
+    // Multi-project format: list of project configs
+    #[serde(default)]
+    pub projects: Vec<ProjectConfig>,
+
+    // Legacy single-project format (for backward compatibility)
+    // These fields are merged into a default project if 'projects' is empty
+    #[serde(default)]
+    pub tech_stacks: Vec<TechStack>,
+    #[serde(default)]
+    pub global_excludes: Vec<String>,
+    #[serde(default)]
+    pub custom_regex_analyzers: HashMap<String, CustomAnalyzerDef>,
+    #[serde(default)]
+    pub custom_impl_analyzers: HashMap<String, ImplAnalyzerConfig>,
+    #[serde(default)]
+    pub external_analyzers: HashMap<String, String>,
+    #[serde(default)]
+    pub aggregation_views: indexmap::IndexMap<String, AggregationView>,
+}
+
+impl CodePrismConfig {
+    /// Get all project configurations.
+    /// If using legacy format (no 'projects' list), returns a single default project.
+    pub fn get_projects(&self) -> Vec<ProjectConfig> {
+        if !self.projects.is_empty() {
+            self.projects.clone()
+        } else {
+            // Legacy format: create a default project from root-level settings
+            vec![ProjectConfig {
+                name: "default".to_string(),
+                tech_stacks: self.tech_stacks.clone(),
+                global_excludes: self.global_excludes.clone(),
+                custom_regex_analyzers: self.custom_regex_analyzers.clone(),
+                custom_impl_analyzers: self.custom_impl_analyzers.clone(),
+                external_analyzers: self.external_analyzers.clone(),
+                aggregation_views: self.aggregation_views.clone(),
+            }]
+        }
+    }
+
+    /// Get project config by name
+    pub fn get_project(&self, name: &str) -> Option<ProjectConfig> {
+        self.get_projects().into_iter().find(|p| p.name == name)
+    }
+
+    /// Get the first/default project config (for backward compatibility)
+    pub fn get_default_project(&self) -> ProjectConfig {
+        self.get_projects().into_iter().next().unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +147,35 @@ pub enum AggregationFunc {
         metric_key: String,
         category: Option<String>,
     },
+    #[serde(rename = "avg")]
+    Avg {
+        #[serde(default)]
+        analyzer_id: Option<String>,
+        metric_key: String,
+        category: Option<String>,
+    },
+    #[serde(rename = "min")]
+    Min {
+        #[serde(default)]
+        analyzer_id: Option<String>,
+        metric_key: String,
+        category: Option<String>,
+    },
+    #[serde(rename = "max")]
+    Max {
+        #[serde(default)]
+        analyzer_id: Option<String>,
+        metric_key: String,
+        category: Option<String>,
+    },
+    #[serde(rename = "distribution")]
+    Distribution {
+        #[serde(default)]
+        analyzer_id: Option<String>,
+        metric_key: String,
+        category: Option<String>,
+        buckets: Vec<f64>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +189,9 @@ pub struct AggregationView {
     pub group_by: Vec<String>,
     #[serde(default)]
     pub chart_type: Option<String>,
+    /// Display mode for change types: "all" (stacked) or "switchable" (A/M/D toggle)
+    #[serde(default)]
+    pub change_type_mode: Option<String>,
     pub func: AggregationFunc,
 }
 
@@ -113,7 +203,7 @@ fn default_metric_key() -> String {
     "matches".to_string()
 }
 
-impl CodePrismConfig {
+impl ProjectConfig {
     pub fn get_tech_stack_for_file(&self, path: &str) -> Option<String> {
         let path_obj = std::path::Path::new(path);
         let ext = path_obj
@@ -136,9 +226,7 @@ impl CodePrismConfig {
                         if glob.matches_with(
                             path,
                             glob::MatchOptions {
-                                case_sensitive: false, // Or true? Git is usually case sensitive but on windows... let's stick to default/permissive for now or use strict?
-                                // Actually default is permissive for case on Windows.
-                                // CRITICAL: require_literal_separator = true to prevent * from matching /
+                                case_sensitive: false,
                                 require_literal_separator: true,
                                 require_literal_leading_dot: false,
                             },
@@ -154,7 +242,7 @@ impl CodePrismConfig {
                 }
             }
 
-            // Check Local Excludes (Only if paths were empty, meaning generic extension match)
+            // Check Local Excludes
             if !stack.excludes.is_empty() {
                 let mut excluded = false;
                 for pattern in &stack.excludes {
@@ -186,7 +274,6 @@ impl CodePrismConfig {
 
     pub fn is_excluded(&self, path: &str) -> bool {
         // 1. Priority: If matched by any Tech Stack's Explicit include paths, it is NOT excluded.
-        // regardless of global settings.
         let path_obj = std::path::Path::new(path);
         let ext = path_obj
             .extension()
@@ -195,7 +282,6 @@ impl CodePrismConfig {
             .to_string();
 
         for stack in &self.tech_stacks {
-            // Check extension match for the stack to be relevant?
             if !stack.extensions.iter().any(|e| e == &ext) {
                 continue;
             }
@@ -218,7 +304,7 @@ impl CodePrismConfig {
             }
         }
 
-        // 2. Check Global Excludes
+        // 2. Check Global Excludes (Project-specific in this case)
         for pattern in &self.global_excludes {
             if let Ok(glob) = glob::Pattern::new(pattern) {
                 if glob.matches_with(
@@ -235,6 +321,37 @@ impl CodePrismConfig {
         }
 
         false
+    }
+}
+
+impl CodePrismConfig {
+    pub fn get_tech_stack_for_file(&self, path: &str) -> Option<String> {
+        // For general usage, use the root-level tech_stacks or the first project
+        if !self.tech_stacks.is_empty() {
+            // Legacy/Root-level check (duplicated logic for simplicity/speed)
+            // But we actually want to unify this. Let's create a temporary ProjectConfig
+            // to reuse the logic.
+            let p = ProjectConfig {
+                tech_stacks: self.tech_stacks.clone(),
+                ..Default::default()
+            };
+            p.get_tech_stack_for_file(path)
+        } else {
+            self.get_default_project().get_tech_stack_for_file(path)
+        }
+    }
+
+    pub fn is_excluded(&self, path: &str) -> bool {
+        if !self.global_excludes.is_empty() {
+            let p = ProjectConfig {
+                tech_stacks: self.tech_stacks.clone(),
+                global_excludes: self.global_excludes.clone(),
+                ..Default::default()
+            };
+            p.is_excluded(path)
+        } else {
+            self.get_default_project().is_excluded(path)
+        }
     }
 
     pub fn load_from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self, AppError> {

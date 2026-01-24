@@ -27,7 +27,7 @@ struct ProcessHandle {
 pub struct ScriptAnalyzer {
     id: String,
     script_path: String,
-    interpreter: String,
+    interpreter: Arc<Mutex<Option<String>>>, // Lazy-detected, wrapped for interior mutability
     process: Arc<Mutex<Option<ProcessHandle>>>,
     metric_key_override: Option<String>,
     category_override: Option<String>,
@@ -43,23 +43,62 @@ impl ScriptAnalyzer {
         Self {
             id: id.to_string(),
             script_path: script_path.to_string(),
-            interpreter: "python".to_string(),
+            interpreter: Arc::new(Mutex::new(None)), // Will be detected on first use
             process: Arc::new(Mutex::new(None)),
             metric_key_override,
             category_override,
         }
     }
 
+    /// Detect available Python interpreter - tries python3 first (macOS/Linux), then python (Windows)
+    fn detect_python_interpreter() -> Result<String, String> {
+        // Try python3 first (preferred on macOS/Linux), python on Windows
+        let candidates = if cfg!(windows) {
+            vec!["python", "python3", "py"]
+        } else {
+            vec!["python3", "python"]
+        };
+
+        for cmd in candidates {
+            if let Ok(output) = Command::new(cmd)
+                .arg("--version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+            {
+                if output.success() {
+                    return Ok(cmd.to_string());
+                }
+            }
+        }
+
+        Err("Python interpreter not found. Please install Python 3 and ensure 'python3' or 'python' is in your PATH.".to_string())
+    }
+
     fn ensure_process(&self) -> Result<(), String> {
         let mut guard = self.process.lock().unwrap();
         if guard.is_none() {
-            let mut child = Command::new(&self.interpreter)
+            // Detect interpreter if not already done (uses separate lock)
+            let interpreter = {
+                let mut interp_guard = self.interpreter.lock().unwrap();
+                if interp_guard.is_none() {
+                    *interp_guard = Some(Self::detect_python_interpreter()?);
+                }
+                interp_guard.clone().unwrap()
+            };
+
+            let mut child = Command::new(&interpreter)
                 .arg(&self.script_path)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .spawn()
-                .map_err(|e| format!("Failed to spawn analyzer: {}", e))?;
+                .map_err(|e| {
+                    format!(
+                        "Failed to spawn analyzer '{}' with interpreter '{}': {}",
+                        self.id, interpreter, e
+                    )
+                })?;
 
             let stdin = child.stdin.take().ok_or("Failed to capture stdin")?;
             let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;

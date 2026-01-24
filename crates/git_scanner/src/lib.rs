@@ -61,9 +61,21 @@ impl Scanner {
         let cc = CharCountAnalyzer::new();
         analyzers.insert(cc.id().to_string(), Box::new(cc));
 
-        // 2. Custom Regex Analyzers
-        // 2. Custom Regex Analyzers
-        for (name, def) in &config.custom_regex_analyzers {
+        // 2. Load Analyzers from all sources (Root + All Projects)
+        // We collect all definitions first, though they might collide by name.
+        // Last one wins if there's a name collision.
+        let mut regex_defs = config.custom_regex_analyzers.clone();
+        let mut impl_defs = config.custom_impl_analyzers.clone();
+        let mut external_defs = config.external_analyzers.clone();
+
+        for project in &config.projects {
+            regex_defs.extend(project.custom_regex_analyzers.clone());
+            impl_defs.extend(project.custom_impl_analyzers.clone());
+            external_defs.extend(project.external_analyzers.clone());
+        }
+
+        // Apply Regex Analyzers
+        for (name, def) in &regex_defs {
             let (pattern, metric_key, category) = match def {
                 codeprism_core::CustomAnalyzerDef::Pattern(p) => (p.clone(), None, None),
                 codeprism_core::CustomAnalyzerDef::Config {
@@ -83,8 +95,8 @@ impl Scanner {
             }
         }
 
-        // 3. External Wasm Analyzers
-        for (name, path) in &config.external_analyzers {
+        // Apply External Wasm Analyzers
+        for (name, path) in &external_defs {
             match WasmAnalyzer::new(name, path) {
                 Ok(wa) => {
                     analyzers.insert(wa.id().to_string(), Box::new(wa));
@@ -99,7 +111,6 @@ impl Scanner {
         }
 
         // 4. Auto-discover Python Analyzers in 'custom_analyzers/'
-        // Warning: This scans the CWD. In a real app, maybe config base path?
         if let Ok(entries) = std::fs::read_dir("custom_analyzers") {
             for entry in entries.filter_map(Result::ok) {
                 let path = entry.path();
@@ -110,17 +121,15 @@ impl Scanner {
                                 let analyzer_id = stem.to_string();
                                 let full_path = path.to_string_lossy().to_string();
 
-                                // Check for overrides
-                                let (metric_key_override, category_override) = if let Some(conf) =
-                                    config.custom_impl_analyzers.get(&analyzer_id)
-                                {
-                                    (conf.metric_key.clone(), conf.category.clone())
-                                } else {
-                                    (None, None)
-                                };
+                                // Check for overrides (search root then projects)
+                                let (metric_key_override, category_override) =
+                                    if let Some(conf) = impl_defs.get(&analyzer_id) {
+                                        (conf.metric_key.clone(), conf.category.clone())
+                                    } else {
+                                        (None, None)
+                                    };
 
                                 // Create ScriptAnalyzer
-                                // Note: We don't check if id collides (it will overwrite or be overwritten)
                                 let sa = ScriptAnalyzer::new(
                                     &analyzer_id,
                                     &full_path,
@@ -138,7 +147,6 @@ impl Scanner {
 
         Self {
             db,
-
             analyzers,
             config: Arc::new(config),
         }
@@ -173,11 +181,22 @@ impl Scanner {
             .create_scan_record(project_id, &commit_hash, &branch_name, "SNAPSHOT", None)
             .await?;
 
+        // Resolve Project Config
+        let project_config =
+            Arc::new(self.config.get_project(&project_name).unwrap_or_else(|| {
+                // If project not found specifically, create one from root settings or default
+                println!(
+                    "Warning: Project '{}' not found in config, using default settings.",
+                    project_name
+                );
+                self.config.get_default_project()
+            }));
+
         // 2. Spawn Blocking Git Walker
         let (tx, mut rx) = mpsc::channel(100);
         let repo_path_clone = repo_path.clone();
         let commit_hash_clone = commit_hash.clone();
-        let config_clone = self.config.clone();
+        let project_config_clone = project_config.clone();
 
         tokio::task::spawn_blocking(move || {
             let res = (|| -> Result<()> {
@@ -188,7 +207,7 @@ impl Scanner {
                     .map_err(|_| anyhow::anyhow!("Not a commit"))?;
                 let tree = commit.tree()?;
 
-                Scanner::walk_tree_sync(&repo, &tree, &tx, &config_clone)?;
+                Scanner::walk_tree_sync(&repo, &tree, &tx, &project_config_clone)?;
                 Ok(())
             })();
             if let Err(e) = res {
@@ -196,7 +215,6 @@ impl Scanner {
             }
         });
 
-        // 3. Process Events (Async DB)
         // 3. Process Events (Async DB)
 
         let pb = ProgressBar::new_spinner();
@@ -214,10 +232,7 @@ impl Scanner {
                 ScanEvent::Start { total: _ } => {
                     pb.set_message("Scanning files...");
                 }
-                ScanEvent::Ignored => {
-                    // In snapshot walk, typically we don't send Ignored to avoid noise,
-                    // but if we did, we'd just tick.
-                }
+                ScanEvent::Ignored => {}
                 ScanEvent::FileFound {
                     path,
                     content,
@@ -232,7 +247,7 @@ impl Scanner {
 
                     // Run analyzers if content is available
                     let file_metrics = if let Some(c) = content {
-                        self.analyze_file_content(&path, &c, tech_stack.as_deref())
+                        self.analyze_file_content(&path, &c, tech_stack.as_deref(), &project_config)
                     } else {
                         Vec::<codeprism_core::MetricEntry>::new()
                     };
@@ -297,10 +312,20 @@ impl Scanner {
             )
             .await?;
 
+        // Resolve Project Config
+        let project_config =
+            Arc::new(self.config.get_project(&project_name).unwrap_or_else(|| {
+                println!(
+                    "Warning: Project '{}' not found in config, using default settings.",
+                    project_name
+                );
+                self.config.get_default_project()
+            }));
+
         // Spawn Blocking Git Diff
         let (tx, mut rx) = mpsc::channel(100);
         let repo_path_clone = repo_path.clone();
-        let config_clone = self.config.clone();
+        let project_config_clone = project_config.clone();
 
         tokio::task::spawn_blocking(move || {
             let res = (|| -> Result<()> {
@@ -312,7 +337,13 @@ impl Scanner {
                 let target_obj = repo.revparse_single(&target_hash)?;
                 let target_tree = target_obj.peel_to_commit()?.tree()?;
 
-                Scanner::process_diff_sync(&repo, &base_tree, &target_tree, &tx, &config_clone)?;
+                Scanner::process_diff_sync(
+                    &repo,
+                    &base_tree,
+                    &target_tree,
+                    &tx,
+                    &project_config_clone,
+                )?;
                 Ok(())
             })();
             if let Err(e) = res {
@@ -362,13 +393,14 @@ impl Scanner {
                             old_path.as_deref().unwrap_or(&path),
                             &c,
                             tech_stack.as_deref(),
+                            &project_config,
                         )
                     } else {
                         Vec::<codeprism_core::MetricEntry>::new()
                     };
 
                     let new_metrics = if let Some(c) = content {
-                        self.analyze_file_content(&path, &c, tech_stack.as_deref())
+                        self.analyze_file_content(&path, &c, tech_stack.as_deref(), &project_config)
                     } else {
                         Vec::<codeprism_core::MetricEntry>::new()
                     };
@@ -428,14 +460,14 @@ impl Scanner {
         repo: &Repository,
         tree: &Tree<'_>,
         tx: &mpsc::Sender<ScanEvent>,
-        config: &CodePrismConfig,
+        project_config: &codeprism_core::ProjectConfig,
     ) -> Result<()> {
         tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
             if let Some(ObjectType::Blob) = entry.kind() {
                 let filename = entry.name().unwrap_or("unknown");
                 let path = format!("{}{}", root, filename);
                 // Check Exclusions
-                if config.is_excluded(&path) {
+                if project_config.is_excluded(&path) {
                     return git2::TreeWalkResult::Ok;
                 }
 
@@ -453,7 +485,7 @@ impl Scanner {
                     }
                 }
 
-                let tech_stack = config.get_tech_stack_for_file(&path);
+                let tech_stack = project_config.get_tech_stack_for_file(&path);
 
                 let _ = tx.blocking_send(ScanEvent::FileFound {
                     path,
@@ -474,7 +506,7 @@ impl Scanner {
         base: &Tree<'_>,
         target: &Tree<'_>,
         tx: &mpsc::Sender<ScanEvent>,
-        config: &CodePrismConfig,
+        project_config: &codeprism_core::ProjectConfig,
     ) -> Result<()> {
         let mut diff = repo.diff_tree_to_tree(Some(base), Some(target), None)?;
         diff.find_similar(None)?;
@@ -495,7 +527,7 @@ impl Scanner {
                     .to_string();
 
                 // Check Exclusions for the new file path (Target)
-                if config.is_excluded(&file_path) {
+                if project_config.is_excluded(&file_path) {
                     let _ = tx.blocking_send(ScanEvent::Ignored);
                     continue;
                 }
@@ -560,7 +592,7 @@ impl Scanner {
                     file_path
                 };
 
-                let tech_stack = config.get_tech_stack_for_file(&final_path);
+                let tech_stack = project_config.get_tech_stack_for_file(&final_path);
 
                 let _ = tx.blocking_send(ScanEvent::FileFound {
                     path: final_path,
@@ -623,12 +655,17 @@ impl Scanner {
         file_path: &str,
         content: &str,
         tech_stack_name: Option<&str>,
+        project_config: &codeprism_core::ProjectConfig,
     ) -> Vec<codeprism_core::MetricEntry> {
         let mut results: Vec<codeprism_core::MetricEntry> = Vec::new();
         let mut analyzers_to_run: Vec<String> = vec!["file_count".to_string()];
 
         if let Some(ts_name) = tech_stack_name {
-            if let Some(stack) = self.config.tech_stacks.iter().find(|s| s.name == ts_name) {
+            if let Some(stack) = project_config
+                .tech_stacks
+                .iter()
+                .find(|s| s.name == ts_name)
+            {
                 for a in &stack.analyzers {
                     if !analyzers_to_run.contains(a) {
                         analyzers_to_run.push(a.clone());

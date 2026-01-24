@@ -17,6 +17,7 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
 
     // Setup dummy config
     let config = codeprism_core::CodePrismConfig {
+        projects: vec![], // No projects in multi-project format, using legacy fields
         tech_stacks: vec![codeprism_core::TechStack {
             name: "Text".to_string(),
             extensions: vec!["txt".to_string()],

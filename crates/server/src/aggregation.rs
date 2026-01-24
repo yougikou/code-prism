@@ -22,6 +22,8 @@ pub struct ViewFilters {
     pub tech_stack: Option<String>,
     pub category: Option<String>,
     pub metric_key: Option<String>,
+    /// Filter by change type: Add, Modify, Delete
+    pub change_type: Option<String>,
     /// Comma separated list of fields to group by (e.g. "tech_stack,change_type")
     pub group_by: Option<String>,
 }
@@ -37,7 +39,7 @@ impl TopNAggregator {
     ) -> Result<Vec<AggregationResult>> {
         let (source, params) = match &view_config.kind {
             ViewKind::TopN { source, params } => (source, params),
-            ViewKind::Sum { .. } => return Ok(vec![]), // Should not reach here if routed correctly
+            _ => return Ok(vec![]), // Should not reach here if routed correctly
         };
 
         let mut query = String::from(
@@ -65,6 +67,9 @@ impl TopNAggregator {
         if filters.metric_key.is_some() {
             query.push_str(" AND metric_key = ?");
         }
+        if filters.change_type.is_some() {
+            query.push_str(" AND change_type = ?");
+        }
 
         query.push_str(" ORDER BY value_after DESC LIMIT ?");
 
@@ -87,6 +92,9 @@ impl TopNAggregator {
         }
         if let Some(mk) = &filters.metric_key {
             sql_query = sql_query.bind(mk);
+        }
+        if let Some(ct) = &filters.change_type {
+            sql_query = sql_query.bind(ct);
         }
 
         sql_query = sql_query.bind(params.limit);
@@ -269,6 +277,9 @@ impl SumAggregator {
         if filters.metric_key.is_some() {
             query.push_str(" AND metric_key = ?");
         }
+        if filters.change_type.is_some() {
+            query.push_str(" AND change_type = ?");
+        }
 
         // NO ORDER BY or LIMIT for Sum (unless we want to optimize?)
 
@@ -290,6 +301,9 @@ impl SumAggregator {
         }
         if let Some(mk) = &filters.metric_key {
             sql_query = sql_query.bind(mk);
+        }
+        if let Some(ct) = &filters.change_type {
+            sql_query = sql_query.bind(ct);
         }
 
         let rows = sql_query.fetch_all(pool).await?;
@@ -363,6 +377,212 @@ impl SumAggregator {
                 children: None,
                 group_key: None,
             }];
+        }
+
+        Ok(results)
+    }
+}
+
+// ============ Stat Aggregator (AVG, MIN, MAX) ============
+pub struct StatAggregator;
+
+#[derive(Debug, Clone, Copy)]
+pub enum StatType {
+    Avg,
+    Min,
+    Max,
+}
+
+impl StatAggregator {
+    pub async fn execute(
+        pool: &SqlitePool,
+        scan_id: i64,
+        view_config: &ViewConfig,
+        filters: &ViewFilters,
+        stat_type: StatType,
+    ) -> Result<Vec<AggregationResult>> {
+        let source = match &view_config.kind {
+            ViewKind::Avg { source } | ViewKind::Min { source } | ViewKind::Max { source } => {
+                source
+            }
+            _ => return Ok(vec![]),
+        };
+
+        let stat_fn = match stat_type {
+            StatType::Avg => "AVG",
+            StatType::Min => "MIN",
+            StatType::Max => "MAX",
+        };
+
+        let mut query = format!(
+            "SELECT {}(value_after) as stat_value, tech_stack, category
+             FROM metrics
+             WHERE scan_id = ?
+             AND metric_key = ?",
+            stat_fn
+        );
+
+        if !source.analyzer_id.is_empty() {
+            query.push_str(" AND analyzer_id = ?");
+        }
+        if view_config.category.is_some() {
+            query.push_str(" AND category = ?");
+        }
+        if filters.tech_stack.is_some() {
+            query.push_str(" AND tech_stack = ?");
+        }
+
+        // Grouping
+        let effective_group_by = if let Some(g) = &filters.group_by {
+            Some(g.clone())
+        } else if !view_config.group_by.is_empty() {
+            Some(view_config.group_by.join(","))
+        } else {
+            None
+        };
+
+        if let Some(ref group_by_str) = effective_group_by {
+            let keys: Vec<&str> = group_by_str
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !keys.is_empty() {
+                query.push_str(" GROUP BY ");
+                query.push_str(&keys.join(", "));
+            }
+        }
+
+        let mut sql_query = sqlx::query(&query).bind(scan_id).bind(&source.metric_key);
+
+        if !source.analyzer_id.is_empty() {
+            sql_query = sql_query.bind(&source.analyzer_id);
+        }
+        if let Some(cat) = &view_config.category {
+            sql_query = sql_query.bind(cat);
+        }
+        if let Some(ts) = &filters.tech_stack {
+            sql_query = sql_query.bind(ts);
+        }
+
+        let rows = sql_query.fetch_all(pool).await?;
+
+        let results: Vec<AggregationResult> = rows
+            .into_iter()
+            .map(|row| {
+                let label = if effective_group_by.is_some() {
+                    row.try_get::<Option<String>, _>("tech_stack")
+                        .unwrap_or_default()
+                        .unwrap_or_else(|| "Unknown".to_string())
+                } else {
+                    format!("{} Value", stat_fn)
+                };
+                AggregationResult {
+                    label,
+                    value: row.try_get::<f64, _>("stat_value").unwrap_or_default(),
+                    tech_stack: row
+                        .try_get::<Option<String>, _>("tech_stack")
+                        .unwrap_or_default(),
+                    category: row
+                        .try_get::<Option<String>, _>("category")
+                        .unwrap_or_default(),
+                    change_type: None,
+                    children: None,
+                    group_key: None,
+                }
+            })
+            .collect();
+
+        Ok(results)
+    }
+}
+
+// ============ Distribution Aggregator ============
+pub struct DistributionAggregator;
+
+impl DistributionAggregator {
+    pub async fn execute(
+        pool: &SqlitePool,
+        scan_id: i64,
+        view_config: &ViewConfig,
+        filters: &ViewFilters,
+    ) -> Result<Vec<AggregationResult>> {
+        let (source, params) = match &view_config.kind {
+            ViewKind::Distribution { source, params } => (source, params),
+            _ => return Ok(vec![]),
+        };
+
+        // Fetch all values
+        let mut query = String::from(
+            "SELECT value_after, tech_stack, category
+             FROM metrics
+             WHERE scan_id = ?
+             AND metric_key = ?",
+        );
+
+        if !source.analyzer_id.is_empty() {
+            query.push_str(" AND analyzer_id = ?");
+        }
+        if view_config.category.is_some() {
+            query.push_str(" AND category = ?");
+        }
+        if filters.tech_stack.is_some() {
+            query.push_str(" AND tech_stack = ?");
+        }
+
+        let mut sql_query = sqlx::query(&query).bind(scan_id).bind(&source.metric_key);
+
+        if !source.analyzer_id.is_empty() {
+            sql_query = sql_query.bind(&source.analyzer_id);
+        }
+        if let Some(cat) = &view_config.category {
+            sql_query = sql_query.bind(cat);
+        }
+        if let Some(ts) = &filters.tech_stack {
+            sql_query = sql_query.bind(ts);
+        }
+
+        let rows = sql_query.fetch_all(pool).await?;
+
+        // Create bucket counts
+        let buckets = &params.buckets;
+        let mut bucket_counts: Vec<i64> = vec![0; buckets.len() + 1];
+
+        for row in rows {
+            let value: f64 = row.try_get("value_after").unwrap_or_default();
+            let mut placed = false;
+            for (i, &boundary) in buckets.iter().enumerate() {
+                if value < boundary {
+                    bucket_counts[i] += 1;
+                    placed = true;
+                    break;
+                }
+            }
+            if !placed {
+                bucket_counts[buckets.len()] += 1;
+            }
+        }
+
+        // Build results with bucket labels
+        let mut results: Vec<AggregationResult> = Vec::new();
+        for (i, count) in bucket_counts.iter().enumerate() {
+            let label = if i == 0 {
+                format!("< {}", buckets.first().unwrap_or(&0.0))
+            } else if i == buckets.len() {
+                format!(">= {}", buckets.last().unwrap_or(&0.0))
+            } else {
+                format!("{} - {}", buckets[i - 1], buckets[i])
+            };
+
+            results.push(AggregationResult {
+                label,
+                value: *count as f64,
+                tech_stack: None,
+                category: None,
+                change_type: None,
+                children: None,
+                group_key: Some(format!("bucket_{}", i)),
+            });
         }
 
         Ok(results)

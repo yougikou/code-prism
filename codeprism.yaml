@@ -51,14 +51,15 @@ tech_stacks:
     extensions: ["js", "ts", "jsx", "tsx", "html", "css"]
     analyzers: ["char_count"]
 
-  - name: "Java"
-    extensions: ["java", "jsp", "xml"]
+  - name: "Python"
+    extensions: ["py"]
     analyzers: ["char_count"]
 
 aggregation_views:
   top_file_size:
     title: "Top 10 File Size"
-    tech_stacks: ["Rust"]
+    tech_stacks: ["Rust", "Python", "Web"]
+    change_type_mode: "switchable"  # Enable A/M/D toggle buttons
     func:
       type: "top_n"
       metric_key: "char_count"
@@ -67,7 +68,7 @@ aggregation_views:
 
   top_complexity:
     title: "Top 10 Complexity"
-    tech_stacks: ["Rust", "Java"]
+    tech_stacks: ["Rust", "Python", "Web"]
     func:
       type: "top_n"
       metric_key: "complexity"
@@ -77,6 +78,7 @@ aggregation_views:
 
   sum_file_count_by_tech_stack_pie:
     title: "Total File Count"
+    # change_type_mode: "all"
     func:
       type: "sum"
       metric_key: "file_count"
@@ -87,19 +89,48 @@ aggregation_views:
 
   sum_file_count_by_tech_stack_table:
     title: "Total File Count by Tech Stack"
+    change_type_mode: "switchable"
     func:
       type: "sum"
       metric_key: "file_count"
       category: "size"
     group_by: ["tech_stack"]
     include_children: false
-    chart_type: "table" # table, bar_row, bar_col, pie, line
+    chart_type: "table" # table, bar_row, bar_col, pie, line, stacked_bar, heatmap, radar, gauge
 
   sum_char_count:
-    title: "Total Char Count in Table"
+    title: "Total Char Count"
     tech_stacks: ["Rust"]
     func:
       type: "sum"
       metric_key: "char_count"
-      category: "size"
-    include_children: false
+    chart_type: "gauge"
+
+  # === New Aggregation Types (avg, min, max, distribution) ===
+
+  avg_file_size:
+    title: "Average File Size"
+    func:
+      type: "avg"
+      metric_key: "char_count"
+    group_by: ["tech_stack"]
+    chart_type: "bar_col"
+
+  file_size_distribution:
+    title: "File Size Distribution"
+    func:
+      type: "distribution"
+      metric_key: "char_count"
+      buckets: [1000, 3000, 5000, 10000, 50000]
+    chart_type: "bar_col"
+
+  # === New Chart Types Demo ===
+
+  complexity_radar:
+    title: "Complexity Overview (Radar)"
+    tech_stacks: ["Rust", "Python", "Web"]
+    func:
+      type: "top_n"
+      metric_key: "complexity"
+      limit: 6
+    chart_type: "radar"

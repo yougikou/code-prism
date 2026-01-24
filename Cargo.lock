@@ -496,6 +496,7 @@ dependencies = [
  "codeprism-database",
  "git2",
  "ignore",
+ "indexmap",
  "indicatif",
  "serde_json",
  "serde_yaml",

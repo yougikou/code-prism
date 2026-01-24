@@ -1,5 +1,5 @@
 use crate::aggregation::{AggregationResult, TopNAggregator, ViewFilters};
-use crate::config::{AppConfig, ViewKind};
+use crate::config::{AppConfig, ViewConfig, ViewKind};
 use axum::{
     extract::{Path, Query, State},
     response::{IntoResponse, Json},
@@ -24,11 +24,21 @@ struct ViewResponse {
     items: Vec<AggregationResult>,
 }
 
+/// Helper to find a view config by ID across all projects
+fn find_view_config<'a>(config: &'a AppConfig, view_id: &str) -> Option<&'a ViewConfig> {
+    for project in &config.projects {
+        if let Some(view) = project.views.iter().find(|v| v.id == view_id) {
+            return Some(view);
+        }
+    }
+    None
+}
+
 #[utoipa::path(
     get,
-    path = "/api/v1/projects/{project_id}/scans/{scan_id}/views/{view_id}",
+    path = "/api/v1/projects/{project_name}/scans/{scan_id}/views/{view_id}",
     params(
-        ("project_id" = i64, Path, description = "Project ID"),
+        ("project_name" = String, Path, description = "Project Name"),
         ("scan_id" = i64, Path, description = "Scan ID"),
         ("view_id" = String, Path, description = "View ID"),
         ViewFilters
@@ -41,11 +51,19 @@ struct ViewResponse {
 )]
 pub async fn get_view(
     State(state): State<AppState>,
-    Path((_project_id, scan_id, view_id)): Path<(i64, i64, String)>,
+    Path((project_name, scan_id, view_id)): Path<(String, i64, String)>,
     Query(filters): Query<ViewFilters>,
 ) -> impl IntoResponse {
-    // 1. Find the view config
-    let view_config = state.config.views.iter().find(|v| v.id == view_id);
+    // 1. Find the project and its view config
+    let view_config = state
+        .config
+        .projects
+        .iter()
+        .find(|p| p.name == project_name)
+        .and_then(|p| p.views.iter().find(|v| v.id == view_id));
+
+    // Fallback: If not found in current project, search all (backward compatibility/graceful)
+    let view_config = view_config.or_else(|| find_view_config(&state.config, &view_id));
 
     if let Some(config) = view_config {
         // 2. Execute Aggregation
@@ -92,6 +110,105 @@ pub async fn get_view(
                     }
                 }
             }
+            ViewKind::Avg { .. } => {
+                match crate::aggregation::StatAggregator::execute(
+                    &state.db.pool(),
+                    scan_id,
+                    config,
+                    &filters,
+                    crate::aggregation::StatType::Avg,
+                )
+                .await
+                {
+                    Ok(items) => Json(ViewResponse {
+                        view_id: view_id.clone(),
+                        items,
+                    })
+                    .into_response(),
+                    Err(e) => {
+                        eprintln!("Aggregation Error: {}", e);
+                        (
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            "Internal Server Error",
+                        )
+                            .into_response()
+                    }
+                }
+            }
+            ViewKind::Min { .. } => {
+                match crate::aggregation::StatAggregator::execute(
+                    &state.db.pool(),
+                    scan_id,
+                    config,
+                    &filters,
+                    crate::aggregation::StatType::Min,
+                )
+                .await
+                {
+                    Ok(items) => Json(ViewResponse {
+                        view_id: view_id.clone(),
+                        items,
+                    })
+                    .into_response(),
+                    Err(e) => {
+                        eprintln!("Aggregation Error: {}", e);
+                        (
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            "Internal Server Error",
+                        )
+                            .into_response()
+                    }
+                }
+            }
+            ViewKind::Max { .. } => {
+                match crate::aggregation::StatAggregator::execute(
+                    &state.db.pool(),
+                    scan_id,
+                    config,
+                    &filters,
+                    crate::aggregation::StatType::Max,
+                )
+                .await
+                {
+                    Ok(items) => Json(ViewResponse {
+                        view_id: view_id.clone(),
+                        items,
+                    })
+                    .into_response(),
+                    Err(e) => {
+                        eprintln!("Aggregation Error: {}", e);
+                        (
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            "Internal Server Error",
+                        )
+                            .into_response()
+                    }
+                }
+            }
+            ViewKind::Distribution { .. } => {
+                match crate::aggregation::DistributionAggregator::execute(
+                    &state.db.pool(),
+                    scan_id,
+                    config,
+                    &filters,
+                )
+                .await
+                {
+                    Ok(items) => Json(ViewResponse {
+                        view_id: view_id.clone(),
+                        items,
+                    })
+                    .into_response(),
+                    Err(e) => {
+                        eprintln!("Aggregation Error: {}", e);
+                        (
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            "Internal Server Error",
+                        )
+                            .into_response()
+                    }
+                }
+            }
         }
     } else {
         (axum::http::StatusCode::NOT_FOUND, "View not found").into_response()
@@ -112,22 +229,48 @@ pub struct ScanResponse {
 
 #[utoipa::path(
     get,
-    path = "/api/v1/projects/{project_id}/scans",
+    path = "/api/v1/projects/{project_name}/scans",
     params(
-        ("project_id" = i64, Path, description = "Project ID"),
+        ("project_name" = String, Path, description = "Project Name"),
         ScanFilters
     ),
     responses(
         (status = 200, description = "List of scans", body = inline(Vec<ScanResponse>)),
+        (status = 404, description = "Project not found"),
         (status = 500, description = "Internal server error")
     )
 )]
 pub async fn get_scans(
     State(state): State<AppState>,
-    Path(project_id): Path<i64>,
+    Path(project_name): Path<String>,
     Query(filters): Query<ScanFilters>,
 ) -> impl IntoResponse {
     let mode = filters.mode.unwrap_or_else(|| "SNAPSHOT".to_string());
+
+    // First, lookup project by name to get its ID
+    let project_query = "SELECT id FROM projects WHERE name = ?";
+    let project_id: Option<i64> = match sqlx::query_scalar(project_query)
+        .bind(&project_name)
+        .fetch_optional(state.db.pool())
+        .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("Database Error looking up project: {}", e);
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Database Error",
+            )
+                .into_response();
+        }
+    };
+
+    let project_id = match project_id {
+        Some(id) => id,
+        None => {
+            return (axum::http::StatusCode::NOT_FOUND, "Project not found").into_response();
+        }
+    };
 
     // Query scans from database
     let query = "SELECT id, commit_hash, scan_time FROM scans WHERE project_id = ? AND scan_mode = ? ORDER BY scan_time DESC";

@@ -1,12 +1,40 @@
-use anyhow::Result;
 use serde::Deserialize;
-use std::fs;
-use std::path::Path;
 
+/// Project-specific configuration for the UI
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
-pub struct AppConfig {
+pub struct ProjectAppConfig {
+    pub name: String,
     pub views: Vec<ViewConfig>,
     pub tech_stacks: Vec<String>,
+}
+
+/// Root application config
+#[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
+pub struct AppConfig {
+    /// List of project configurations
+    pub projects: Vec<ProjectAppConfig>,
+}
+
+impl AppConfig {
+    /// Get all project names
+    pub fn get_project_names(&self) -> Vec<String> {
+        self.projects.iter().map(|p| p.name.clone()).collect()
+    }
+
+    /// Get project config by name
+    pub fn get_project(&self, name: &str) -> Option<&ProjectAppConfig> {
+        self.projects.iter().find(|p| p.name == name)
+    }
+
+    /// Get the first/default project (for single-project mode)
+    pub fn get_default_project(&self) -> Option<&ProjectAppConfig> {
+        self.projects.first()
+    }
+
+    /// Check if there are multiple projects
+    pub fn is_multi_project(&self) -> bool {
+        self.projects.len() > 1
+    }
 }
 
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
@@ -21,6 +49,9 @@ pub struct ViewConfig {
     pub group_by: Vec<String>,
     #[serde(default)]
     pub chart_type: Option<String>,
+    /// Display mode for change types: "all" (stacked) or "switchable" (A/M/D toggle)
+    #[serde(default)]
+    pub change_type_mode: Option<String>,
     #[serde(flatten)]
     pub kind: ViewKind,
 }
@@ -39,10 +70,22 @@ pub enum ViewKind {
     },
     #[serde(rename = "sum")]
     Sum { source: SourceConfig },
+    #[serde(rename = "avg")]
+    Avg { source: SourceConfig },
+    #[serde(rename = "min")]
+    Min { source: SourceConfig },
+    #[serde(rename = "max")]
+    Max { source: SourceConfig },
+    #[serde(rename = "distribution")]
+    Distribution {
+        source: SourceConfig,
+        params: DistributionParams,
+    },
 }
 
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
 pub struct SourceConfig {
+    #[serde(default)]
     pub analyzer_id: String,
     pub metric_key: String,
 }
@@ -52,12 +95,10 @@ pub struct TopNParams {
     pub limit: u32,
 }
 
-impl AppConfig {
-    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let content = fs::read_to_string(path)?;
-        let config = serde_yaml::from_str(&content)?;
-        Ok(config)
-    }
+#[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
+pub struct DistributionParams {
+    /// Bucket boundaries, e.g., [0, 10, 50, 100, 500] creates 5 buckets
+    pub buckets: Vec<f64>,
 }
 
 #[cfg(test)]
@@ -67,17 +108,25 @@ mod tests {
     #[test]
     fn test_load_config() {
         let yaml = r#"
-views:
-  - id: "top_file_size"
+projects:
+  - name: "test_project"
+    views:
+      - id: "top_file_size"
+        title: "Top File Size"
+        tech_stacks: ["Gosu"]
+        category: "maintainability"
+        type: "top_n"
+        source: { analyzer_id: "char_count", metric_key: "length" }
+        params: { limit: 10 }
     tech_stacks: ["Gosu"]
-    category: "maintainability"
-    type: "top_n"
-    source: { analyzer_id: "char_count", metric_key: "length" }
-    params: { limit: 10 }
 "#;
         let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.views.len(), 1);
-        let view = &config.views[0];
+        assert_eq!(config.projects.len(), 1);
+        let project = &config.projects[0];
+        assert_eq!(project.name, "test_project");
+        assert_eq!(project.views.len(), 1);
+
+        let view = &project.views[0];
         assert_eq!(view.id, "top_file_size");
         assert_eq!(view.tech_stacks, vec!["Gosu"]);
         assert_eq!(view.category, Some("maintainability".to_string()));
@@ -88,7 +137,7 @@ views:
                 assert_eq!(source.metric_key, "length");
                 assert_eq!(params.limit, 10);
             }
-            ViewKind::Sum { .. } => panic!("Unexpected Sum view"),
+            _ => panic!("Expected TopN view"),
         }
     }
 }

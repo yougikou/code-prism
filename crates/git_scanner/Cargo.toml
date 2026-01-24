@@ -16,6 +16,7 @@ sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio", "macros"] }
 tokio = { version = "1.49.0", features = ["full"] }
 
 [dev-dependencies]
+indexmap = { version = "2.9.0", features = ["serde"] }
 serde_json = "1.0.149"
 tempfile = "3.24.0"
 tokio = { version = "1.49.0", features = ["full"] }

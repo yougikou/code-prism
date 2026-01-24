@@ -1,15 +1,23 @@
 import React from 'react';
-import { Box, Layers, GitGraph } from 'lucide-react';
+import { Box, Layers, GitGraph, ChevronDown } from 'lucide-react';
 
 interface HeaderProps {
   viewMode: 'snapshot' | 'diff';
   onViewModeChange: (mode: 'snapshot' | 'diff') => void;
+  projects?: string[];
+  selectedProject?: string;
+  onProjectChange?: (project: string) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   viewMode,
   onViewModeChange,
+  projects = [],
+  selectedProject = '',
+  onProjectChange,
 }) => {
+  const isMultiProject = projects.length > 1;
+
   return (
     <header className="h-[70px] bg-slate-900/95 border-b border-slate-700 flex items-center justify-between px-8 shrink-0 z-10 sticky top-0 backdrop-blur-md">
       <div className="flex items-center gap-8">
@@ -20,9 +28,30 @@ export const Header: React.FC<HeaderProps> = ({
 
         <div className="flex items-center gap-3">
           <span className="text-slate-400 text-sm font-medium uppercase tracking-wide">Project:</span>
-          <div className="bg-slate-800 text-slate-100 border border-slate-700 px-4 py-2 rounded-lg opacity-80 cursor-not-allowed">
-            code-prism
-          </div>
+          {isMultiProject ? (
+            <div className="relative group">
+              <button className="bg-slate-800 text-slate-100 border border-slate-700 px-4 py-2 rounded-lg hover:bg-slate-700 transition-colors flex items-center gap-2">
+                {selectedProject || projects[0]}
+                <ChevronDown className="w-4 h-4 text-slate-400" />
+              </button>
+              <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-700 rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 min-w-[150px]">
+                {projects.map(project => (
+                  <button
+                    key={project}
+                    onClick={() => onProjectChange?.(project)}
+                    className={`w-full text-left px-4 py-2 hover:bg-slate-700 transition-colors first:rounded-t-lg last:rounded-b-lg ${project === selectedProject ? 'text-sky-400 bg-slate-700/50' : 'text-slate-100'
+                      }`}
+                  >
+                    {project}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="bg-slate-800 text-slate-100 border border-slate-700 px-4 py-2 rounded-lg opacity-80 cursor-not-allowed">
+              {selectedProject || projects[0] || 'default'}
+            </div>
+          )}
         </div>
       </div>
 

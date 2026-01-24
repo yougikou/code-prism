@@ -5,14 +5,14 @@ pub mod routes;
 
 use anyhow::Result;
 use axum::{Router, routing::get};
-use codeprism_core::{AggregationFunc, CodePrismConfig};
+use codeprism_core::{AggregationFunc, CodePrismConfig, ProjectConfig};
 use codeprism_database::Db;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::config::{AppConfig, SourceConfig, TopNParams, ViewConfig, ViewKind};
+use crate::config::{AppConfig, ProjectAppConfig, SourceConfig, TopNParams, ViewConfig, ViewKind};
 use crate::routes::{AppState, get_view, static_handler};
 
 #[derive(OpenApi)]
@@ -25,6 +25,7 @@ use crate::routes::{AppState, get_view, static_handler};
     components(schemas(
         crate::aggregation::AggregationResult,
         crate::config::AppConfig,
+        crate::config::ProjectAppConfig,
         crate::config::ViewConfig,
         crate::config::ViewKind,
         crate::config::SourceConfig,
@@ -33,15 +34,11 @@ use crate::routes::{AppState, get_view, static_handler};
 )]
 struct ApiDoc;
 
-pub async fn run_server(db: Db, core_config: CodePrismConfig, port: u16) -> Result<()> {
-    // 1. Convert CodePrismConfig (Core) to AppConfig (Server)
-    // The server modules (routes, aggregation) use AppConfig/ViewConfig.
-    // The previous implementation of top_n used a different yaml struct.
-
+/// Convert a ProjectConfig to a list of ViewConfigs
+fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> {
     let mut views = Vec::new();
 
-    for (key, view_def) in &core_config.aggregation_views {
-        // Map AggregationFunc to ViewKind
+    for (key, view_def) in &project.aggregation_views {
         match &view_def.func {
             AggregationFunc::TopN {
                 analyzer_id,
@@ -54,26 +51,18 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, port: u16) -> Resu
                     analyzer_id: analyzer_id.clone().unwrap_or_default(),
                     metric_key: metric_key.clone(),
                 };
-
                 let params = TopNParams {
                     limit: *limit as u32,
                 };
-
-                // Map tech_stacks and category directly
-                let tech_stacks = view_def.tech_stacks.clone();
-                let category = category.clone(); // Option<String>
-                let include_children = view_def.include_children;
-                let group_by = view_def.group_by.clone();
-                let chart_type = view_def.chart_type.clone();
-
                 views.push(ViewConfig {
                     id: key.clone(),
                     title: view_def.title.clone(),
-                    tech_stacks,
-                    category,
-                    include_children,
-                    group_by,
-                    chart_type,
+                    tech_stacks: view_def.tech_stacks.clone(),
+                    category: category.clone(),
+                    include_children: view_def.include_children,
+                    group_by: view_def.group_by.clone(),
+                    chart_type: view_def.chart_type.clone(),
+                    change_type_mode: view_def.change_type_mode.clone(),
                     kind: ViewKind::TopN { source, params },
                 });
             }
@@ -86,51 +75,154 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, port: u16) -> Resu
                     analyzer_id: analyzer_id.clone().unwrap_or_default(),
                     metric_key: metric_key.clone(),
                 };
-
-                let tech_stacks = view_def.tech_stacks.clone();
-                let category = category.clone();
-                let include_children = view_def.include_children;
-                let group_by = view_def.group_by.clone();
-                let chart_type = view_def.chart_type.clone();
-
                 views.push(ViewConfig {
                     id: key.clone(),
                     title: view_def.title.clone(),
-                    tech_stacks,
-                    category,
-                    include_children,
-                    group_by,
-                    chart_type,
+                    tech_stacks: view_def.tech_stacks.clone(),
+                    category: category.clone(),
+                    include_children: view_def.include_children,
+                    group_by: view_def.group_by.clone(),
+                    chart_type: view_def.chart_type.clone(),
+                    change_type_mode: view_def.change_type_mode.clone(),
                     kind: ViewKind::Sum { source },
+                });
+            }
+            AggregationFunc::Avg {
+                analyzer_id,
+                metric_key,
+                category,
+            } => {
+                let source = SourceConfig {
+                    analyzer_id: analyzer_id.clone().unwrap_or_default(),
+                    metric_key: metric_key.clone(),
+                };
+                views.push(ViewConfig {
+                    id: key.clone(),
+                    title: view_def.title.clone(),
+                    tech_stacks: view_def.tech_stacks.clone(),
+                    category: category.clone(),
+                    include_children: view_def.include_children,
+                    group_by: view_def.group_by.clone(),
+                    chart_type: view_def.chart_type.clone(),
+                    change_type_mode: view_def.change_type_mode.clone(),
+                    kind: ViewKind::Avg { source },
+                });
+            }
+            AggregationFunc::Min {
+                analyzer_id,
+                metric_key,
+                category,
+            } => {
+                let source = SourceConfig {
+                    analyzer_id: analyzer_id.clone().unwrap_or_default(),
+                    metric_key: metric_key.clone(),
+                };
+                views.push(ViewConfig {
+                    id: key.clone(),
+                    title: view_def.title.clone(),
+                    tech_stacks: view_def.tech_stacks.clone(),
+                    category: category.clone(),
+                    include_children: view_def.include_children,
+                    group_by: view_def.group_by.clone(),
+                    chart_type: view_def.chart_type.clone(),
+                    change_type_mode: view_def.change_type_mode.clone(),
+                    kind: ViewKind::Min { source },
+                });
+            }
+            AggregationFunc::Max {
+                analyzer_id,
+                metric_key,
+                category,
+            } => {
+                let source = SourceConfig {
+                    analyzer_id: analyzer_id.clone().unwrap_or_default(),
+                    metric_key: metric_key.clone(),
+                };
+                views.push(ViewConfig {
+                    id: key.clone(),
+                    title: view_def.title.clone(),
+                    tech_stacks: view_def.tech_stacks.clone(),
+                    category: category.clone(),
+                    include_children: view_def.include_children,
+                    group_by: view_def.group_by.clone(),
+                    chart_type: view_def.chart_type.clone(),
+                    change_type_mode: view_def.change_type_mode.clone(),
+                    kind: ViewKind::Max { source },
+                });
+            }
+            AggregationFunc::Distribution {
+                analyzer_id,
+                metric_key,
+                category,
+                buckets,
+            } => {
+                let source = SourceConfig {
+                    analyzer_id: analyzer_id.clone().unwrap_or_default(),
+                    metric_key: metric_key.clone(),
+                };
+                let params = crate::config::DistributionParams {
+                    buckets: buckets.clone(),
+                };
+                views.push(ViewConfig {
+                    id: key.clone(),
+                    title: view_def.title.clone(),
+                    tech_stacks: view_def.tech_stacks.clone(),
+                    category: category.clone(),
+                    include_children: view_def.include_children,
+                    group_by: view_def.group_by.clone(),
+                    chart_type: view_def.chart_type.clone(),
+                    change_type_mode: view_def.change_type_mode.clone(),
+                    kind: ViewKind::Distribution { source, params },
                 });
             }
         }
     }
 
-    let mut tech_stacks: Vec<String> = core_config
-        .tech_stacks
-        .iter()
-        .map(|ts| ts.name.clone())
-        .collect();
-    tech_stacks.sort();
+    views
+}
 
-    let app_config = AppConfig { views, tech_stacks };
+pub async fn run_server(db: Db, core_config: CodePrismConfig, port: u16) -> Result<()> {
+    // Convert CodePrismConfig (Core) to AppConfig (Server) with multi-project support
+    let projects_config = core_config.get_projects();
 
-    // 2. Initialize AppState
+    let mut project_app_configs: Vec<ProjectAppConfig> = Vec::new();
+
+    for project in &projects_config {
+        let views = convert_project_views(project);
+
+        let mut tech_stacks: Vec<String> = project
+            .tech_stacks
+            .iter()
+            .map(|ts| ts.name.clone())
+            .collect();
+        tech_stacks.sort();
+
+        project_app_configs.push(ProjectAppConfig {
+            name: project.name.clone(),
+            views,
+            tech_stacks,
+        });
+    }
+
+    let app_config = AppConfig {
+        projects: project_app_configs,
+    };
+
+    // Initialize AppState
     let state = AppState {
         config: Arc::new(app_config),
         db,
     };
 
-    // 3. Setup Router
+    // Setup Router
     let router = Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .route(
-            "/api/v1/projects/:project_id/scans/:scan_id/views/:view_id",
+            "/api/v1/projects/:project_name/scans/:scan_id/views/:view_id",
             get(get_view),
         )
         .route(
-            "/api/v1/projects/:project_id/scans",
+            "/api/v1/projects/:project_name/scans",
             get(crate::routes::get_scans),
         )
         .route("/api/v1/config", get(crate::routes::get_config))
