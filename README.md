@@ -82,12 +82,7 @@ npm run build
 # Assets will be generated in web/dist
 ```
 
-### Docker
 
-```bash
-docker pull ghcr.io/yougikou/code-prism:latest
-docker run -v $(pwd):/workspace ghcr.io/yougikou/code-prism scan .
-```
 
 ## 🚀 Quick Start
 

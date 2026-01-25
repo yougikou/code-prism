@@ -82,12 +82,7 @@ npm run build
 # 资源文件将生成在 web/dist 目录
 ```
 
-### Docker
 
-```bash
-docker pull ghcr.io/yougikou/code-prism:latest
-docker run -v $(pwd):/workspace ghcr.io/yougikou/code-prism scan .
-```
 
 ## 🚀 快速开始
 

@@ -82,12 +82,7 @@ npm run build
 # アセットは web/dist に生成されます
 ```
 
-### Docker
 
-```bash
-docker pull ghcr.io/yougikou/code-prism:latest
-docker run -v $(pwd):/workspace ghcr.io/yougikou/code-prism scan .
-```
 
 ## 🚀 クイックスタート
 
