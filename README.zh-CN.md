@@ -69,6 +69,19 @@ cargo build --release
 # 可执行文件位于 target/release/codeprism
 ```
 
+### 构建前端 Web
+
+构建过程（`crates/server/build.rs`）将在 `npm` 可用时自动尝试构建前端资源。
+
+如果您想手动构建前端，或者自动构建失败：
+
+```bash
+cd web
+npm install
+npm run build
+# 资源文件将生成在 web/dist 目录
+```
+
 ### Docker
 
 ```bash

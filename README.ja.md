@@ -69,6 +69,19 @@ cargo build --release
 # バイナリは target/release/codeprism にあります
 ```
 
+### フロントエンド Web のビルド
+
+ビルドプロセス（`crates/server/build.rs`）は、`npm` が利用可能な場合、フロントエンドアセットを自動的にビルドしようとします。
+
+手動でフロントエンドをビルドする場合、または自動ビルドが失敗する場合：
+
+```bash
+cd web
+npm install
+npm run build
+# アセットは web/dist に生成されます
+```
+
 ### Docker
 
 ```bash

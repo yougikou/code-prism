@@ -69,6 +69,19 @@ cargo build --release
 # Binary will be at target/release/codeprism
 ```
 
+### Build Frontend Web
+
+The build process (specifically `crates/server/build.rs`) will automatically attempt to build the frontend assets using `npm` if available.
+
+If you want to manually build the frontend or if the automatic build fails:
+
+```bash
+cd web
+npm install
+npm run build
+# Assets will be generated in web/dist
+```
+
 ### Docker
 
 ```bash
