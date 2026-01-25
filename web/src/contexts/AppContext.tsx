@@ -17,6 +17,8 @@ interface AppContextType extends AppState {
   setSelectedRunId: (runId: string | null) => void;
   setSelectedTechStack: (stack: TechStack) => void;
   setAvailableTechStacks: (stacks: TechStack[]) => void;
+  theme: 'light' | 'dark';
+  toggleTheme: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -27,6 +29,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [selectedRunId, setSelectedRunId] = useState<string | null>('1'); // Default to first run
   const [selectedTechStack, setSelectedTechStack] = useState<TechStack>('Summary');
   const [availableTechStacks, setAvailableTechStacks] = useState<TechStack[]>([]);
+
+  /* Theme Support */
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('theme') as 'light' | 'dark') || 'dark';
+    }
+    return 'dark';
+  });
+
+  React.useEffect(() => {
+    const root = window.document.documentElement;
+    root.classList.remove('light', 'dark');
+    root.classList.add(theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
+  };
 
   return (
     <AppContext.Provider
@@ -41,6 +62,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setSelectedTechStack,
         availableTechStacks,
         setAvailableTechStacks,
+        theme,
+        toggleTheme
       }}
     >
       {children}

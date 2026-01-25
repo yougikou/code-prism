@@ -18,7 +18,8 @@ const Dashboard = () => {
     viewMode, setViewMode,
     selectedTechStack, setSelectedTechStack,
     selectedRunId, setSelectedRunId,
-    availableTechStacks, setAvailableTechStacks
+    availableTechStacks, setAvailableTechStacks,
+    theme
   } = useApp();
 
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
@@ -31,6 +32,10 @@ const Dashboard = () => {
   const [runs, setRuns] = useState<any[]>([]);
   // Track change_type filter per view (for switchable mode)
   const [changeTypeFilters, setChangeTypeFilters] = useState<Record<string, string>>({});
+
+  // Sidebar State
+  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   // Fetch Config
   useEffect(() => {
@@ -94,8 +99,13 @@ const Dashboard = () => {
   useEffect(() => {
     if (!currentProject) return;
 
+    let isActive = true;
+
     const loadRuns = async () => {
       const data = await import('@/services/data').then(m => m.fetchRuns(currentProject, viewMode === 'snapshot' ? 'SNAPSHOT' : 'DIFF'));
+
+      if (!isActive) return;
+
       setRuns(data.map(r => ({
         id: r.id,
         hash: r.commit_hash.substring(0, 7),
@@ -110,11 +120,17 @@ const Dashboard = () => {
       }
     };
     loadRuns();
+
+    return () => {
+      isActive = false;
+    };
   }, [viewMode, currentProject]);
 
   // Fetch View Data - Initial load and global changes (run, tech stack, active views)
   useEffect(() => {
     if (!selectedRunId || activeViews.length === 0) return;
+
+    let isActive = true;
 
     const load = async () => {
       setLoading(true);
@@ -133,7 +149,6 @@ const Dashboard = () => {
           }
 
           // For "switchable" mode: pass the selected change_type filter
-          // Use 'A', 'M', 'D' directly as these are the values stored in the database
           if (view.change_type_mode === 'switchable') {
             const currentFilter = changeTypeFilters[view.id] || 'A';
             options.changeType = currentFilter;
@@ -141,7 +156,10 @@ const Dashboard = () => {
 
           return fetchView(currentProject, selectedRunId, view.id, options);
         });
+
         const results = await Promise.all(promises);
+
+        if (!isActive) return;
 
         const newMap: Record<string, AggregationResult[]> = {};
         results.forEach((res, index) => {
@@ -151,12 +169,17 @@ const Dashboard = () => {
       } catch (e) {
         console.error(e);
       } finally {
-        setLoading(false);
+        if (isActive) {
+          setLoading(false);
+        }
       }
     };
     load();
+
+    return () => {
+      isActive = false;
+    };
     // Note: changeTypeFilters is intentionally excluded from dependencies
-    // Individual filter changes are handled by the effect below
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProject, selectedRunId, activeViews, selectedTechStack]);
 
@@ -173,12 +196,12 @@ const Dashboard = () => {
 
     if (!changedViewId) return;
 
-    // Update last filters to track changes
     setLastChangeTypeFilters(changeTypeFilters);
 
-    // Find the view config
     const view = activeViews.find(v => v.id === changedViewId);
     if (!view || view.change_type_mode !== 'switchable') return;
+
+    let isActive = true;
 
     // Fetch only the changed view
     const fetchSingleView = async () => {
@@ -190,6 +213,8 @@ const Dashboard = () => {
 
         const result = await fetchView(currentProject, selectedRunId, changedViewId, options);
 
+        if (!isActive) return;
+
         setViewDataMap(prev => ({
           ...prev,
           [changedViewId]: result.items
@@ -199,17 +224,25 @@ const Dashboard = () => {
       }
     };
     fetchSingleView();
+
+    return () => {
+      isActive = false;
+    };
   }, [changeTypeFilters, selectedRunId, activeViews, selectedTechStack, lastChangeTypeFilters]);
 
   // --- Chart Option Generators ---
+
+  const textColor = theme === 'dark' ? '#94a3b8' : '#64748b';
+  const splitLineColor = theme === 'dark' ? '#334155' : '#e2e8f0';
+  const labelColor = theme === 'dark' ? '#f8fafc' : '#1e293b';
 
   // 1. Horizontal Bar (Row)
   const getBarRowOption = (_title: string, data: AggregationResult[], color: string) => ({
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
     xAxis: {
       type: 'value',
-      splitLine: { show: true, lineStyle: { color: '#334155' } },
-      axisLabel: { color: '#94a3b8' }
+      splitLine: { show: true, lineStyle: { color: splitLineColor } },
+      axisLabel: { color: textColor }
     },
     yAxis: {
       type: 'category',
@@ -218,7 +251,7 @@ const Dashboard = () => {
         width: 120,
         overflow: 'truncate',
         interval: 0,
-        color: '#94a3b8'
+        color: textColor
       },
       inverse: true
     },
@@ -226,7 +259,7 @@ const Dashboard = () => {
       data: data.map(d => Math.round(d.value)),
       type: 'bar',
       itemStyle: { color: color, borderRadius: [0, 4, 4, 0] },
-      label: { show: true, position: 'right', color: '#f8fafc', formatter: (params: { value: number }) => Math.round(params.value).toLocaleString() }
+      label: { show: true, position: 'right', color: labelColor, formatter: (params: { value: number }) => Math.round(params.value).toLocaleString() }
     }],
     grid: { left: 10, right: 40, top: 10, bottom: 20, containLabel: true }
   });
@@ -238,21 +271,21 @@ const Dashboard = () => {
       type: 'category',
       data: data.map(d => d.label.split('/').pop()),
       axisLabel: {
-        color: '#94a3b8',
+        color: textColor,
         rotate: 30, // Rotate labels if many
         interval: 0
       }
     },
     yAxis: {
       type: 'value',
-      splitLine: { show: true, lineStyle: { color: '#334155' } },
-      axisLabel: { color: '#94a3b8' }
+      splitLine: { show: true, lineStyle: { color: splitLineColor } },
+      axisLabel: { color: textColor }
     },
     series: [{
       data: data.map(d => Math.round(d.value)),
       type: 'bar',
       itemStyle: { color: color, borderRadius: [4, 4, 0, 0] },
-      label: { show: true, position: 'top', color: '#f8fafc', formatter: (params: { value: number }) => Math.round(params.value).toLocaleString() }
+      label: { show: true, position: 'top', color: labelColor, formatter: (params: { value: number }) => Math.round(params.value).toLocaleString() }
     }],
     grid: { left: 10, right: 10, top: 30, bottom: 10, containLabel: true }
   });
@@ -272,7 +305,7 @@ const Dashboard = () => {
         orient: 'horizontal',
         bottom: 0,
         left: 'center',
-        textStyle: { color: '#94a3b8', fontSize: 11 },
+        textStyle: { color: textColor, fontSize: 11 },
         itemWidth: 12,
         itemHeight: 12,
         itemGap: 8,
@@ -287,7 +320,7 @@ const Dashboard = () => {
           avoidLabelOverlap: true,
           itemStyle: {
             borderRadius: 6,
-            borderColor: '#1e293b',
+            borderColor: theme === 'dark' ? '#1e293b' : '#fff',
             borderWidth: 2
           },
           label: {
@@ -328,12 +361,12 @@ const Dashboard = () => {
     xAxis: {
       type: 'category',
       data: data.map(d => d.label),
-      axisLabel: { color: '#94a3b8' }
+      axisLabel: { color: textColor }
     },
     yAxis: {
       type: 'value',
-      splitLine: { show: true, lineStyle: { color: '#334155' } },
-      axisLabel: { color: '#94a3b8' }
+      splitLine: { show: true, lineStyle: { color: splitLineColor } },
+      axisLabel: { color: textColor }
     },
     series: [{
       data: data.map(d => Math.round(d.value)),
@@ -343,7 +376,7 @@ const Dashboard = () => {
       symbolSize: 8,
       itemStyle: { color: color },
       lineStyle: { width: 3 },
-      label: { show: true, position: 'top', color: '#f8fafc', formatter: (params: { value: number }) => Math.round(params.value).toLocaleString() }
+      label: { show: true, position: 'top', color: labelColor, formatter: (params: { value: number }) => Math.round(params.value).toLocaleString() }
     }],
     grid: { left: 10, right: 20, top: 30, bottom: 20, containLabel: true }
   });
@@ -359,18 +392,18 @@ const Dashboard = () => {
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
       legend: {
         data: categories,
-        textStyle: { color: '#94a3b8' },
+        textStyle: { color: textColor },
         top: 0
       },
       xAxis: {
         type: 'category',
         data: labels,
-        axisLabel: { color: '#94a3b8', rotate: 30 }
+        axisLabel: { color: textColor, rotate: 30 }
       },
       yAxis: {
         type: 'value',
-        splitLine: { show: true, lineStyle: { color: '#334155' } },
-        axisLabel: { color: '#94a3b8' }
+        splitLine: { show: true, lineStyle: { color: splitLineColor } },
+        axisLabel: { color: textColor }
       },
       series: categories.map((cat, i) => ({
         name: cat,
@@ -410,13 +443,13 @@ const Dashboard = () => {
       xAxis: {
         type: 'category',
         data: xLabels,
-        axisLabel: { color: '#94a3b8' },
+        axisLabel: { color: textColor },
         splitArea: { show: true }
       },
       yAxis: {
         type: 'category',
         data: yLabels,
-        axisLabel: { color: '#94a3b8' },
+        axisLabel: { color: textColor },
         splitArea: { show: true }
       },
       visualMap: {
@@ -429,12 +462,12 @@ const Dashboard = () => {
         inRange: {
           color: ['#1e3a5f', '#38bdf8', '#22c55e', '#f59e0b', '#ef4444']
         },
-        textStyle: { color: '#94a3b8' }
+        textStyle: { color: textColor }
       },
       series: [{
         type: 'heatmap',
         data: heatmapData,
-        label: { show: true, color: '#f8fafc' },
+        label: { show: true, color: '#f8fafc' }, // Keep logic contrast label usually needed on heatmap
         emphasis: {
           itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0, 0, 0, 0.5)' }
         }
@@ -453,16 +486,16 @@ const Dashboard = () => {
       legend: {
         data: [title],
         bottom: 0,
-        textStyle: { color: '#94a3b8' }
+        textStyle: { color: textColor }
       },
       radar: {
         indicator: indicators,
         shape: 'polygon',
         splitNumber: 5,
-        axisName: { color: '#94a3b8' },
-        splitLine: { lineStyle: { color: '#334155' } },
-        splitArea: { areaStyle: { color: ['rgba(56, 189, 248, 0.05)', 'rgba(56, 189, 248, 0.1)'] } },
-        axisLine: { lineStyle: { color: '#475569' } }
+        axisName: { color: textColor },
+        splitLine: { lineStyle: { color: splitLineColor } },
+        splitArea: { areaStyle: { color: theme === 'dark' ? ['rgba(56, 189, 248, 0.05)', 'rgba(56, 189, 248, 0.1)'] : ['rgba(56, 189, 248, 0.05)', 'rgba(56, 189, 248, 0.1)'] } }, // Light tint is fine for both
+        axisLine: { lineStyle: { color: theme === 'dark' ? '#475569' : '#cbd5e1' } }
       },
       series: [{
         name: title,
@@ -508,17 +541,17 @@ const Dashboard = () => {
         },
         axisTick: { distance: -20, length: 8, lineStyle: { color: '#fff', width: 2 } },
         splitLine: { distance: -25, length: 20, lineStyle: { color: '#fff', width: 3 } },
-        axisLabel: { color: '#94a3b8', distance: 30, fontSize: 12 },
+        axisLabel: { color: textColor, distance: 30, fontSize: 12 },
         detail: {
           valueAnimation: true,
           formatter: '{value}',
-          color: '#f8fafc',
+          color: labelColor,
           fontSize: 24,
           offsetCenter: [0, '70%']
         },
         title: {
           offsetCenter: [0, '90%'],
-          color: '#94a3b8',
+          color: textColor,
           fontSize: 14
         },
         data: [{ value: Math.round(value), name: title }]
@@ -528,7 +561,7 @@ const Dashboard = () => {
 
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-slate-900 text-slate-100">
+    <div className="flex flex-col h-screen overflow-hidden bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 transition-colors">
       <Header
         viewMode={viewMode}
         onViewModeChange={setViewMode}
@@ -542,11 +575,15 @@ const Dashboard = () => {
           runs={runs}
           selectedRunId={selectedRunId}
           onRunSelect={setSelectedRunId}
+          width={sidebarWidth}
+          isCollapsed={isSidebarCollapsed}
+          onWidthChange={setSidebarWidth}
+          onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
         />
 
-        <main className="flex-1 overflow-y-auto relative">
+        <main className="flex-1 overflow-y-scroll relative scrollbar-stable">
           {/* Background gradient effect */}
-          <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-900 to-blue-950/20 pointer-events-none -z-10" />
+          <div className="absolute inset-0 bg-gradient-to-br from-white via-slate-50 to-blue-50/50 dark:from-slate-900 dark:via-slate-900 dark:to-blue-950/20 pointer-events-none -z-10" />
 
           <div className="container mx-auto p-8 space-y-8 min-h-full">
             <TechStackTabs
@@ -556,7 +593,7 @@ const Dashboard = () => {
             />
 
             {/* Dynamic Widgets Grid */}
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-2">
+            <div key={`${selectedTechStack}-${theme}`} className="grid gap-6 md:grid-cols-2 lg:grid-cols-2">
               {activeViews.map(view => {
                 let data = viewDataMap[view.id] || [];
                 const title = view.title || view.id.replace(/_/g, ' ').toUpperCase();
@@ -615,8 +652,8 @@ const Dashboard = () => {
                   // Simple Table
                   content = (
                     <div className="overflow-x-auto">
-                      <table className="w-full text-sm text-left text-slate-300">
-                        <thead className="text-xs text-slate-400 uppercase bg-slate-800/50">
+                      <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
+                        <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50">
                           <tr>
                             <th className="px-4 py-2">Label</th>
                             <th className="px-4 py-2 text-right">Value</th>
@@ -624,7 +661,7 @@ const Dashboard = () => {
                         </thead>
                         <tbody>
                           {data.map((d, i) => (
-                            <tr key={i} className="border-b border-slate-700/50 hover:bg-slate-700/20">
+                            <tr key={i} className="border-b border-slate-200 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/20">
                               <td className="px-4 py-2 font-medium">{d.label}</td>
                               <td className="px-4 py-2 text-right">{Math.round(d.value).toLocaleString()}</td>
                             </tr>
@@ -668,7 +705,7 @@ const Dashboard = () => {
                     default:
                       options = getBarRowOption(title, data, baseColor);
                   }
-                  content = <ChartRenderer options={options} />;
+                  content = <ChartRenderer options={options} theme={theme} />;
                 }
 
                 // Wrapper Card
@@ -676,9 +713,9 @@ const Dashboard = () => {
                 const currentFilter = changeTypeFilters[view.id] || 'A'; // Default to Add
 
                 return (
-                  <Card key={view.id} className="col-span-1 border-slate-700 bg-slate-800/50 backdrop-blur shadow-xl">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 border-b border-slate-700/50">
-                      <CardTitle className="text-xl font-semibold text-slate-200">
+                  <Card key={view.id} className="col-span-1 border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 backdrop-blur shadow-sm dark:shadow-xl transition-colors duration-200">
+                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 border-b border-slate-100 dark:border-slate-700/50">
+                      <CardTitle className="text-xl font-semibold text-slate-800 dark:text-slate-200">
                         {title}
                       </CardTitle>
                       <div className="flex items-center gap-2">
@@ -693,7 +730,7 @@ const Dashboard = () => {
                                   ? type === 'A' ? 'bg-green-500/80 text-white'
                                     : type === 'M' ? 'bg-blue-500/80 text-white'
                                       : 'bg-red-500/80 text-white'
-                                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+                                  : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
                                   }`}
                               >
                                 {type}
@@ -702,13 +739,13 @@ const Dashboard = () => {
                           </div>
                         )}
                         {view.id.includes('complexity') ?
-                          <Activity className="h-5 w-5 text-slate-500" /> :
-                          <FileText className="h-5 w-5 text-slate-500" />
+                          <Activity className="h-5 w-5 text-slate-400 dark:text-slate-500" /> :
+                          <FileText className="h-5 w-5 text-slate-400 dark:text-slate-500" />
                         }
                       </div>
                     </CardHeader>
                     <CardContent className="pt-6">
-                      {loading ? <div className="animate-pulse h-[300px] bg-slate-700/20 rounded"></div> : content}
+                      {loading ? <div className="animate-pulse h-[300px] bg-slate-100 dark:bg-slate-700/20 rounded"></div> : content}
                     </CardContent>
                   </Card>
                 );
