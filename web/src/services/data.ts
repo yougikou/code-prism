@@ -136,3 +136,253 @@ export async function fetchConfig(): Promise<AppConfig> {
     return { projects: [] };
   }
 }
+
+// ─── DB Projects (projects that have scan data in the database) ─────────────
+
+export interface ProjectInfo {
+  id: number;
+  name: string;
+  repo_path: string;
+  created_at: string;
+  scan_modes: string[];
+  total_scans: number;
+  last_scan_time: string | null;
+}
+
+export async function fetchProjects(): Promise<ProjectInfo[]> {
+  try {
+    const res = await fetch('/api/v1/projects');
+    if (!res.ok) throw new Error('Failed to fetch projects');
+    return await res.json();
+  } catch (error) {
+    console.error("Error fetching projects:", error);
+    return [];
+  }
+}
+
+// ─── Full Config Types (for config editor) ─────────────────────────────────
+
+export interface FullTechStack {
+  name: string;
+  extensions: string[];
+  analyzers: string[];
+  paths: string[];
+  excludes: string[];
+}
+
+export interface CustomAnalyzerDef {
+  pattern: string;
+  metric_key: string;
+  category?: string;
+}
+
+export interface ImplAnalyzerConfig {
+  metric_key?: string;
+  category?: string;
+}
+
+export interface AggregationFunc {
+  type: 'top_n' | 'sum' | 'avg' | 'min' | 'max' | 'distribution';
+  analyzer_id?: string;
+  metric_key?: string;
+  category?: string;
+  limit?: number;
+  order?: string;
+  buckets?: number[];
+}
+
+export interface AggregationView {
+  title: string;
+  tech_stacks?: string[];
+  include_children?: boolean;
+  group_by?: string[];
+  chart_type?: string;
+  change_type_mode?: string;
+  func: AggregationFunc;
+}
+
+export interface FullProjectConfig {
+  name: string;
+  tech_stacks: FullTechStack[];
+  global_excludes: string[];
+  custom_regex_analyzers: Record<string, CustomAnalyzerDef>;
+  custom_impl_analyzers: Record<string, ImplAnalyzerConfig>;
+  external_analyzers: Record<string, string>;
+  aggregation_views: Record<string, AggregationView>;
+}
+
+export async function fetchFullProjectConfig(projectName: string): Promise<FullProjectConfig> {
+  const res = await fetch(`/api/v1/config/projects/${encodeURIComponent(projectName)}`);
+  if (!res.ok) throw new Error(`Failed to fetch project config: ${res.statusText}`);
+  return await res.json();
+}
+
+export async function updateProjectConfig(
+  projectName: string,
+  config: FullProjectConfig
+): Promise<{ status: string; message: string }> {
+  const res = await fetch(`/api/v1/config/projects/${encodeURIComponent(projectName)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to update config' }));
+    throw new Error(err.error || 'Failed to update config');
+  }
+  return await res.json();
+}
+
+/** Get project names that exist in the database (have scan data) */
+export function getDbProjectNames(projects: ProjectInfo[]): string[] {
+  return projects.map(p => p.name);
+}
+
+/** Merge config project names with DB project names, preserving order: config first, then DB-only */
+export function mergeProjectNames(configNames: string[], dbProjectInfos: ProjectInfo[]): string[] {
+  const configSet = new Set(configNames);
+  const dbNames = dbProjectInfos.map(p => p.name);
+  const dbOnly = dbNames.filter(n => !configSet.has(n));
+  return [...configNames, ...dbOnly];
+}
+
+// ─── Git Repo Management API ─────────────────────────────────────────────
+
+export interface BranchInfo {
+  name: string;
+  is_head: boolean;
+  is_remote: boolean;
+}
+
+export interface CloneResponse {
+  repo_id: string;
+  branches: BranchInfo[];
+  current_branch: string;
+}
+
+export interface CommitInfo {
+  hash: string;
+  short_hash: string;
+  message: string;
+  author: string;
+  timestamp: number;
+}
+
+export interface CommitsResponse {
+  commits: CommitInfo[];
+  has_more: boolean;
+}
+
+export async function cloneRepo(gitUrl: string): Promise<CloneResponse> {
+  const res = await fetch('/api/v1/git/clone', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ git_url: gitUrl }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Clone failed');
+  }
+  return res.json();
+}
+
+export async function listBranches(repoId: string): Promise<{ branches: BranchInfo[]; current_branch: string }> {
+  const res = await fetch(`/api/v1/git/${repoId}/branches`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to list branches');
+  }
+  return res.json();
+}
+
+export async function checkoutBranch(repoId: string, branch: string): Promise<{ branch: string; message: string }> {
+  const res = await fetch(`/api/v1/git/${repoId}/checkout`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ branch }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Checkout failed');
+  }
+  return res.json();
+}
+
+export async function listCommits(
+  repoId: string,
+  options?: { ref?: string; offset?: number; limit?: number; search?: string }
+): Promise<CommitsResponse> {
+  const params = new URLSearchParams();
+  if (options?.ref) params.set('ref', options.ref);
+  if (options?.offset !== undefined) params.set('offset', String(options.offset));
+  if (options?.limit !== undefined) params.set('limit', String(options.limit));
+  if (options?.search) params.set('search', options.search);
+
+  const qs = params.toString();
+  const res = await fetch(`/api/v1/git/${repoId}/commits${qs ? `?${qs}` : ''}`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to list commits');
+  }
+  return res.json();
+}
+
+export interface ScanWithRepoRequest {
+  repo_id: string;
+  ref_1: string;
+  ref_2?: string;
+  project_name?: string;
+  scan_mode: 'snapshot' | 'diff';
+}
+
+export async function executeScanWithRepo(req: ScanWithRepoRequest): Promise<{ scan_id: number; project_name: string; status: string; message: string }> {
+  const res = await fetch('/api/v1/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      git_url: '',
+      repo_id: req.repo_id,
+      ref_1: req.ref_1,
+      ref_2: req.ref_2 || null,
+      scan_mode: req.scan_mode,
+      project_name: req.project_name || 'scanned_project',
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.message || err.error || 'Scan failed');
+  }
+  return res.json();
+}
+
+// ─── Repo Listing & Management ──────────────────────────────────────────────
+
+export interface RepoInfo {
+  repo_id: string;
+  git_url: string;
+  current_branch: string;
+  path: string;
+}
+
+export interface ListReposResponse {
+  repos: RepoInfo[];
+}
+
+export async function listRepos(): Promise<RepoInfo[]> {
+  const res = await fetch('/api/v1/git/repos');
+  if (!res.ok) {
+    throw new Error('Failed to list repos');
+  }
+  const data: ListReposResponse = await res.json();
+  return data.repos;
+}
+
+export async function deleteRepo(repoId: string): Promise<void> {
+  const res = await fetch(`/api/v1/git/${repoId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to delete repo');
+  }
+}

@@ -1,26 +1,32 @@
 pub mod aggregation;
 pub mod assets;
 pub mod config;
+pub mod git_cache;
+pub mod git_routes;
 pub mod routes;
 
 use anyhow::Result;
-use axum::{Router, routing::get};
+use axum::{Router, routing::{get, post, delete}};
 use codeprism_core::{AggregationFunc, CodePrismConfig, ProjectConfig};
 use codeprism_database::Db;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use tower_http::cors::CorsLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::config::{AppConfig, ProjectAppConfig, SourceConfig, TopNParams, ViewConfig, ViewKind};
-use crate::routes::{AppState, get_view, static_handler};
+use crate::routes::{
+    AppState, get_view, get_scans, static_handler, execute_scan,
+};
+use crate::git_routes::{clone_repo, list_branches, checkout_branch, list_commits, list_repos, delete_repo};
 
 #[derive(OpenApi)]
 #[openapi(
     paths(
         crate::routes::get_view,
         crate::routes::get_scans,
-        crate::routes::get_config
+        crate::routes::get_config,
     ),
     components(schemas(
         crate::aggregation::AggregationResult,
@@ -35,7 +41,7 @@ use crate::routes::{AppState, get_view, static_handler};
 struct ApiDoc;
 
 /// Convert a ProjectConfig to a list of ViewConfigs
-fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> {
+pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> {
     let mut views = Vec::new();
 
     for (key, view_def) in &project.aggregation_views {
@@ -187,7 +193,7 @@ fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> {
     views
 }
 
-pub async fn run_server(db: Db, core_config: CodePrismConfig, port: u16) -> Result<()> {
+pub async fn run_server(db: Db, core_config: CodePrismConfig, config_path: String, port: u16) -> Result<()> {
     // Convert CodePrismConfig (Core) to AppConfig (Server) with multi-project support
     let projects_config = core_config.get_projects();
 
@@ -214,27 +220,47 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, port: u16) -> Resu
         projects: project_app_configs,
     };
 
+    // Initialize Git cache with persistent storage in the cloned_repos directory
+    let cloned_repos_dir = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("cloned_repos");
+    let git_cache = crate::git_cache::GitCache::new(cloned_repos_dir);
+
     // Initialize AppState
     let state = AppState {
-        config: Arc::new(app_config),
+        config: Arc::new(RwLock::new(app_config)),
         db,
+        core_config: Arc::new(RwLock::new(core_config)),
+        git_cache,
+        config_path,
     };
 
     // Setup Router
     let router = Router::new()
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        // Config & Projects (listing)
+        .route("/api/v1/config", get(crate::routes::get_config))
+        .route("/api/v1/config/projects/:project_name", get(crate::routes::get_full_project_config).put(crate::routes::update_project_config))
+        .route("/api/v1/projects", get(crate::routes::list_projects))
+        // Git operations
+        .route("/api/v1/git/repos", get(list_repos))
+        .route("/api/v1/git/clone", post(clone_repo))
+        .route("/api/v1/git/:repo_id", delete(delete_repo))
+        .route("/api/v1/git/:repo_id/branches", get(list_branches))
+        .route("/api/v1/git/:repo_id/checkout", post(checkout_branch))
+        .route("/api/v1/git/:repo_id/commits", get(list_commits))
+        // Scan operations
+        .route("/api/v1/scan", post(execute_scan))
+        // Project operations (views, scans listing)
+        .route("/api/v1/projects/:project_name/scans", get(get_scans))
         .route(
             "/api/v1/projects/:project_name/scans/:scan_id/views/:view_id",
             get(get_view),
         )
-        .route(
-            "/api/v1/projects/:project_name/scans",
-            get(crate::routes::get_scans),
-        )
-        .route("/api/v1/config", get(crate::routes::get_config))
+        // Swagger UI
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .layer(CorsLayer::permissive())
         .fallback(static_handler)
-        .with_state(state)
-        .layer(CorsLayer::permissive());
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
     println!("Server running on http://0.0.0.0:{}", port);

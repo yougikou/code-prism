@@ -192,41 +192,42 @@ default_analyzers: ["loc_counter"]  # 默认对所有文件执行的分析器
 
 3. **API 响应**: 返回专门为图表设计的 JSON 结构 (包含 `labels`, `datasets`, `chart_type`)，前端无需进行二次计算。
 
-## 5. 实施阶段规划 (Implementation Phases)
+## 5. 架构审查与改进计划
 
-### 品质前提：所有代码必须符合 Rust 语言规范，并遵循 Rust 的最佳实践。并且有相应测试确保代码质量。
+基于项目实施后的实际运行和性能评估，以下是针对数据模型和分析数据收集方式的改进建议。这些改进旨在优化性能、可扩展性和维护性，同时保持与蓝图核心原则的兼容性。
 
-### 阶段一：骨架与数据库 (Scaffold & DB)
+### 5.1 数据模型改进
 
-* 初始化 Rust 项目。
+**当前评估**：
+- metrics 表扁平化设计符合“一切皆指标”理念，但字段过多导致冗余和查询复杂性。
+- 缺乏时间序列支持，影响历史趋势分析。
+- 索引覆盖基本查询，但跨项目/时间聚合不足。
 
-* 实现 SQLite 数据库连接与 Schema 迁移。
+**改进计划**：
+- **表结构分离**：将 metrics 表拆分为 file_changes（变更元数据：scan_id, file_path, change_type, tech_stack）和 metric_values（指标数据：file_change_id, analyzer_id, metric_key, value）。减少冗余，提高查询性能。
+- **时间序列支持**：在 scans 和 metrics 表中添加 timestamps 字段，支持历史趋势视图（如 ECharts 时间轴图）。评估引入 time_series 表存储聚合快照。
+- **索引增强**：添加复合索引，如 (project_id, scan_time, tech_stack) 和 (metric_key, value) 用于范围查询。考虑按项目或时间分区表以优化大型数据集。
+- **数据验证**：在 core crate 中加强 schema 验证，确保 value_before/value_after 的逻辑一致性。
+- **长期扩展**：评估迁移到 PostgreSQL 以支持多租户和复杂并发。
 
-* 实现基础 CLI (`init`, `scan`)。
+### 5.2 分析数据收集方式改进
 
-* **实现 Git 读取模块**: 封装 `git2`，实现 `read_tree` (Snapshot) 和 `diff_tree` (Diff) 两种模式。
+**当前评估**：
+- 异步解耦和配置驱动的选择性分析性能良好，但串行处理和缺乏批处理导致效率低下。
+- 无缓存机制，重复扫描效率低；错误恢复不足。
 
-* 实现第一个基础分析器 (如 `LineCounter`) 并将数据存入 `metrics` 表。
+**改进计划**：
+- **并行化分析**：引入 tokio::spawn 或 rayon 并行处理文件分析，使用工作池限制并发。评估 futures::stream::buffered 批处理通道。
+- **批写入优化**：在 git_scanner 中收集一批 metrics，使用 sqlx 事务批量插入。添加缓冲区平滑写入峰值。
+- **增量扫描与缓存**：添加 commit_hash 缓存表，记录已分析文件哈希。差异模式仅分析变更文件；快照模式跳过未变更文件。
+- **错误处理增强**：在 analyzer crate 中添加 Result 链式处理，支持部分失败和重试机制。
+- **性能监控**：集成指标收集（如扫描时间、文件数），存储到 metrics 表。使用 profiling 工具识别瓶颈。
+- **扩展性**：标准化分析器接口，支持热加载。评估消息队列处理分布式扫描。
 
-### 阶段二：聚合引擎与 API (Aggregation & Server)
+### 5.3 整体架构改进时间表
 
-* 引入 `Axum` 启动 Web 服务。
-
-* 实现**聚合引擎**：根据请求的 View 配置，动态生成 SQL 或在内存中处理数据。
-
-* 提供 API: `GET /api/v1/scan/:id/view/:view_id`。
-
-### 阶段三：前端集成 (Frontend Integration)
-
-* [x] 搭建 React + Vite 环境。
-
-* [x] 创建通用图表组件 `ChartRenderer` (基于 ECharts)。
-
-* [x] 使用 `rust-embed` 将前端产物打包进 Rust 二进制文件。
-
-* [x] 实现 `codeprism serve` 命令。
-
-### 阶段四：高级功能 (Advanced Features)
-
-* **可扩展性**: 完善 `Analyzer` Trait 接口，支持添加更多特定技术栈的分析器 (XML, JSON, AST-based)。
+- **短期（1-2 个月）**：优先数据模型分离和批写入优化。目标：大型仓库扫描时间减少 30%。
+- **中期（3-6 个月）**：引入并行分析、缓存和 GraphQL API 支持复杂查询。
+- **长期（6+ 个月）**：支持云部署、远程 Git URL、多项目并发和用户认证。
+- **风险与验证**：变更需迁移脚本；并行化需测试竞态条件。使用现有测试和基准测试验证改进。
 

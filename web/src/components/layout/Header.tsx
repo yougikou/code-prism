@@ -1,5 +1,7 @@
-import { Box, Layers, GitGraph, ChevronDown, Sun, Moon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Box, Layers, GitGraph, ChevronDown, ChevronUp, Sun, Moon } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
+import { LanguageSwitcher } from './LanguageSwitcher';
 
 interface HeaderProps {
   viewMode: 'snapshot' | 'diff';
@@ -16,7 +18,8 @@ export const Header: React.FC<HeaderProps> = ({
   selectedProject = '',
   onProjectChange,
 }) => {
-  const { theme, toggleTheme } = useApp();
+  const { theme, toggleTheme, navVisible, toggleNav } = useApp();
+  const { t } = useTranslation();
   const isMultiProject = projects.length > 1;
 
   return (
@@ -28,7 +31,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         <div className="flex items-center gap-3">
-          <span className="text-slate-500 dark:text-slate-400 text-sm font-medium uppercase tracking-wide">Project:</span>
+          <span className="text-slate-500 dark:text-slate-400 text-sm font-medium uppercase tracking-wide">{t('header.project')}</span>
           {isMultiProject ? (
             <div className="relative group">
               <button className="bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-300 dark:border-slate-700 px-4 py-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors flex items-center gap-2">
@@ -71,7 +74,7 @@ export const Header: React.FC<HeaderProps> = ({
             `}
           >
             <Layers className="w-4 h-4" />
-            Snapshot
+            {t('header.snapshot')}
           </button>
           <button
             onClick={() => onViewModeChange('diff')}
@@ -83,15 +86,27 @@ export const Header: React.FC<HeaderProps> = ({
             `}
           >
             <GitGraph className="w-4 h-4" />
-            Diff
+            {t('header.diff')}
           </button>
         </div>
+
+        {/* Nav Toggle */}
+        <button
+          onClick={toggleNav}
+          className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:text-sky-500 dark:hover:text-sky-400 transition-colors"
+          title={navVisible ? 'Collapse nav' : 'Expand nav'}
+        >
+          {navVisible ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+        </button>
+
+        {/* Language Switcher */}
+        <LanguageSwitcher />
 
         {/* Theme Toggle */}
         <button
           onClick={toggleTheme}
           className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:text-sky-500 dark:hover:text-sky-400 transition-colors"
-          title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Mode`}
+          title={theme === 'dark' ? t('header.switchToLight') : t('header.switchToDark')}
         >
           {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
         </button>

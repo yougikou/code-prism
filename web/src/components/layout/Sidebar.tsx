@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { GitCommit, Calendar, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface Run {
@@ -27,6 +28,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onWidthChange,
   onToggleCollapse,
 }) => {
+  const { t } = useTranslation();
   const [isResizing, setIsResizing] = useState(false);
 
   const startResizing = useCallback((e: React.MouseEvent) => {
@@ -75,7 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className={`p-6 pb-2 transition-opacity duration-200 ${isCollapsed ? 'px-2 flex justify-center' : ''}`}>
         <div className={`font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2 ${isCollapsed ? 'justify-center' : ''}`}>
           <Clock className="w-4 h-4" />
-          {!isCollapsed && <span className="text-xs">Run History</span>}
+          {!isCollapsed && <span className="text-xs">{t('sidebar.runHistory')}</span>}
         </div>
       </div>
 

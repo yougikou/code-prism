@@ -38,6 +38,36 @@ CodePrism is a **high-performance code analysis tool** built with Rust. It scans
 - 📦 **Multi-Project Support** - Manage multiple projects in one config
 - 🔌 **Extensible Analyzers** - Built-in, regex, Python, and WASM analyzers
 
+### Architecture
+
+- **Backend**: Rust-based CLI and web server using Axum framework
+- **Database**: Embedded SQLite with automatic migrations
+- **Frontend**: React + TypeScript + Vite, embedded in binary using rust-embed
+- **Charts**: Apache ECharts for high-performance data visualization
+- **Git Operations**: Direct Git ODB access via libgit2, no checkout required
+
+### CLI Commands
+
+- `init` - Initialize database and create default config
+- `scan <repo>` - Scan repository in snapshot mode
+- `scan <repo> --diff <old> <new>` - Scan repository in diff mode
+- `serve` - Start web server with dashboard
+- `init-config` - Generate default configuration file
+- `check-config` - Validate configuration file
+- `test-analyzers` - Test custom analyzers
+
+### Analyzers
+
+- **Built-in**: File count, character count
+- **Regex**: Configurable pattern matching via YAML
+- **Script**: Python scripts in `custom_analyzers/` directory
+- **WASM**: WebAssembly modules for advanced analysis
+
+### Scanning Modes
+
+- **Snapshot Mode**: Analyze entire repository at a specific commit
+- **Diff Mode**: Analyze changes between two commits or branches
+
 ## 📥 Installation
 
 ### Download Pre-built Binary (Recommended)
@@ -365,26 +395,11 @@ projects:
 
 ## 🏗️ Architecture
 
-```
-┌─────────────────────────────────────────┐
-│              Web Dashboard              │
-│         (React + ECharts)               │
-└─────────────────┬───────────────────────┘
-                  │ REST API
-┌─────────────────▼───────────────────────┐
-│            API Server                   │
-│    (Axum + Server-Driven Config)        │
-└─────────────────┬───────────────────────┘
-                  │
-┌─────────────────▼───────────────────────┐
-│           Scanner Engine                │
-│     (Git Integration + Analyzers)       │
-└─────────────────┬───────────────────────┘
-                  │
-┌─────────────────▼───────────────────────┐
-│          SQLite Database                │
-│      (Metrics + Scan History)           │
-└─────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A[Web Dashboard<br/>React + ECharts] -->|REST API| B[API Server<br/>Axum + Server-Driven Config]
+    B --> C[Scanner Engine<br/>Git Integration + Analyzers]
+    C --> D[SQLite Database<br/>Metrics + Scan History]
 ```
 
 ## 📚 Documentation

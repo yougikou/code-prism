@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useApp } from '@/contexts/AppContext';
 import { Header } from './layout/Header';
 import { Sidebar } from './layout/Sidebar';
@@ -7,23 +8,26 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { MetricCard } from './widgets/MetricCard';
 
 import ChartRenderer from './ChartRenderer';
-import { fetchView, type AggregationResult, type AppConfig, getDefaultProject, getProjectNames } from '@/services/data';
+import { fetchView, fetchProjects, mergeProjectNames, type AggregationResult, type AppConfig, type ProjectInfo, getDefaultProject, getProjectNames } from '@/services/data';
 import { Activity, FileText } from 'lucide-react';
 
 
 
 const Dashboard = () => {
+  const { t } = useTranslation();
   const {
     currentProject, setProject,
     viewMode, setViewMode,
     selectedTechStack, setSelectedTechStack,
     selectedRunId, setSelectedRunId,
     availableTechStacks, setAvailableTechStacks,
-    theme
+    theme, navigateTo, configVersion
   } = useApp();
 
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const configProjectNames = appConfig ? getProjectNames(appConfig) : [];
+  const [dbProjectInfos, setDbProjectInfos] = useState<ProjectInfo[]>([]);
+  const mergedProjectNames = mergeProjectNames(configProjectNames, dbProjectInfos);
 
   const [viewsConfig, setViewsConfig] = useState<any[]>([]);
   const [activeViews, setActiveViews] = useState<any[]>([]);
@@ -43,12 +47,17 @@ const Dashboard = () => {
       const config = await import('@/services/data').then(m => m.fetchConfig());
       setAppConfig(config);
 
+      // Also fetch DB projects (projects with scan data)
+      const dbProjects = await fetchProjects();
+      setDbProjectInfos(dbProjects);
+
       // Set default project if currentProject is not in config or just starting
+      const allProjectNames = mergeProjectNames(getProjectNames(config), dbProjects);
       const defaultProject = getDefaultProject(config);
       if (defaultProject) {
-        // If currentProject is not in config, use the first project from config
-        if (!getProjectNames(config).includes(currentProject)) {
-          setProject(defaultProject.name);
+        // If currentProject is not in available projects, use the first project
+        if (!allProjectNames.includes(currentProject)) {
+          setProject(allProjectNames[0] || defaultProject.name);
         }
 
         const projectConfig = config.projects.find(p => p.name === currentProject) || defaultProject;
@@ -59,10 +68,15 @@ const Dashboard = () => {
         if (!['Summary', ...projectConfig.tech_stacks].includes(selectedTechStack)) {
           setSelectedTechStack('Summary');
         }
+      } else if (dbProjects.length > 0) {
+        // No config but DB has projects — use the first DB project
+        setProject(dbProjects[0].name);
+        setViewsConfig([]);
+        setAvailableTechStacks([]);
       }
     };
     loadConfig();
-  }, [currentProject]);
+  }, [currentProject, configVersion]);
 
   // Update config when currentProject changes
   useEffect(() => {
@@ -73,10 +87,16 @@ const Dashboard = () => {
         setAvailableTechStacks(projectConfig.tech_stacks);
         setSelectedTechStack('Summary'); // Reset to Summary on project change
         setViewDataMap({}); // Clear old data
-        // Note: selectedRunId is handled by the fetchRuns effect
+      } else if (dbProjectInfos.some(p => p.name === currentProject)) {
+        // DB-only project (no config) — show empty views
+        setViewsConfig([]);
+        setAvailableTechStacks([]);
+        setSelectedTechStack('Summary');
+        setViewDataMap({});
       }
+      // Note: selectedRunId is handled by the fetchRuns effect
     }
-  }, [currentProject, appConfig]);
+  }, [currentProject, appConfig, dbProjectInfos]);
 
   // Filter Active Views based on selection
   useEffect(() => {
@@ -565,9 +585,13 @@ const Dashboard = () => {
       <Header
         viewMode={viewMode}
         onViewModeChange={setViewMode}
-        projects={configProjectNames}
+        projects={mergedProjectNames}
         selectedProject={currentProject}
-        onProjectChange={setProject}
+        onProjectChange={(project) => {
+          setProject(project);
+          setSelectedRunId(null);
+          setViewDataMap({});
+        }}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -594,7 +618,23 @@ const Dashboard = () => {
 
             {/* Dynamic Widgets Grid */}
             <div key={`${selectedTechStack}-${theme}`} className="grid gap-6 md:grid-cols-2 lg:grid-cols-2">
-              {activeViews.map(view => {
+              {activeViews.length === 0 ? (
+                <div className="col-span-full flex flex-col items-center justify-center py-16 text-slate-400">
+                  <div className="text-6xl mb-4 opacity-30">📊</div>
+                  <p className="text-lg font-medium text-slate-500 dark:text-slate-400 mb-2">
+                    {t('dashboard.noViewsTitle')}
+                  </p>
+                  <p className="text-sm text-slate-400 dark:text-slate-500 mb-6 max-w-md text-center">
+                    {t('dashboard.noViewsDesc')}
+                  </p>
+                  <button
+                    onClick={() => navigateTo('execute')}
+                    className="px-4 py-2 bg-sky-600 text-white rounded-lg text-sm font-medium hover:bg-sky-700 transition-colors"
+                  >
+                    {t('dashboard.goToExecute')}
+                  </button>
+                </div>
+              ) : activeViews.map(view => {
                 let data = viewDataMap[view.id] || [];
                 const title = view.title || view.id.replace(/_/g, ' ').toUpperCase();
 
@@ -643,7 +683,7 @@ const Dashboard = () => {
                       key={view.id}
                       title={title}
                       value={totalValue.toLocaleString()}
-                      subValue="Total Aggregated Value"
+                      subValue={t('dashboard.totalValue')}
                       loading={loading}
                     />
                   );
@@ -655,8 +695,8 @@ const Dashboard = () => {
                       <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
                         <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50">
                           <tr>
-                            <th className="px-4 py-2">Label</th>
-                            <th className="px-4 py-2 text-right">Value</th>
+                            <th className="px-4 py-2">{t('table.label')}</th>
+                            <th className="px-4 py-2 text-right">{t('table.value')}</th>
                           </tr>
                         </thead>
                         <tbody>

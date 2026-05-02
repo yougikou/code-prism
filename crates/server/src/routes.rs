@@ -1,12 +1,16 @@
 use crate::aggregation::{AggregationResult, TopNAggregator, ViewFilters};
 use crate::config::{AppConfig, ViewConfig, ViewKind};
+use crate::git_cache::GitCache;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, Json as AxumJson},
     response::{IntoResponse, Json},
+    http::StatusCode,
 };
 use codeprism_database::Db;
-use serde::Serialize;
-use std::sync::Arc;
+use serde::{Serialize, Deserialize};
+use std::sync::{Arc, RwLock};
+use codeprism_core::CodePrismConfig;
+use codeprism_scanner::Scanner;
 // Route macro ViewFilters usage might need IntoParams available?
 // Actually ViewFilters derives IntoParams.
 // "params(..., ViewFilters)" usage needs ToSchema? ToParams?
@@ -14,14 +18,89 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub(crate) config: Arc<AppConfig>,
+    pub(crate) config: Arc<RwLock<AppConfig>>,
     pub(crate) db: Db,
+    pub(crate) core_config: Arc<RwLock<CodePrismConfig>>,
+    pub(crate) git_cache: GitCache,
+    pub config_path: String,
 }
 
 impl AppState {
     /// Create a new AppState for use in tests or external builders
-    pub fn new(config: Arc<AppConfig>, db: Db) -> Self {
-        Self { config, db }
+    pub fn new(
+        config: Arc<RwLock<AppConfig>>,
+        db: Db,
+        core_config: Arc<RwLock<CodePrismConfig>>,
+        config_path: String,
+    ) -> Self {
+        let cloned_repos_dir = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join("cloned_repos");
+        Self {
+            config,
+            db,
+            core_config,
+            git_cache: GitCache::new(cloned_repos_dir),
+            config_path,
+        }
+    }
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct ProjectInfo {
+    pub id: i64,
+    pub name: String,
+    pub repo_path: String,
+    pub created_at: String,
+    pub scan_modes: Vec<String>,
+    pub total_scans: i64,
+    pub last_scan_time: Option<String>,
+}
+
+/// GET /api/v1/projects — list all projects that have scan data in the DB
+pub async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
+    let query = r#"
+        SELECT p.id, p.name, p.repo_path, p.created_at,
+               GROUP_CONCAT(DISTINCT s.scan_mode) as scan_modes,
+               COUNT(s.id) as total_scans,
+               MAX(s.scan_time) as last_scan_time
+        FROM projects p
+        LEFT JOIN scans s ON s.project_id = p.id
+        GROUP BY p.id
+        ORDER BY last_scan_time DESC
+    "#;
+
+    match sqlx::query_as::<_, (i64, String, String, String, Option<String>, i64, Option<String>)>(query)
+        .fetch_all(state.db.pool())
+        .await
+    {
+        Ok(rows) => {
+            let projects: Vec<ProjectInfo> = rows
+                .into_iter()
+                .map(|(id, name, repo_path, created_at, scan_modes, total_scans, last_scan_time)| {
+                    ProjectInfo {
+                        id,
+                        name,
+                        repo_path,
+                        created_at,
+                        scan_modes: scan_modes
+                            .map(|s| s.split(',').map(|m| m.to_string()).collect())
+                            .unwrap_or_default(),
+                        total_scans,
+                        last_scan_time,
+                    }
+                })
+                .collect();
+            Json(projects).into_response()
+        }
+        Err(e) => {
+            eprintln!("Database Error listing projects: {}", e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Database Error",
+            )
+                .into_response()
+        }
     }
 }
 
@@ -31,11 +110,33 @@ struct ViewResponse {
     items: Vec<AggregationResult>,
 }
 
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct ScanRequest {
+    pub git_url: String,
+    pub branch: Option<String>,
+    pub commit: Option<String>,
+    pub base_commit: Option<String>,
+    pub scan_mode: String, // "snapshot" or "diff"
+    pub project_name: Option<String>,
+    // New fields for multi-step workflow
+    pub repo_id: Option<String>,
+    pub ref_1: Option<String>,
+    pub ref_2: Option<String>,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct ScanResponseData {
+    pub scan_id: i64,
+    pub project_name: String,
+    pub status: String,
+    pub message: String,
+}
+
 /// Helper to find a view config by ID across all projects
-fn find_view_config<'a>(config: &'a AppConfig, view_id: &str) -> Option<&'a ViewConfig> {
+fn find_view_config(config: &AppConfig, view_id: &str) -> Option<ViewConfig> {
     for project in &config.projects {
         if let Some(view) = project.views.iter().find(|v| v.id == view_id) {
-            return Some(view);
+            return Some(view.clone());
         }
     }
     None
@@ -62,22 +163,23 @@ pub async fn get_view(
     Query(filters): Query<ViewFilters>,
 ) -> impl IntoResponse {
     // 1. Find the project and its view config
-    let view_config = state
-        .config
+    let app_config = state.config.read().unwrap().clone();
+    let view_config = app_config
         .projects
         .iter()
         .find(|p| p.name == project_name)
-        .and_then(|p| p.views.iter().find(|v| v.id == view_id));
+        .and_then(|p| p.views.iter().find(|v| v.id == view_id))
+        .cloned();
 
     // Fallback: If not found in current project, search all (backward compatibility/graceful)
-    let view_config = view_config.or_else(|| find_view_config(&state.config, &view_id));
+    let view_config = view_config.or_else(|| find_view_config(&app_config, &view_id));
 
     if let Some(config) = view_config {
         // 2. Execute Aggregation
         // We currently only support TopN
         match &config.kind {
             ViewKind::TopN { .. } => {
-                match TopNAggregator::execute(&state.db.pool(), scan_id, config, &filters).await {
+                match TopNAggregator::execute(&state.db.pool(), scan_id, &config, &filters).await {
                     Ok(items) => Json(ViewResponse {
                         view_id: view_id.clone(),
                         items,
@@ -97,7 +199,7 @@ pub async fn get_view(
                 match crate::aggregation::SumAggregator::execute(
                     &state.db.pool(),
                     scan_id,
-                    config,
+                    &config,
                     &filters,
                 )
                 .await
@@ -121,7 +223,7 @@ pub async fn get_view(
                 match crate::aggregation::StatAggregator::execute(
                     &state.db.pool(),
                     scan_id,
-                    config,
+                    &config,
                     &filters,
                     crate::aggregation::StatType::Avg,
                 )
@@ -146,7 +248,7 @@ pub async fn get_view(
                 match crate::aggregation::StatAggregator::execute(
                     &state.db.pool(),
                     scan_id,
-                    config,
+                    &config,
                     &filters,
                     crate::aggregation::StatType::Min,
                 )
@@ -171,7 +273,7 @@ pub async fn get_view(
                 match crate::aggregation::StatAggregator::execute(
                     &state.db.pool(),
                     scan_id,
-                    config,
+                    &config,
                     &filters,
                     crate::aggregation::StatType::Max,
                 )
@@ -196,7 +298,7 @@ pub async fn get_view(
                 match crate::aggregation::DistributionAggregator::execute(
                     &state.db.pool(),
                     scan_id,
-                    config,
+                    &config,
                     &filters,
                 )
                 .await
@@ -318,7 +420,290 @@ pub async fn get_scans(
     )
 )]
 pub async fn get_config(State(state): State<AppState>) -> impl IntoResponse {
-    Json(state.config.as_ref()).into_response()
+    let config = state.config.read().unwrap();
+    Json(config.clone()).into_response()
+}
+
+/// GET /api/v1/config/projects/{project_name} — returns full project config from core
+pub async fn get_full_project_config(
+    State(state): State<AppState>,
+    Path(project_name): Path<String>,
+) -> impl IntoResponse {
+    let core_config = state.core_config.read().unwrap();
+    match core_config.projects.iter().find(|p| p.name == project_name) {
+        Some(config) => Json(config).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Project not found"}))).into_response(),
+    }
+}
+
+/// PUT /api/v1/config/projects/{project_name} — update project config and write to YAML
+pub async fn update_project_config(
+    State(state): State<AppState>,
+    Path(project_name): Path<String>,
+    AxumJson(updated_config): AxumJson<codeprism_core::ProjectConfig>,
+) -> impl IntoResponse {
+    if updated_config.name != project_name {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Project name in path must match body"}))).into_response();
+    }
+
+    // Read current YAML file
+    let yaml_content = match std::fs::read_to_string(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to read config file: {}", e)}))).into_response(),
+    };
+
+    let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to parse config file: {}", e)}))).into_response(),
+    };
+
+    // Upsert: replace existing project or append new one
+    let pos = core_config.projects.iter().position(|p| p.name == project_name);
+    if let Some(pos) = pos {
+        core_config.projects[pos] = updated_config;
+    } else {
+        core_config.projects.push(updated_config);
+    }
+
+    // Write YAML atomically: tmp file + rename
+    let yaml_str = match serde_yaml::to_string(&core_config) {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to serialize config: {}", e)}))).into_response(),
+    };
+
+    let tmp_path = format!("{}.tmp", state.config_path);
+    if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to write config: {}", e)}))).into_response();
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to save config: {}", e)}))).into_response();
+    }
+
+    // Rebuild in-memory AppConfig (UI subset)
+    let projects_config = core_config.get_projects();
+    let mut project_app_configs = Vec::new();
+    for project in &projects_config {
+        let views = crate::convert_project_views(project);
+        let mut tech_stacks: Vec<String> = project.tech_stacks.iter().map(|ts| ts.name.clone()).collect();
+        tech_stacks.sort();
+        project_app_configs.push(crate::config::ProjectAppConfig {
+            name: project.name.clone(),
+            views,
+            tech_stacks,
+        });
+    }
+    let new_app_config = crate::config::AppConfig { projects: project_app_configs };
+
+    // Update in-memory state
+    *state.config.write().unwrap() = new_app_config;
+    *state.core_config.write().unwrap() = core_config;
+
+    Json(serde_json::json!({"status": "ok", "message": "Configuration saved successfully"})).into_response()
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/scan",
+    request_body = ScanRequest,
+    responses(
+        (status = 200, description = "Scan started successfully", body = ScanResponseData),
+        (status = 400, description = "Bad request"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn execute_scan(
+    State(state): State<AppState>,
+    AxumJson(request): AxumJson<ScanRequest>,
+) -> impl IntoResponse {
+    // Validate request
+    if request.scan_mode != "snapshot" && request.scan_mode != "diff" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ScanResponseData {
+                scan_id: 0,
+                project_name: String::new(),
+                status: "error".to_string(),
+                message: "scan_mode must be 'snapshot' or 'diff'".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let scan_mode = request.scan_mode.clone();
+    let project_name = request
+        .project_name
+        .clone()
+        .unwrap_or_else(|| "scanned_project".to_string());
+
+    // ── Flow 1: repo_id provided — use cached cloned repo ──────────────
+    if let Some(ref repo_id) = request.repo_id {
+        let repo_info = match state.git_cache.get(repo_id) {
+            Some(info) => info,
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(ScanResponseData {
+                        scan_id: 0,
+                        project_name: String::new(),
+                        status: "error".to_string(),
+                        message: "Repository not found in cache. Please clone it first.".to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        };
+
+        let temp_dir = repo_info.path.clone();
+        let ref_1 = request.ref_1.clone().unwrap_or_else(|| "HEAD".to_string());
+        let ref_2 = request.ref_2.clone();
+        let proj_name = project_name.clone();
+
+        let db = state.db.clone();
+        let core_config = state.core_config.read().unwrap().clone();
+
+        tokio::spawn(async move {
+            let scanner = Scanner::with_config(db, core_config);
+
+            let result = if scan_mode == "snapshot" {
+                scanner
+                    .scan_snapshot(&temp_dir, &proj_name, Some(&ref_1))
+                    .await
+            } else {
+                // diff mode
+                if let Some(base) = ref_2 {
+                    scanner
+                        .scan_diff(&temp_dir, &proj_name, &base, &ref_1)
+                        .await
+                } else {
+                    Err(anyhow::anyhow!(
+                        "ref_2 is required for diff mode when using cached repo"
+                    ))
+                }
+            };
+
+            match result {
+                Ok(_) => {
+                    println!("Scan completed successfully for project: {}", proj_name);
+                }
+                Err(e) => {
+                    eprintln!("Scan error: {}", e);
+                }
+            }
+        });
+
+        return (
+            StatusCode::OK,
+            Json(ScanResponseData {
+                scan_id: 0,
+                project_name,
+                status: "started".to_string(),
+                message: "Scan has been queued and will start shortly".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    // ── Flow 2: No repo_id — clone fresh (original behavior) ──────────
+    if request.git_url.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ScanResponseData {
+                scan_id: 0,
+                project_name: String::new(),
+                status: "error".to_string(),
+                message: "git_url is required when no repo_id is provided".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let git_url = request.git_url.clone();
+    let branch = request.branch.clone();
+    let commit = request.commit.clone();
+    let base_commit = request.base_commit.clone();
+    let project_name_clone = project_name.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let temp_dir = std::env::temp_dir().join(format!("codeprism-{}", uuid::Uuid::new_v4().to_string()));
+        let temp_dir_str = match temp_dir.to_str() {
+            Some(path) => path.to_string(),
+            None => return Err("Failed to create temp directory".to_string()),
+        };
+
+        match git2::Repository::clone(&git_url, &temp_dir_str) {
+            Ok(repo) => {
+                if let Some(br) = &branch {
+                    if let Err(e) = repo.set_head(&format!("refs/heads/{}", br)) {
+                        let _ = std::fs::remove_dir_all(&temp_dir_str);
+                        return Err(format!("Failed to checkout branch {}: {}", br, e));
+                    }
+                }
+                Ok((temp_dir_str, project_name_clone))
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&temp_dir_str);
+                Err(format!("Failed to clone repository: {}", e))
+            }
+        }
+    })
+    .await;
+
+    match result {
+        Ok(Ok((temp_dir, proj_name))) => {
+            let db = state.db.clone();
+            let core_config = state.core_config.read().unwrap().clone();
+
+            tokio::spawn(async move {
+                let scanner = Scanner::with_config(db, core_config);
+
+                let result = if scan_mode == "snapshot" {
+                    let commit_ref = commit.as_deref();
+                    scanner
+                        .scan_snapshot(&temp_dir, &proj_name, commit_ref)
+                        .await
+                } else {
+                    if let Some(base) = base_commit {
+                        let target = commit.as_deref().unwrap_or("HEAD");
+                        scanner
+                            .scan_diff(&temp_dir, &proj_name, &base, target)
+                            .await
+                    } else {
+                        Err(anyhow::anyhow!("base_commit is required for diff mode"))
+                    }
+                };
+
+                let _ = std::fs::remove_dir_all(&temp_dir);
+
+                match result {
+                    Ok(_) => println!("Scan completed successfully for project: {}", proj_name),
+                    Err(e) => eprintln!("Scan error: {}", e),
+                }
+            });
+
+            (
+                StatusCode::OK,
+                Json(ScanResponseData {
+                    scan_id: 0,
+                    project_name,
+                    status: "started".to_string(),
+                    message: "Scan has been queued and will start shortly".to_string(),
+                }),
+            )
+                .into_response()
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ScanResponseData {
+                scan_id: 0,
+                project_name: String::new(),
+                status: "error".to_string(),
+                message: "Failed to initialize scan".to_string(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {

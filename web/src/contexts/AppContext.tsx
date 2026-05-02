@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, type ReactNode } from 'reac
 
 type ViewMode = 'snapshot' | 'diff';
 type TechStack = string; // Dynamic
+type Page = 'dashboard' | 'execute' | 'config';
 
 interface AppState {
   currentProject: string;
@@ -9,6 +10,7 @@ interface AppState {
   selectedRunId: string | null;
   selectedTechStack: TechStack;
   availableTechStacks: TechStack[];
+  currentPage: Page;
 }
 
 interface AppContextType extends AppState {
@@ -17,8 +19,13 @@ interface AppContextType extends AppState {
   setSelectedRunId: (runId: string | null) => void;
   setSelectedTechStack: (stack: TechStack) => void;
   setAvailableTechStacks: (stacks: TechStack[]) => void;
+  navigateTo: (page: Page) => void;
   theme: 'light' | 'dark';
   toggleTheme: () => void;
+  navVisible: boolean;
+  toggleNav: () => void;
+  configVersion: number;
+  triggerConfigRefresh: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -29,6 +36,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [selectedRunId, setSelectedRunId] = useState<string | null>('1'); // Default to first run
   const [selectedTechStack, setSelectedTechStack] = useState<TechStack>('Summary');
   const [availableTechStacks, setAvailableTechStacks] = useState<TechStack[]>([]);
+  const [currentPage, setCurrentPage] = useState<Page>('dashboard');
 
   /* Theme Support */
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -37,6 +45,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
     return 'dark';
   });
+
+  const [navVisible, setNavVisible] = useState(false);
+  const [configVersion, setConfigVersion] = useState(0);
 
   React.useEffect(() => {
     const root = window.document.documentElement;
@@ -48,6 +59,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const toggleTheme = () => {
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
   };
+
+  const toggleNav = () => setNavVisible(prev => !prev);
+  const triggerConfigRefresh = () => setConfigVersion(v => v + 1);
 
   return (
     <AppContext.Provider
@@ -62,8 +76,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setSelectedTechStack,
         availableTechStacks,
         setAvailableTechStacks,
+        currentPage,
+        navigateTo: setCurrentPage,
         theme,
-        toggleTheme
+        toggleTheme,
+        navVisible,
+        toggleNav,
+        configVersion,
+        triggerConfigRefresh,
       }}
     >
       {children}

@@ -71,6 +71,27 @@ enum Commands {
     },
 }
 
+/// Resolve the database URL, making relative paths relative to the config file directory.
+/// This ensures `scan` and `serve` use the same database when sharing a config file.
+fn resolve_db_url(config: &codeprism_core::CodePrismConfig, config_path: &str) -> String {
+    let url = config
+        .database_url
+        .clone()
+        .unwrap_or_else(|| "sqlite:codeprism.db".to_string());
+
+    // If it's a sqlite URL with a relative path, resolve against the config file's directory
+    if let Some(path) = url.strip_prefix("sqlite:") {
+        let db_path = std::path::Path::new(path);
+        if db_path.is_relative() {
+            if let Some(config_dir) = std::path::Path::new(config_path).parent() {
+                let abs_path = config_dir.join(path);
+                return format!("sqlite:{}", abs_path.display());
+            }
+        }
+    }
+    url
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -84,9 +105,7 @@ async fn main() -> Result<()> {
             let config_path = cli.config.as_deref().unwrap_or("codeprism.yaml");
             let db_url = if std::path::Path::new(config_path).exists() {
                 match codeprism_core::CodePrismConfig::load_from_file(config_path) {
-                    Ok(c) => c
-                        .database_url
-                        .unwrap_or_else(|| "sqlite:codeprism.db".to_string()),
+                    Ok(c) => resolve_db_url(&c, config_path),
                     Err(_) => "sqlite:codeprism.db".to_string(),
                 }
             } else {
@@ -151,10 +170,7 @@ async fn main() -> Result<()> {
                 }
             };
 
-            let db_url = config
-                .database_url
-                .clone()
-                .unwrap_or_else(|| "sqlite:codeprism.db".to_string());
+            let db_url = resolve_db_url(&config, config_path);
             let db = Db::new(&db_url).await?;
 
             let scanner = Scanner::with_config(db, config);
@@ -240,14 +256,11 @@ async fn main() -> Result<()> {
                     std::process::exit(1);
                 }
             };
-            let db_url = config
-                .database_url
-                .clone()
-                .unwrap_or_else(|| "sqlite:codeprism.db".to_string());
+            let db_url = resolve_db_url(&config, config_path);
             let db = Db::new(&db_url).await?;
 
             println!("Starting server...");
-            codeprism_server::run_server(db, config, *port).await?;
+            codeprism_server::run_server(db, config, config_path.to_string(), *port).await?;
         }
     }
 
