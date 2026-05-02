@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useApp } from '@/contexts/AppContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -6,6 +6,10 @@ import {
   fetchConfig,
   fetchFullProjectConfig,
   updateProjectConfig,
+  fetchTemplates,
+  saveTemplate,
+  deleteTemplate,
+  reloadConfig,
   type AppConfig,
   type FullProjectConfig,
   type FullTechStack,
@@ -13,40 +17,100 @@ import {
 
 // ─── Tag Input ──────────────────────────────────────────────────────────────
 
-function TagInput({ tags, onChange, placeholder }: {
+function TagInput({ tags, onChange, placeholder, suggestions, allowCustom = true }: {
   tags: string[];
   onChange: (tags: string[]) => void;
   placeholder?: string;
+  suggestions?: string[];
+  allowCustom?: boolean;
 }) {
   const [input, setInput] = useState('')
+  const [showDropdown, setShowDropdown] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(-1)
 
-  const addTag = () => {
-    const val = input.trim()
-    if (val && !tags.includes(val)) {
-      onChange([...tags, val])
-      setInput('')
+  const filtered = suggestions
+    ? suggestions.filter(s => !tags.includes(s) && s.toLowerCase().includes(input.toLowerCase()))
+    : []
+
+  const addTag = (val?: string) => {
+    const value = val || input.trim()
+    if (!value) return
+    if (suggestions && !allowCustom && !suggestions.includes(value)) return
+    if (!tags.includes(value)) {
+      onChange([...tags, value])
+    }
+    setInput('')
+    setShowDropdown(false)
+    setActiveIndex(-1)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      if (activeIndex >= 0 && filtered[activeIndex]) {
+        addTag(filtered[activeIndex])
+      } else {
+        addTag()
+      }
+      return
+    }
+    if (e.key === ',' && input.trim()) {
+      e.preventDefault()
+      addTag()
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setActiveIndex(i => Math.min(i + 1, filtered.length - 1))
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActiveIndex(i => Math.max(i - 1, 0))
+      return
+    }
+    if (e.key === 'Escape') {
+      setShowDropdown(false)
+      setActiveIndex(-1)
     }
   }
 
   return (
-    <div className="flex flex-wrap gap-1.5 p-2 border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 min-h-[42px]">
-      {tags.map(tag => (
-        <span key={tag} className="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-medium rounded-md bg-sky-100 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300">
-          {tag}
-          <button onClick={() => onChange(tags.filter(t => t !== tag))} className="hover:text-red-500 ml-0.5">&times;</button>
-        </span>
-      ))}
-      <input
-        value={input}
-        onChange={e => setInput(e.target.value)}
-        onKeyDown={e => {
-          if (e.key === 'Enter') { e.preventDefault(); addTag() }
-          if (e.key === ',' && input.trim()) { e.preventDefault(); addTag() }
-        }}
-        onBlur={addTag}
-        placeholder={tags.length === 0 ? (placeholder || 'Type and press Enter...') : ''}
-        className="flex-1 min-w-[100px] outline-none bg-transparent text-sm text-slate-700 dark:text-slate-300 placeholder-slate-400"
-      />
+    <div className="relative">
+      <div className="flex flex-wrap gap-1.5 p-2 border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 min-h-[42px]">
+        {tags.map(tag => (
+          <span key={tag} className="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-medium rounded-md bg-sky-100 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300">
+            {tag}
+            <button onClick={() => onChange(tags.filter(t => t !== tag))} className="hover:text-red-500 ml-0.5">&times;</button>
+          </span>
+        ))}
+        <input
+          value={input}
+          onChange={e => { setInput(e.target.value); setShowDropdown(true); setActiveIndex(-1) }}
+          onKeyDown={handleKeyDown}
+          onFocus={() => setShowDropdown(true)}
+          onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
+          placeholder={tags.length === 0 ? (placeholder || 'Type and press Enter...') : ''}
+          className="flex-1 min-w-[100px] outline-none bg-transparent text-sm text-slate-700 dark:text-slate-300 placeholder-slate-400"
+        />
+      </div>
+      {showDropdown && filtered.length > 0 && (
+        <div className="absolute z-20 top-full mt-1 left-0 right-0 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+          {filtered.map((s, i) => (
+            <button
+              key={s}
+              onMouseDown={e => { e.preventDefault(); addTag(s) }}
+              className={`w-full text-left px-3 py-1.5 text-sm transition-colors ${
+                i === activeIndex
+                  ? 'bg-sky-100 dark:bg-sky-900/50 text-sky-700 dark:text-sky-300'
+                  : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+              }`}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -80,6 +144,14 @@ function TechStacksEditor({ config, onChange }: {
   onChange: (c: FullProjectConfig) => void;
 }) {
   const { t } = useTranslation()
+
+  const validAnalyzerIds = useMemo(() => {
+    const ids = new Set<string>(['file_count', 'char_count'])
+    for (const key of Object.keys(config.custom_regex_analyzers || {})) ids.add(key)
+    for (const key of Object.keys(config.custom_impl_analyzers || {})) ids.add(key)
+    for (const key of Object.keys(config.external_analyzers || {})) ids.add(key)
+    return Array.from(ids).sort()
+  }, [config.custom_regex_analyzers, config.custom_impl_analyzers, config.external_analyzers])
 
   const updateStack = <K extends keyof FullTechStack>(index: number, field: K, value: FullTechStack[K]) => {
     const stacks = [...config.tech_stacks]
@@ -127,7 +199,7 @@ function TechStacksEditor({ config, onChange }: {
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.techStack.analyzers')}</label>
-              <TagInput tags={stack.analyzers} onChange={v => updateStack(i, 'analyzers', v)} placeholder="e.g. file_count" />
+              <TagInput tags={stack.analyzers} onChange={v => updateStack(i, 'analyzers', v)} placeholder="e.g. file_count" suggestions={validAnalyzerIds} allowCustom={false} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.techStack.paths')}</label>
@@ -469,20 +541,104 @@ function ViewsEditor({ config, onChange }: {
   )
 }
 
+// ─── Templates Editor ────────────────────────────────────────────────────────
+
+function TemplatesEditor() {
+  const { t } = useTranslation()
+  const [templateList, setTemplateList] = useState<Record<string, FullProjectConfig>>({})
+  const [loading, setLoading] = useState(true)
+  const [deleting, setDeleting] = useState<string | null>(null)
+
+  const loadTemplates = useCallback(async () => {
+    setLoading(true)
+    try {
+      const list = await fetchTemplates()
+      setTemplateList(list)
+    } catch { /* ignore */ }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { loadTemplates() }, [loadTemplates])
+
+  const handleDelete = async (name: string) => {
+    if (!confirm(t('templates.deleteConfirm', { name }))) return
+    setDeleting(name)
+    try {
+      await deleteTemplate(name)
+      setTemplateList(prev => {
+        const next = { ...prev }
+        delete next[name]
+        return next
+      })
+    } catch (err) {
+      console.error('Failed to delete template:', err)
+    } finally {
+      setDeleting(null)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {Object.keys(templateList).length === 0 && (
+        <div className="text-center py-20 text-slate-400">
+          <p>{t('templates.noTemplates')}</p>
+        </div>
+      )}
+      {Object.entries(templateList).map(([name, cfg]) => (
+        <Card key={name}>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-base">{name}</CardTitle>
+            <button
+              onClick={() => handleDelete(name)}
+              disabled={deleting === name}
+              className="text-xs px-2 py-1 rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
+            >
+              {t('config.techStack.delete')}
+            </button>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-slate-500">
+              {cfg.tech_stacks.length} {t('templates.techStacks')} · {Object.keys(cfg.custom_regex_analyzers).length} {t('templates.regexAnalyzers')} · {Object.keys(cfg.aggregation_views).length} {t('templates.views')}
+            </p>
+            {cfg.tech_stacks.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {cfg.tech_stacks.map(ts => (
+                  <span key={ts.name} className="px-2 py-0.5 text-xs rounded bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300">
+                    {ts.name} ({ts.extensions.join(', ')})
+                  </span>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
 // ─── Config Page ────────────────────────────────────────────────────────────
 
-type ConfigTab = 'tech_stacks' | 'global_excludes' | 'analyzers' | 'views'
+type ConfigTab = 'tech_stacks' | 'global_excludes' | 'analyzers' | 'views' | 'templates'
 
 const TABS: { key: ConfigTab; labelKey: string }[] = [
   { key: 'tech_stacks', labelKey: 'config.tabs.techStacks' },
   { key: 'global_excludes', labelKey: 'config.tabs.globalExcludes' },
   { key: 'analyzers', labelKey: 'config.tabs.analyzers' },
   { key: 'views', labelKey: 'config.tabs.views' },
+  { key: 'templates', labelKey: 'config.tabs.templates' },
 ]
 
 export default function ConfigPage() {
   const { t } = useTranslation()
-  const { currentProject, setProject, triggerConfigRefresh } = useApp()
+  const { currentProject, setProject, triggerConfigRefresh, configVersion } = useApp()
 
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null)
   const [config, setConfig] = useState<FullProjectConfig | null>(null)
@@ -491,13 +647,16 @@ export default function ConfigPage() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [loading, setLoading] = useState(true)
+  const [showSaveAsTemplate, setShowSaveAsTemplate] = useState(false)
+  const [templateNameInput, setTemplateNameInput] = useState('')
+  const [templateSaving, setTemplateSaving] = useState(false)
 
-  // Load project list
+  // Load project list (re-fetch when configVersion changes)
   useEffect(() => {
     fetchConfig().then(setAppConfig).catch(() => {})
-  }, [])
+  }, [configVersion])
 
-  // Load full project config
+  // Load full project config (re-fetch when configVersion changes)
   useEffect(() => {
     if (!currentProject) return
     setLoading(true)
@@ -509,7 +668,7 @@ export default function ConfigPage() {
       })
       .catch((err: unknown) => setMessage({ type: 'error', text: err instanceof Error ? err.message : String(err) }))
       .finally(() => setLoading(false))
-  }, [currentProject])
+  }, [currentProject, configVersion])
 
   const hasChanges = config && originalConfig !== JSON.stringify(config)
 
@@ -542,6 +701,21 @@ export default function ConfigPage() {
       .finally(() => setLoading(false))
   }
 
+  const handleSaveAsTemplate = async () => {
+    if (!config || !templateNameInput.trim()) return
+    setTemplateSaving(true)
+    try {
+      await saveTemplate(templateNameInput.trim(), config)
+      setMessage({ type: 'success', text: t('templates.saved', { name: templateNameInput.trim() }) })
+      setShowSaveAsTemplate(false)
+      setTemplateNameInput('')
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : t('templates.saveError') })
+    } finally {
+      setTemplateSaving(false)
+    }
+  }
+
   const renderTabContent = () => {
     if (!config) return null
     switch (activeTab) {
@@ -553,6 +727,8 @@ export default function ConfigPage() {
         return <AnalyzersEditor config={config} onChange={setConfig} />
       case 'views':
         return <ViewsEditor config={config} onChange={setConfig} />
+      case 'templates':
+        return <TemplatesEditor />
     }
   }
 
@@ -587,6 +763,30 @@ export default function ConfigPage() {
                 {message.text}
               </span>
             )}
+            {activeTab !== 'templates' && (
+              <button
+                onClick={() => setShowSaveAsTemplate(true)}
+                disabled={!config || loading}
+                className="px-3 py-1.5 text-sm rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 transition-colors"
+              >
+                {t('templates.saveAsTemplate')}
+              </button>
+            )}
+            <button
+              onClick={async () => {
+                try {
+                  await reloadConfig()
+                  triggerConfigRefresh()
+                  setMessage({ type: 'success', text: 'Configuration reloaded from disk' })
+                } catch (err) {
+                  setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to reload config' })
+                }
+              }}
+              className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+              title="Reload config from YAML file"
+            >
+              Reload
+            </button>
             <button
               onClick={handleReset}
               disabled={!hasChanges || loading}
@@ -641,6 +841,40 @@ export default function ConfigPage() {
           )}
         </div>
       </div>
+
+      {/* Save as Template Modal */}
+      {showSaveAsTemplate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-xl shadow-2xl max-w-md w-full mx-4 p-5 space-y-4">
+            <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              {t('templates.saveAsTemplate')}
+            </h3>
+            <input
+              type="text"
+              value={templateNameInput}
+              onChange={e => setTemplateNameInput(e.target.value)}
+              placeholder={t('templates.templateNamePlaceholder')}
+              className="w-full px-4 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 text-sm"
+              autoFocus
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => { setShowSaveAsTemplate(false); setTemplateNameInput('') }}
+                className="px-4 py-2 text-sm text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+              >
+                {t('execute.cancel')}
+              </button>
+              <button
+                onClick={handleSaveAsTemplate}
+                disabled={!templateNameInput.trim() || templateSaving}
+                className="px-4 py-2 text-sm text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-40 transition-colors"
+              >
+                {templateSaving ? t('config.saving') : t('templates.saveAsTemplate')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

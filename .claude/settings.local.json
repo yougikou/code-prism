@@ -58,7 +58,8 @@
       "Bash(curl -s \"http://localhost:9898/api/v1/git/repos\")",
       "Bash(cargo doc *)",
       "Bash(npx vite *)",
-      "Bash(npx eslint *)"
+      "Bash(npx eslint *)",
+      "Bash(Remove-Item \"e:\\\\develop\\\\code-prism\\\\test_invalid_analyzer.yaml\", \"e:\\\\develop\\\\code-prism\\\\test_valid_custom.yaml\", \"e:\\\\develop\\\\code-prism\\\\test_multi_project_invalid.yaml\")"
     ]
   }
 }

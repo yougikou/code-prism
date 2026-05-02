@@ -4,6 +4,7 @@ pub mod config;
 pub mod git_cache;
 pub mod git_routes;
 pub mod routes;
+pub mod template_routes;
 
 use anyhow::Result;
 use axum::{Router, routing::{get, post, delete}};
@@ -240,6 +241,9 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, config_path: Strin
         // Config & Projects (listing)
         .route("/api/v1/config", get(crate::routes::get_config))
         .route("/api/v1/config/projects/:project_name", get(crate::routes::get_full_project_config).put(crate::routes::update_project_config))
+        .route("/api/v1/config/templates", get(crate::template_routes::list_templates))
+        .route("/api/v1/config/templates/:name", get(crate::template_routes::get_template).put(crate::template_routes::upsert_template).delete(crate::template_routes::delete_template))
+        .route("/api/v1/config/reload", post(crate::routes::reload_config))
         .route("/api/v1/projects", get(crate::routes::list_projects))
         // Git operations
         .route("/api/v1/git/repos", get(list_repos))

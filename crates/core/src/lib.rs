@@ -50,6 +50,10 @@ pub struct CodePrismConfig {
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
 
+    // Project templates keyed by template name (stored separately from projects)
+    #[serde(default)]
+    pub project_templates: HashMap<String, ProjectConfig>,
+
     // Legacy single-project format (for backward compatibility)
     // These fields are merged into a default project if 'projects' is empty
     #[serde(default)]
@@ -94,6 +98,16 @@ impl CodePrismConfig {
     /// Get the first/default project config (for backward compatibility)
     pub fn get_default_project(&self) -> ProjectConfig {
         self.get_projects().into_iter().next().unwrap_or_default()
+    }
+
+    /// Get a project template by name
+    pub fn get_template(&self, name: &str) -> Option<ProjectConfig> {
+        self.project_templates.get(name).cloned()
+    }
+
+    /// List all project template names
+    pub fn list_templates(&self) -> Vec<String> {
+        self.project_templates.keys().cloned().collect()
     }
 }
 
@@ -377,9 +391,15 @@ impl CodePrismConfig {
 
     pub fn generate_template() -> String {
         r#"# CodePrism Configuration
+# For VS Code autocomplete, copy schemas/codeprism-config.schema.json to
+# your project's .vscode/ or add this line (adjust the path):
+# yaml-language-server: $schema=schemas/codeprism-config.schema.json
+
 tech_stacks:
   - name: "Rust"
     extensions: ["rs", "toml"]
+    # Built-in analyzers: file_count (always active), char_count
+    # Custom analyzers: add IDs from custom_regex_analyzers below
     analyzers: ["file_count", "char_count"]
     paths: ["crates/**"]
 
@@ -396,29 +416,76 @@ tech_stacks:
 
 global_excludes: ["**/.git/**", "**/node_modules/**", "**/target/**", "**/dist/**"]
 # database_url: "sqlite:codeprism.db" # Optional: Override DB URL
-# custom_analyzers:
+
+# Custom regex analyzers — each key becomes an analyzer ID usable in tech_stacks
+# custom_regex_analyzers:
 #   todo_finder: "(TODO|FIXME):.*"
+#   my_pattern:
+#     pattern: "\\b(regex)\\b"
+#     metric_key: "matches"   # default: "matches"
+#     category: "pattern"     # optional
+
+# External WASM analyzers — key is the analyzer ID, value is the .wasm path
 # external_analyzers:
 #   java_complexity: "analyzers/java_complexity.wasm"
+
+# Python script analyzers — place .py files in custom_analyzers/ dir, filename stem = analyzer ID
+# Optionally register overrides here:
+# custom_impl_analyzers:
+#   my_script:
+#     metric_key: "result"
+#     category: "custom"
 "#
         .to_string()
     }
 
     pub fn validate(&self) -> Result<(), AppError> {
-        for stack in &self.tech_stacks {
-            if stack.name.is_empty() {
-                return Err(AppError::Config(
-                    "Tech stack name cannot be empty".to_string(),
-                ));
-            }
-            if stack.extensions.is_empty() {
-                return Err(AppError::Config(format!(
-                    "Tech stack '{}' has no extensions",
-                    stack.name
-                )));
+        // Collect per-project validation errors
+        let mut errors: Vec<String> = Vec::new();
+
+        let projects = self.get_projects();
+        for project in &projects {
+            // Build set of valid analyzer IDs for this project
+            let mut valid_ids: Vec<&str> = vec!["file_count", "char_count"];
+            valid_ids.extend(project.custom_regex_analyzers.keys().map(|s| s.as_str()));
+            valid_ids.extend(project.custom_impl_analyzers.keys().map(|s| s.as_str()));
+            valid_ids.extend(project.external_analyzers.keys().map(|s| s.as_str()));
+            let valid_set: std::collections::HashSet<&str> =
+                valid_ids.iter().copied().collect();
+
+            for stack in &project.tech_stacks {
+                if stack.name.is_empty() {
+                    errors.push("Tech stack name cannot be empty".to_string());
+                    continue;
+                }
+                if stack.extensions.is_empty() {
+                    errors.push(format!(
+                        "Tech stack '{}' has no extensions",
+                        stack.name
+                    ));
+                }
+
+                // Check that referenced analyzer IDs exist
+                for analyzer_id in &stack.analyzers {
+                    if !valid_set.contains(analyzer_id.as_str()) {
+                        errors.push(format!(
+                            "Tech stack '{}' in project '{}' references unknown \
+                             analyzer '{}'. Available analyzers: {}",
+                            stack.name,
+                            project.name,
+                            analyzer_id,
+                            valid_ids.join(", ")
+                        ));
+                    }
+                }
             }
         }
-        Ok(())
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(AppError::Config(errors.join("\n")))
+        }
     }
 }
 

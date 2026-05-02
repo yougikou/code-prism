@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Deserialize)]
 pub struct CloneRequest {
     pub git_url: String,
+    #[serde(default)]
+    pub project_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -249,12 +251,14 @@ pub async fn clone_repo(
 
     match result {
         Ok(Ok((path, branches, current_branch))) => {
+            let project_name = req.project_name.clone();
             state.git_cache.insert(
                 repo_id.clone(),
                 crate::git_cache::GitRepo {
                     path,
                     git_url: req.git_url.clone(),
                     current_branch: current_branch.clone(),
+                    project_name,
                 },
             );
 
@@ -292,7 +296,7 @@ pub async fn list_repos(
     (StatusCode::OK, Json(serde_json::json!({ "repos": items }))).into_response()
 }
 
-/// DELETE /api/v1/git/{repo_id} — remove a cached repo and its directory
+/// DELETE /api/v1/git/{repo_id} — remove a cached repo, its directory, and associated project config
 pub async fn delete_repo(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -301,6 +305,8 @@ pub async fn delete_repo(
         Some(info) => info,
         None => return err_response(StatusCode::NOT_FOUND, "Repository not found".to_string()),
     };
+
+    let project_name = repo_info.project_name.clone();
 
     // Remove from cache first, then clean up on disk
     state.git_cache.remove(&repo_id);
@@ -311,7 +317,66 @@ pub async fn delete_repo(
         let _ = tokio::fs::remove_dir_all(&path).await;
     });
 
-    (StatusCode::OK, Json(serde_json::json!({ "message": "Repository removed" }))).into_response()
+    // If a project name was associated, also delete the project config from codeprism.yaml
+    if let Some(ref proj_name) = project_name {
+        // Read current YAML
+        let yaml_content = match std::fs::read_to_string(&state.config_path) {
+            Ok(c) => c,
+            Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read config file: {}", e)),
+        };
+
+        let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content) {
+            Ok(c) => c,
+            Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to parse config file: {}", e)),
+        };
+
+        // Remove project from config
+        let len_before = core_config.projects.len();
+        core_config.projects.retain(|p| p.name != *proj_name);
+        if core_config.projects.len() == len_before {
+            // Project not found in config — still ok, just no-op
+            (StatusCode::OK, Json(serde_json::json!({ "message": "Repository removed" }))).into_response()
+        } else {
+            // Write YAML atomically: tmp file + rename
+            let yaml_str = match serde_yaml::to_string(&core_config) {
+                Ok(s) => s,
+                Err(e) => return err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to serialize config: {}", e)),
+            };
+
+            let tmp_path = format!("{}.tmp", state.config_path);
+            if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
+                let _ = std::fs::remove_file(&tmp_path);
+                return err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write config: {}", e));
+            }
+            if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
+                let _ = std::fs::remove_file(&tmp_path);
+                return err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save config: {}", e));
+            }
+
+            // Rebuild in-memory AppConfig (UI subset)
+            let projects_config = core_config.get_projects();
+            let mut project_app_configs = Vec::new();
+            for project in &projects_config {
+                let views = crate::convert_project_views(project);
+                let mut tech_stacks: Vec<String> = project.tech_stacks.iter().map(|ts| ts.name.clone()).collect();
+                tech_stacks.sort();
+                project_app_configs.push(crate::config::ProjectAppConfig {
+                    name: project.name.clone(),
+                    views,
+                    tech_stacks,
+                });
+            }
+            let new_app_config = crate::config::AppConfig { projects: project_app_configs };
+
+            // Update in-memory state
+            *state.config.write().unwrap() = new_app_config;
+            *state.core_config.write().unwrap() = core_config;
+
+            (StatusCode::OK, Json(serde_json::json!({ "message": "Repository and project config removed" }))).into_response()
+        }
+    } else {
+        (StatusCode::OK, Json(serde_json::json!({ "message": "Repository removed" }))).into_response()
+    }
 }
 
 /// GET /api/v1/git/{repo_id}/branches

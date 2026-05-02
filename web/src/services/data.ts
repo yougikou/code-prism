@@ -246,6 +246,61 @@ export function mergeProjectNames(configNames: string[], dbProjectInfos: Project
   return [...configNames, ...dbOnly];
 }
 
+// ─── Project Template API ─────────────────────────────────────────────
+
+export async function fetchTemplates(): Promise<Record<string, FullProjectConfig>> {
+  const res = await fetch('/api/v1/config/templates');
+  if (!res.ok) throw new Error('Failed to fetch templates');
+  return await res.json();
+}
+
+export async function fetchTemplate(name: string): Promise<FullProjectConfig> {
+  const res = await fetch(`/api/v1/config/templates/${encodeURIComponent(name)}`);
+  if (!res.ok) throw new Error(`Template '${name}' not found`);
+  return await res.json();
+}
+
+export async function saveTemplate(
+  name: string,
+  config: FullProjectConfig
+): Promise<{ status: string; message: string }> {
+  const templateConfig: FullProjectConfig = {
+    ...config,
+    name,
+  };
+  const res = await fetch(`/api/v1/config/templates/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(templateConfig),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to save template' }));
+    throw new Error(err.error || 'Failed to save template');
+  }
+  return await res.json();
+}
+
+export async function deleteTemplate(name: string): Promise<void> {
+  const res = await fetch(`/api/v1/config/templates/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to delete template' }));
+    throw new Error(err.error || 'Failed to delete template');
+  }
+}
+
+// ─── Config Reload ──────────────────────────────────────────────────
+
+export async function reloadConfig(): Promise<{ status: string; message: string }> {
+  const res = await fetch('/api/v1/config/reload', { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to reload config' }));
+    throw new Error(err.error || 'Failed to reload config');
+  }
+  return await res.json();
+}
+
 // ─── Git Repo Management API ─────────────────────────────────────────────
 
 export interface BranchInfo {
@@ -273,11 +328,11 @@ export interface CommitsResponse {
   has_more: boolean;
 }
 
-export async function cloneRepo(gitUrl: string): Promise<CloneResponse> {
+export async function cloneRepo(gitUrl: string, projectName?: string): Promise<CloneResponse> {
   const res = await fetch('/api/v1/git/clone', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ git_url: gitUrl }),
+    body: JSON.stringify({ git_url: gitUrl, project_name: projectName || null }),
   });
   if (!res.ok) {
     const err = await res.json();

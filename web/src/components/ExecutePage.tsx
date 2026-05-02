@@ -15,6 +15,7 @@ import {
   fetchProjects,
   fetchFullProjectConfig,
   updateProjectConfig,
+  fetchTemplates,
   type BranchInfo,
   type CommitInfo,
   type RepoInfo,
@@ -163,7 +164,7 @@ function DiffComparison({ ref1, ref2, onSwap }: {
 
 export default function ExecutePage() {
   const { t } = useTranslation()
-  const { setProject, navigateTo } = useApp()
+  const { setProject, navigateTo, triggerConfigRefresh, configVersion } = useApp()
   // ── Repo list state ──
   const [reposList, setReposList] = useState<RepoInfo[]>([])
   const [loadingRepos, setLoadingRepos] = useState(true)
@@ -199,6 +200,10 @@ export default function ExecutePage() {
   const [existingProjectNames, setExistingProjectNames] = useState<string[]>([])
   const [projectAliasError, setProjectAliasError] = useState<string | null>(null)
 
+  // ── Template state ──
+  const [templates, setTemplates] = useState<Record<string, FullProjectConfig>>({})
+  const [selectedTemplate, setSelectedTemplate] = useState('')
+
   // ── UI state ──
   const [isBranchListOpen, setIsBranchListOpen] = useState(true)
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null)
@@ -226,7 +231,12 @@ export default function ExecutePage() {
     loadRepos()
   }, [loadRepos])
 
-  // ── Load existing project names for alias validation ──
+  // ── Load templates ──
+  useEffect(() => {
+    fetchTemplates().then(setTemplates).catch(() => {})
+  }, [])
+
+  // ── Load existing project names for alias validation (refresh when config changes) ──
   useEffect(() => {
     const loadNames = async () => {
       const names: string[] = []
@@ -245,7 +255,7 @@ export default function ExecutePage() {
       setExistingProjectNames(names)
     }
     loadNames()
-  }, [])
+  }, [configVersion])
 
   // ── Load commits for the selected branch ──
   const loadCommits = useCallback(async (repoId: string, branch: string, offset: number, search: string, append: boolean) => {
@@ -305,7 +315,7 @@ export default function ExecutePage() {
     setCloneError(null)
     setCloneSuccess(null)
     try {
-      const res = await cloneRepo(gitUrl.trim())
+      const res = await cloneRepo(gitUrl.trim(), projectName)
       setRepoId(res.repo_id)
       setBranches(res.branches)
       setCurrentBranch(res.current_branch)
@@ -314,21 +324,31 @@ export default function ExecutePage() {
       setRef1({ type: 'branch', value: initialBranch, label: `${initialBranch} (branch)` })
       setRef2(null)
       setCloneSuccess(t('execute.repoCloned', { branch: res.current_branch || 'unknown' }))
-      // Auto-create project config if alias is valid and unique
+      // Auto-create or apply template to project config if alias is valid and unique
       if (projectName && !projectAliasError) {
         try {
           const existing = await fetchFullProjectConfig(projectName).catch(() => null)
           if (!existing) {
-            const defaultConfig: FullProjectConfig = {
-              name: projectName,
-              tech_stacks: [],
-              global_excludes: [],
-              custom_regex_analyzers: {},
-              custom_impl_analyzers: {},
-              external_analyzers: {},
-              aggregation_views: {},
+            if (selectedTemplate && templates[selectedTemplate]) {
+              // Apply template
+              const appliedConfig: FullProjectConfig = {
+                ...templates[selectedTemplate],
+                name: projectName,
+              }
+              await updateProjectConfig(projectName, appliedConfig)
+            } else {
+              // Create empty config
+              const defaultConfig: FullProjectConfig = {
+                name: projectName,
+                tech_stacks: [],
+                global_excludes: [],
+                custom_regex_analyzers: {},
+                custom_impl_analyzers: {},
+                external_analyzers: {},
+                aggregation_views: {},
+              }
+              await updateProjectConfig(projectName, defaultConfig)
             }
-            await updateProjectConfig(projectName, defaultConfig)
           }
         } catch {
           // Non-critical — user can create config manually via Config page
@@ -367,6 +387,7 @@ export default function ExecutePage() {
     try {
       await deleteRepo(id)
       setReposList(prev => prev.filter(r => r.repo_id !== id))
+      triggerConfigRefresh()
     } catch (err) {
       setCloneError(err instanceof Error ? err.message : t('execute.failedToDeleteRepo'))
     } finally {
@@ -680,6 +701,25 @@ export default function ExecutePage() {
                     </div>
                   )}
                 </div>
+
+                {/* Template selection */}
+                {Object.keys(templates).length > 0 && (
+                  <div className="mt-3">
+                    <label className="block text-sm font-medium text-slate-400 mb-1.5">
+                      {t('templates.selectTemplate')}
+                    </label>
+                    <select
+                      value={selectedTemplate}
+                      onChange={(e) => setSelectedTemplate(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-2 focus:ring-sky-500"
+                    >
+                      <option value="">{t('templates.noTemplate')}</option>
+                      {Object.entries(templates).map(([name]) => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 {cloneError && (
                   <div className="mt-3 p-3 bg-red-900/30 border border-red-500/30 rounded-lg flex items-center gap-2 text-red-200 text-sm">

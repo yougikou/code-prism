@@ -503,6 +503,42 @@ pub async fn update_project_config(
     Json(serde_json::json!({"status": "ok", "message": "Configuration saved successfully"})).into_response()
 }
 
+/// POST /api/v1/config/reload — reload config from YAML file on disk
+pub async fn reload_config(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let yaml_content = match std::fs::read_to_string(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to read config: {}", e)}))).into_response(),
+    };
+
+    let core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to parse config: {}", e)}))).into_response(),
+    };
+
+    // Rebuild AppConfig (UI subset)
+    let projects_config = core_config.get_projects();
+    let mut project_app_configs = Vec::new();
+    for project in &projects_config {
+        let views = crate::convert_project_views(project);
+        let mut tech_stacks: Vec<String> = project.tech_stacks.iter().map(|ts| ts.name.clone()).collect();
+        tech_stacks.sort();
+        project_app_configs.push(crate::config::ProjectAppConfig {
+            name: project.name.clone(),
+            views,
+            tech_stacks,
+        });
+    }
+    let new_app_config = crate::config::AppConfig { projects: project_app_configs };
+
+    // Update in-memory state
+    *state.config.write().unwrap() = new_app_config;
+    *state.core_config.write().unwrap() = core_config;
+
+    Json(serde_json::json!({"status": "ok", "message": "Configuration reloaded successfully"})).into_response()
+}
+
 #[utoipa::path(
     post,
     path = "/api/v1/scan",

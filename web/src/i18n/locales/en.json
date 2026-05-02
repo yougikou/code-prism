@@ -121,7 +121,8 @@
       "techStacks": "Tech Stacks",
       "globalExcludes": "Global Excludes",
       "analyzers": "Custom Analyzers",
-      "views": "Aggregation Views"
+      "views": "Aggregation Views",
+      "templates": "Project Templates"
     },
     "techStack": {
       "title": "Tech Stack: {{name}}",
@@ -173,5 +174,18 @@
     "en": "English",
     "zh-CN": "中文 (简体)",
     "ja": "日本語"
+  },
+  "templates": {
+    "selectTemplate": "Apply Template (Optional)",
+    "noTemplate": "None",
+    "saveAsTemplate": "Save as Template",
+    "templateNamePlaceholder": "Enter template name...",
+    "saved": "Template '{{name}}' saved successfully!",
+    "saveError": "Failed to save template",
+    "noTemplates": "No templates yet. Save a project configuration as a template to reuse it.",
+    "techStacks": "tech stack(s)",
+    "regexAnalyzers": "regex analyzer(s)",
+    "views": "view(s)",
+    "deleteConfirm": "Delete template '{{name}}'?"
   }
 }

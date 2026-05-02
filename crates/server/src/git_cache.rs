@@ -8,6 +8,8 @@ pub struct GitRepo {
     pub path: String,
     pub git_url: String,
     pub current_branch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
 }
 
 #[derive(Clone, Debug)]

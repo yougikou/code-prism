@@ -28,6 +28,7 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
         global_excludes: vec!["**/exclude_this/**".to_string()],
 
         database_url: None,
+        project_templates: HashMap::new(),
         custom_regex_analyzers: HashMap::new(),
         custom_impl_analyzers: HashMap::new(),
         external_analyzers: HashMap::new(),

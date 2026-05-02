@@ -121,7 +121,8 @@
       "techStacks": "テクノロジースタック",
       "globalExcludes": "グローバル除外",
       "analyzers": "カスタム分析器",
-      "views": "集計ビュー"
+      "views": "集計ビュー",
+      "templates": "プロジェクトテンプレート"
     },
     "techStack": {
       "title": "テクノロジースタック：{{name}}",
@@ -173,5 +174,18 @@
     "en": "English",
     "zh-CN": "中文（简体）",
     "ja": "日本語"
+  },
+  "templates": {
+    "selectTemplate": "テンプレートを適用（オプション）",
+    "noTemplate": "なし",
+    "saveAsTemplate": "テンプレートとして保存",
+    "templateNamePlaceholder": "テンプレート名を入力...",
+    "saved": "テンプレート '{{name}}' を保存しました！",
+    "saveError": "テンプレートの保存に失敗しました",
+    "noTemplates": "テンプレートがまだありません。プロジェクト設定をテンプレートとして保存すると、他のプロジェクトで再利用できます。",
+    "techStacks": "テクノロジースタック",
+    "regexAnalyzers": "正規表現分析器",
+    "views": "ビュー",
+    "deleteConfirm": "テンプレート '{{name}}' を削除しますか？"
   }
 }

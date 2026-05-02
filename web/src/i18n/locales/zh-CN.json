@@ -121,7 +121,8 @@
       "techStacks": "技术栈",
       "globalExcludes": "全局排除",
       "analyzers": "自定义分析器",
-      "views": "聚合视图"
+      "views": "聚合视图",
+      "templates": "项目模板"
     },
     "techStack": {
       "title": "技术栈：{{name}}",
@@ -173,5 +174,18 @@
     "en": "English",
     "zh-CN": "中文（简体）",
     "ja": "日本語"
+  },
+  "templates": {
+    "selectTemplate": "应用模板（可选）",
+    "noTemplate": "无",
+    "saveAsTemplate": "另存为模板",
+    "templateNamePlaceholder": "输入模板名称...",
+    "saved": "模板 '{{name}}' 保存成功！",
+    "saveError": "保存模板失败",
+    "noTemplates": "暂无模板。将项目配置另存为模板，以便其他项目复用。",
+    "techStacks": "个技术栈",
+    "regexAnalyzers": "个正则分析器",
+    "views": "个视图",
+    "deleteConfirm": "删除模板 '{{name}}'？"
   }
 }

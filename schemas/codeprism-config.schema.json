@@ -1,0 +1,278 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "https://codeprism.dev/schemas/codeprism-config.schema.json",
+  "title": "CodePrism Configuration",
+  "description": "Schema for CodePrism configuration files (codeprism.yaml)",
+  "type": "object",
+  "properties": {
+    "database_url": {
+      "type": "string",
+      "description": "SQLite database URL (e.g., sqlite:codeprism.db)",
+      "default": "sqlite:codeprism.db"
+    },
+    "projects": {
+      "type": "array",
+      "description": "Multi-project configuration list",
+      "items": {
+        "$ref": "#/$defs/project-config"
+      }
+    },
+    "project_templates": {
+      "type": "object",
+      "description": "Reusable project templates",
+      "additionalProperties": {
+        "$ref": "#/$defs/project-config"
+      }
+    },
+    "tech_stacks": {
+      "type": "array",
+      "description": "Tech stack definitions (legacy single-project format)",
+      "items": {
+        "$ref": "#/$defs/tech-stack"
+      }
+    },
+    "global_excludes": {
+      "type": "array",
+      "description": "Glob patterns for files to exclude globally",
+      "items": {
+        "type": "string"
+      },
+      "default": ["**/.git/**", "**/node_modules/**", "**/target/**", "**/dist/**"]
+    },
+    "custom_regex_analyzers": {
+      "type": "object",
+      "description": "Custom regex-based analyzers. Each key becomes an analyzer ID usable in tech_stacks analyzers.",
+      "additionalProperties": {
+        "$ref": "#/$defs/custom-analyzer-def"
+      }
+    },
+    "custom_impl_analyzers": {
+      "type": "object",
+      "description": "Override settings for script/WASM analyzers. Key must match the analyzer ID (filename stem for scripts).",
+      "additionalProperties": {
+        "$ref": "#/$defs/impl-analyzer-config"
+      }
+    },
+    "external_analyzers": {
+      "type": "object",
+      "description": "External WASM analyzers. Key is analyzer ID, value is path to .wasm file.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "aggregation_views": {
+      "type": "object",
+      "description": "Aggregation views for the dashboard. Keys are view IDs.",
+      "additionalProperties": {
+        "$ref": "#/$defs/aggregation-view"
+      }
+    }
+  },
+  "$defs": {
+    "project-config": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Project name"
+        },
+        "tech_stacks": {
+          "type": "array",
+          "description": "Tech stack definitions for this project",
+          "items": {
+            "$ref": "#/$defs/tech-stack"
+          }
+        },
+        "global_excludes": {
+          "type": "array",
+          "description": "Glob patterns for files to exclude",
+          "items": { "type": "string" }
+        },
+        "custom_regex_analyzers": {
+          "type": "object",
+          "description": "Custom regex-based analyzers",
+          "additionalProperties": {
+            "$ref": "#/$defs/custom-analyzer-def"
+          }
+        },
+        "custom_impl_analyzers": {
+          "type": "object",
+          "description": "Override settings for script/WASM analyzers",
+          "additionalProperties": {
+            "$ref": "#/$defs/impl-analyzer-config"
+          }
+        },
+        "external_analyzers": {
+          "type": "object",
+          "description": "External WASM analyzers",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "aggregation_views": {
+          "type": "object",
+          "description": "Aggregation views",
+          "additionalProperties": {
+            "$ref": "#/$defs/aggregation-view"
+          }
+        }
+      },
+      "required": ["name"]
+    },
+    "tech-stack": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the tech stack"
+        },
+        "extensions": {
+          "type": "array",
+          "description": "File extensions for this tech stack",
+          "items": { "type": "string" },
+          "examples": [["rs", "toml"], ["js", "ts", "tsx"]]
+        },
+        "analyzers": {
+          "type": "array",
+          "description": "Analyzer IDs to run. Built-in: file_count (always active), char_count. Use custom analyzer keys from custom_regex_analyzers, custom_impl_analyzers, external_analyzers, or Python scripts in custom_analyzers/.",
+          "items": {
+            "anyOf": [
+              { "enum": ["file_count", "char_count"] },
+              { "type": "string" }
+            ]
+          },
+          "uniqueItems": true,
+          "examples": [["file_count", "char_count"]]
+        },
+        "paths": {
+          "type": "array",
+          "description": "Glob patterns to restrict this tech stack to specific paths",
+          "items": { "type": "string" }
+        },
+        "excludes": {
+          "type": "array",
+          "description": "Glob patterns to exclude files from this tech stack",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["name", "extensions", "analyzers"]
+    },
+    "custom-analyzer-def": {
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Regex pattern (short form)"
+        },
+        {
+          "type": "object",
+          "description": "Regex analyzer with explicit config",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Regex pattern to search for"
+            },
+            "metric_key": {
+              "type": "string",
+              "description": "Metric key for results (default: \"matches\")",
+              "default": "matches"
+            },
+            "category": {
+              "type": "string",
+              "description": "Category for grouping results"
+            }
+          },
+          "required": ["pattern"]
+        }
+      ]
+    },
+    "impl-analyzer-config": {
+      "type": "object",
+      "properties": {
+        "metric_key": {
+          "type": "string",
+          "description": "Override metric key"
+        },
+        "category": {
+          "type": "string",
+          "description": "Override category"
+        }
+      }
+    },
+    "aggregation-view": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Display title for the view"
+        },
+        "tech_stacks": {
+          "type": "array",
+          "description": "Tech stacks this view applies to. Empty or \"All\" means Summary tab.",
+          "items": { "type": "string" }
+        },
+        "include_children": {
+          "type": "boolean",
+          "description": "Whether to include child paths in aggregation",
+          "default": true
+        },
+        "group_by": {
+          "type": "array",
+          "description": "Fields to group results by",
+          "items": { "type": "string" }
+        },
+        "chart_type": {
+          "type": "string",
+          "description": "Override chart type for the frontend"
+        },
+        "change_type_mode": {
+          "type": "string",
+          "description": "Change type display mode: \"all\" (stacked), \"switchable\" (A/M/D toggle), or undefined (no filtering)",
+          "enum": ["all", "switchable"]
+        },
+        "func": {
+          "$ref": "#/$defs/aggregation-func"
+        }
+      },
+      "required": ["title", "func"]
+    },
+    "aggregation-func": {
+      "type": "object",
+      "oneOf": [
+        {
+          "properties": {
+            "type": { "const": "top_n" },
+            "analyzer_id": { "type": "string" },
+            "metric_key": { "type": "string" },
+            "category": { "type": "string" },
+            "limit": { "type": "integer", "minimum": 1 },
+            "order": { "type": "string", "enum": ["asc", "desc"], "default": "desc" }
+          },
+          "required": ["type", "limit"]
+        },
+        {
+          "properties": {
+            "type": { "enum": ["sum", "avg", "min", "max"] },
+            "analyzer_id": { "type": "string" },
+            "metric_key": { "type": "string" },
+            "category": { "type": "string" }
+          },
+          "required": ["type"]
+        },
+        {
+          "properties": {
+            "type": { "const": "distribution" },
+            "analyzer_id": { "type": "string" },
+            "metric_key": { "type": "string" },
+            "category": { "type": "string" },
+            "buckets": {
+              "type": "array",
+              "description": "Bucket boundaries for distribution",
+              "items": { "type": "number" }
+            }
+          },
+          "required": ["type", "buckets"]
+        }
+      ]
+    }
+  }
+}
