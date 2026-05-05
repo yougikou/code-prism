@@ -23,7 +23,18 @@
     "loading": "加载中...",
     "noViewsTitle": "未找到配置的视图",
     "noViewsDesc": "该项目在 codeprism.yaml 中没有配置视图，或尚无扫描数据。请先扫描仓库。",
-    "goToExecute": "前往执行页面"
+    "goToExecute": "前往执行页面",
+    "scanSummary": "扫描执行摘要",
+    "totalFiles": "扫描文件数",
+    "analyzersLoaded": "已加载分析器数",
+    "analyzersExecuted": "已执行分析器数",
+    "totalExecutions": "分析器执行总次数",
+    "totalErrors": "错误数",
+    "loadErrors": "加载错误",
+    "executionErrors": "执行错误",
+    "noSummary": "此扫描暂无摘要数据",
+    "analyzerId": "分析器",
+    "filesAnalyzed": "分析文件数"
   },
   "table": {
     "label": "标签",
@@ -103,6 +114,9 @@
     "clickToSelectAs": "点击以选择为 {{slot}}",
     "viewDashboard": "查看结果 → 仪表板",
     "startingScan": "正在开始扫描...",
+    "scanCompleted": "扫描完成",
+    "scanningProgress": "扫描中... {{progress}}%",
+    "scanProgress": "进度",
     "projectAlias": "项目别名",
     "projectAliasExists": "此项目名称已存在，请使用唯一的名称。",
     "continueToStep2": "继续到第 2 步"

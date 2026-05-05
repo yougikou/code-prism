@@ -23,7 +23,18 @@
     "loading": "Loading...",
     "noViewsTitle": "No configured views found",
     "noViewsDesc": "This project has no views configured in codeprism.yaml, or has no scan data yet. Start by scanning a repository.",
-    "goToExecute": "Go to Execute Page"
+    "goToExecute": "Go to Execute Page",
+    "scanSummary": "Scan Execution Summary",
+    "totalFiles": "Files Scanned",
+    "analyzersLoaded": "Analyzers Loaded",
+    "analyzersExecuted": "Analyzers Executed",
+    "totalExecutions": "Total Analyzer Executions",
+    "totalErrors": "Errors",
+    "loadErrors": "Load Errors",
+    "executionErrors": "Execution Errors",
+    "noSummary": "No summary data available for this scan",
+    "analyzerId": "Analyzer",
+    "filesAnalyzed": "Files Analyzed"
   },
   "table": {
     "label": "Label",
@@ -103,6 +114,9 @@
     "clickToSelectAs": "Click to select as {{slot}}",
     "viewDashboard": "View Results → Dashboard",
     "startingScan": "Starting scan...",
+    "scanCompleted": "Scan completed successfully",
+    "scanningProgress": "Scanning... {{progress}}%",
+    "scanProgress": "Progress",
     "projectAlias": "Project Alias",
     "projectAliasExists": "This project name already exists. Please use a unique name.",
     "continueToStep2": "Continue to Step 2"

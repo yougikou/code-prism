@@ -23,7 +23,18 @@
     "loading": "読み込み中...",
     "noViewsTitle": "設定されたビューが見つかりません",
     "noViewsDesc": "このプロジェクトには codeprism.yaml で設定されたビューがないか、まだスキャンデータがありません。まずリポジトリをスキャンしてください。",
-    "goToExecute": "実行ページへ"
+    "goToExecute": "実行ページへ",
+    "scanSummary": "スキャン実行サマリー",
+    "totalFiles": "スキャンファイル数",
+    "analyzersLoaded": "ロード済みアナライザー数",
+    "analyzersExecuted": "実行アナライザー数",
+    "totalExecutions": "アナライザー実行総数",
+    "totalErrors": "エラー数",
+    "loadErrors": "ロードエラー",
+    "executionErrors": "実行エラー",
+    "noSummary": "このスキャンのサマリーデータはありません",
+    "analyzerId": "アナライザー",
+    "filesAnalyzed": "分析ファイル数"
   },
   "table": {
     "label": "ラベル",
@@ -103,6 +114,9 @@
     "clickToSelectAs": "クリックして {{slot}} として選択",
     "viewDashboard": "結果を見る → ダッシュボード",
     "startingScan": "スキャンを開始中...",
+    "scanCompleted": "スキャンが完了しました",
+    "scanningProgress": "スキャン中... {{progress}}%",
+    "scanProgress": "進捗",
     "projectAlias": "プロジェクトエイリアス",
     "projectAliasExists": "このプロジェクト名は既に存在します。一意の名前を使用してください。",
     "continueToStep2": "ステップ 2 に進む"

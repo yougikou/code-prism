@@ -173,7 +173,7 @@ async fn main() -> Result<()> {
             let db_url = resolve_db_url(&config, config_path);
             let db = Db::new(&db_url).await?;
 
-            let scanner = Scanner::with_config(db, config);
+            let mut scanner = Scanner::with_config(db, config);
 
             let p_path = std::path::Path::new(path).canonicalize()?;
             let default_name = p_path
@@ -258,6 +258,7 @@ async fn main() -> Result<()> {
             };
             let db_url = resolve_db_url(&config, config_path);
             let db = Db::new(&db_url).await?;
+            db.migrate().await?;
 
             println!("Starting server...");
             codeprism_server::run_server(db, config, config_path.to_string(), *port).await?;

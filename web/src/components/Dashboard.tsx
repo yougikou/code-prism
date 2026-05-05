@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { MetricCard } from './widgets/MetricCard';
 
 import ChartRenderer from './ChartRenderer';
-import { fetchView, fetchProjects, mergeProjectNames, type AggregationResult, type AppConfig, type ProjectInfo, getDefaultProject, getProjectNames } from '@/services/data';
+import { fetchView, fetchProjects, fetchScanSummary, mergeProjectNames, type AggregationResult, type AppConfig, type ProjectInfo, type ScanSummary, getDefaultProject, getProjectNames } from '@/services/data';
 import { Activity, FileText } from 'lucide-react';
 
 
@@ -34,6 +34,7 @@ const Dashboard = () => {
   const [viewDataMap, setViewDataMap] = useState<Record<string, AggregationResult[]>>({});
   const [loading, setLoading] = useState(true);
   const [runs, setRuns] = useState<any[]>([]);
+  const [scanSummary, setScanSummary] = useState<ScanSummary | null>(null);
   // Track change_type filter per view (for switchable mode)
   const [changeTypeFilters, setChangeTypeFilters] = useState<Record<string, string>>({});
 
@@ -202,6 +203,26 @@ const Dashboard = () => {
     // Note: changeTypeFilters is intentionally excluded from dependencies
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProject, selectedRunId, activeViews, selectedTechStack]);
+
+  // Fetch scan summary when a run is selected
+  useEffect(() => {
+    if (!selectedRunId || !currentProject) {
+      setScanSummary(null);
+      return;
+    }
+
+    let isActive = true;
+
+    const loadSummary = async () => {
+      const summary = await fetchScanSummary(currentProject, selectedRunId);
+      if (isActive) {
+        setScanSummary(summary);
+      }
+    };
+    loadSummary();
+
+    return () => { isActive = false; };
+  }, [currentProject, selectedRunId]);
 
   // Handle individual switchable filter changes - only fetch the affected view
   const [lastChangeTypeFilters, setLastChangeTypeFilters] = useState<Record<string, string>>({});
@@ -791,6 +812,100 @@ const Dashboard = () => {
                 );
               })}
             </div>
+
+            {/* Scan Execution Summary */}
+            {selectedRunId && (
+              <Card className="border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 backdrop-blur shadow-sm dark:shadow-xl transition-colors duration-200">
+                <CardHeader className="border-b border-slate-100 dark:border-slate-700/50">
+                  <CardTitle className="text-lg font-semibold text-slate-800 dark:text-slate-200">
+                    {t('dashboard.scanSummary')}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-6">
+                  {scanSummary ? (
+                    <div className="space-y-4">
+                      {/* Overview stats row */}
+                      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 text-sm">
+                        <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
+                          <div className="text-2xl font-bold text-sky-600 dark:text-sky-400">{scanSummary.total_files_scanned.toLocaleString()}</div>
+                          <div className="text-slate-500 dark:text-slate-400 mt-1">{t('dashboard.totalFiles')}</div>
+                        </div>
+                        <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
+                          <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{scanSummary.total_analyzers_loaded.toLocaleString()}</div>
+                          <div className="text-slate-500 dark:text-slate-400 mt-1">{t('dashboard.analyzersLoaded')}</div>
+                        </div>
+                        <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
+                          <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{scanSummary.total_analyzers_executed.toLocaleString()}</div>
+                          <div className="text-slate-500 dark:text-slate-400 mt-1">{t('dashboard.analyzersExecuted')}</div>
+                        </div>
+                        <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
+                          <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{scanSummary.total_analyzer_executions.toLocaleString()}</div>
+                          <div className="text-slate-500 dark:text-slate-400 mt-1">{t('dashboard.totalExecutions')}</div>
+                        </div>
+                        <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
+                          <div className={`text-2xl font-bold ${(scanSummary.load_errors.length > 0 || scanSummary.total_errors > 0) ? 'text-red-500' : 'text-green-500'}`}>
+                            {scanSummary.total_errors.toLocaleString()}
+                          </div>
+                          <div className="text-slate-500 dark:text-slate-400 mt-1">{t('dashboard.totalErrors')}</div>
+                        </div>
+                        <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
+                          <div className={`text-2xl font-bold ${(scanSummary.load_errors.length > 0 || scanSummary.total_errors > 0) ? 'text-amber-500' : 'text-green-500'}`}>
+                            {scanSummary.load_errors.length.toLocaleString()}
+                          </div>
+                          <div className="text-slate-500 dark:text-slate-400 mt-1">{t('dashboard.loadErrors')}</div>
+                        </div>
+                      </div>
+
+                      {/* Load errors detail */}
+                      {scanSummary.load_errors.length > 0 && (
+                        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm">
+                          <div className="font-medium text-red-700 dark:text-red-400 mb-1">{t('dashboard.loadErrors')}:</div>
+                          <ul className="list-disc list-inside text-red-600 dark:text-red-300 space-y-1">
+                            {scanSummary.load_errors.map((err, i) => (
+                              <li key={i} className="text-xs break-all">{err}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Per-analyzer table */}
+                      {scanSummary.analyzer_stats.length > 0 && (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
+                            <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50">
+                              <tr>
+                                <th className="px-3 py-2">{t('dashboard.analyzerId')}</th>
+                                <th className="px-3 py-2 text-right">{t('dashboard.filesAnalyzed')}</th>
+                                <th className="px-3 py-2 text-right">{t('dashboard.executionErrors')}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {scanSummary.analyzer_stats.map((stat) => (
+                                <tr key={stat.analyzer_id} className="border-b border-slate-200 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/20">
+                                  <td className="px-3 py-2 font-mono text-xs font-medium">{stat.analyzer_id}</td>
+                                  <td className="px-3 py-2 text-right">{stat.files_analyzed.toLocaleString()}</td>
+                                  <td className="px-3 py-2 text-right">
+                                    {stat.execution_errors > 0 ? (
+                                      <span className="text-red-500 font-medium">{stat.execution_errors}</span>
+                                    ) : (
+                                      <span className="text-green-500">0</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-4">
+                      {t('dashboard.noSummary')}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )}
 
           </div>
         </main>

@@ -18,7 +18,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::config::{AppConfig, ProjectAppConfig, SourceConfig, TopNParams, ViewConfig, ViewKind};
 use crate::routes::{
-    AppState, get_view, get_scans, static_handler, execute_scan,
+    AppState, get_scan_summary, get_view, get_scans, static_handler, execute_scan, get_scan_job,
 };
 use crate::git_routes::{clone_repo, list_branches, checkout_branch, list_commits, list_repos, delete_repo};
 
@@ -28,6 +28,7 @@ use crate::git_routes::{clone_repo, list_branches, checkout_branch, list_commits
         crate::routes::get_view,
         crate::routes::get_scans,
         crate::routes::get_config,
+        crate::routes::get_scan_job,
     ),
     components(schemas(
         crate::aggregation::AggregationResult,
@@ -36,7 +37,9 @@ use crate::git_routes::{clone_repo, list_branches, checkout_branch, list_commits
         crate::config::ViewConfig,
         crate::config::ViewKind,
         crate::config::SourceConfig,
-        crate::config::TopNParams
+        crate::config::TopNParams,
+        crate::routes::ScanStartedResponse,
+        crate::routes::ScanJobResponse,
     ))
 )]
 struct ApiDoc;
@@ -254,11 +257,16 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, config_path: Strin
         .route("/api/v1/git/:repo_id/commits", get(list_commits))
         // Scan operations
         .route("/api/v1/scan", post(execute_scan))
+        .route("/api/v1/scan-jobs/:id", get(get_scan_job))
         // Project operations (views, scans listing)
         .route("/api/v1/projects/:project_name/scans", get(get_scans))
         .route(
             "/api/v1/projects/:project_name/scans/:scan_id/views/:view_id",
             get(get_view),
+        )
+        .route(
+            "/api/v1/projects/:project_name/scans/:scan_id/summary",
+            get(get_scan_summary),
         )
         // Swagger UI
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))

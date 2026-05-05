@@ -11,6 +11,7 @@ import {
   listRepos,
   deleteRepo,
   executeScanWithRepo,
+  fetchScanJob,
   fetchConfig,
   fetchProjects,
   fetchFullProjectConfig,
@@ -53,6 +54,9 @@ interface ScanProgress {
   status: 'idle' | 'loading' | 'success' | 'error'
   message: string
   projectName?: string
+  jobId?: number
+  scanId?: number | null
+  progress?: number
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -308,6 +312,43 @@ export default function ExecutePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [commitSearch])
 
+  // ── Scan job polling ──
+  useEffect(() => {
+    const jobId = scanProgress.jobId
+    if (!jobId || scanProgress.status === 'success' || scanProgress.status === 'error') return
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const job = await fetchScanJob(jobId)
+        if (job.status === 'completed') {
+          setScanProgress({
+            status: 'success',
+            message: t('execute.scanCompleted'),
+            projectName: job.project_name,
+            scanId: job.scan_id,
+            progress: 100,
+          })
+        } else if (job.status === 'failed') {
+          setScanProgress({
+            status: 'error',
+            message: job.error_message || t('execute.scanFailed'),
+          })
+        } else {
+          setScanProgress(prev => ({
+            ...prev,
+            progress: job.progress,
+            message: t('execute.scanningProgress', { progress: job.progress }),
+          }))
+        }
+      } catch {
+        // network error during poll — keep trying
+      }
+    }, 2000)
+
+    return () => clearInterval(pollInterval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanProgress.jobId, scanProgress.status])
+
   // ── Clone handler ──
   const handleClone = async () => {
     if (!gitUrl.trim()) return
@@ -492,7 +533,7 @@ export default function ExecutePage() {
       reposList.find(r => r.repo_id === repoId)?.git_url || ''
     ) || 'scanned_project'
     try {
-      await executeScanWithRepo({
+      const response = await executeScanWithRepo({
         repo_id: repoId,
         ref_1: ref1.value,
         ref_2: ref2?.value,
@@ -500,9 +541,11 @@ export default function ExecutePage() {
         scan_mode: scanMode!,
       })
       setScanProgress({
-        status: 'success',
+        status: 'loading',
         message: t('execute.scanQueued', { project: scanProjectName, mode: scanMode === 'diff' ? t('execute.diffScan') : t('execute.snapshotScan') }),
         projectName: scanProjectName,
+        jobId: response.job_id,
+        progress: 0,
       })
     } catch (err) {
       setScanProgress({
@@ -1141,28 +1184,46 @@ export default function ExecutePage() {
 
                 {/* Progress */}
                 {scanProgress.status !== 'idle' && (
-                  <div
-                    className={classNames(
-                      'p-3 rounded-lg mb-4 text-sm flex items-center gap-2',
-                      scanProgress.status === 'success'
-                        ? 'bg-green-900/30 border border-green-500/30 text-green-200'
-                        : scanProgress.status === 'error'
-                        ? 'bg-red-900/30 border border-red-500/30 text-red-200'
-                        : 'bg-blue-900/30 border border-blue-500/30 text-blue-200',
-                    )}
-                  >
-                    {scanProgress.status === 'loading' && <LoaderIcon className="w-4 h-4 animate-spin shrink-0" />}
-                    {scanProgress.status === 'success' && <CheckIcon className="w-4 h-4 shrink-0" />}
-                    {scanProgress.status === 'error' && <XIcon className="w-4 h-4 shrink-0" />}
-                    <span className="flex-1">{scanProgress.message}</span>
-                    {scanProgress.status === 'success' && scanProgress.projectName && (
-                      <button
-                        onClick={() => goToDashboard(scanProgress.projectName!)}
-                        className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors flex items-center gap-1.5 shrink-0"
-                      >
-                        <ArrowRightIcon className="w-3.5 h-3.5" />
-                        {t('execute.viewDashboard')}
-                      </button>
+                  <div className="mb-4">
+                    {/* Status message */}
+                    <div
+                      className={classNames(
+                        'p-3 rounded-lg text-sm flex items-center gap-2',
+                        scanProgress.status === 'success'
+                          ? 'bg-green-900/30 border border-green-500/30 text-green-200'
+                          : scanProgress.status === 'error'
+                          ? 'bg-red-900/30 border border-red-500/30 text-red-200'
+                          : 'bg-blue-900/30 border border-blue-500/30 text-blue-200',
+                      )}
+                    >
+                      {scanProgress.status === 'loading' && <LoaderIcon className="w-4 h-4 animate-spin shrink-0" />}
+                      {scanProgress.status === 'success' && <CheckIcon className="w-4 h-4 shrink-0" />}
+                      {scanProgress.status === 'error' && <XIcon className="w-4 h-4 shrink-0" />}
+                      <span className="flex-1">{scanProgress.message}</span>
+                      {scanProgress.status === 'success' && scanProgress.projectName && (
+                        <button
+                          onClick={() => goToDashboard(scanProgress.projectName!)}
+                          className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors flex items-center gap-1.5 shrink-0"
+                        >
+                          <ArrowRightIcon className="w-3.5 h-3.5" />
+                          {t('execute.viewDashboard')}
+                        </button>
+                      )}
+                    </div>
+                    {/* Progress bar (only during loading/running) */}
+                    {scanProgress.status === 'loading' && scanProgress.progress != null && (
+                      <div className="mt-2">
+                        <div className="flex justify-between text-xs text-slate-400 mb-1">
+                          <span>{t('execute.scanProgress')}</span>
+                          <span>{scanProgress.progress}%</span>
+                        </div>
+                        <div className="w-full bg-slate-700 rounded-full h-2">
+                          <div
+                            className="bg-sky-500 h-2 rounded-full transition-all duration-500 ease-out"
+                            style={{ width: `${scanProgress.progress}%` }}
+                          />
+                        </div>
+                      </div>
                     )}
                   </div>
                 )}

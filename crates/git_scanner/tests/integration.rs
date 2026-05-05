@@ -92,7 +92,7 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
 
     // 3. Test SNAPSHOT Scan (on Commit 2)
     // Use with_config to inject test configuration
-    let scanner = Scanner::with_config(db.clone(), config.clone());
+    let mut scanner = Scanner::with_config(db.clone(), config.clone());
     scanner
         .scan_snapshot(
             repo_path.to_str().unwrap(),

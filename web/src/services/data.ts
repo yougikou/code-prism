@@ -390,7 +390,7 @@ export interface ScanWithRepoRequest {
   scan_mode: 'snapshot' | 'diff';
 }
 
-export async function executeScanWithRepo(req: ScanWithRepoRequest): Promise<{ scan_id: number; project_name: string; status: string; message: string }> {
+export async function executeScanWithRepo(req: ScanWithRepoRequest): Promise<ScanStartedResponse> {
   const res = await fetch('/api/v1/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -408,6 +408,70 @@ export async function executeScanWithRepo(req: ScanWithRepoRequest): Promise<{ s
     throw new Error(err.message || err.error || 'Scan failed');
   }
   return res.json();
+}
+
+// ─── Scan Job Tracking ──────────────────────────────────────────────
+
+export interface ScanStartedResponse {
+  job_id: number;
+  project_name: string;
+  status: string;
+  message: string;
+}
+
+export interface ScanJobResponse {
+  job_id: number;
+  project_name: string;
+  scan_mode: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  progress: number;
+  error_message: string | null;
+  scan_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchScanJob(jobId: number): Promise<ScanJobResponse> {
+  const res = await fetch(`/api/v1/scan-jobs/${jobId}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to fetch scan job' }));
+    throw new Error(err.error || 'Failed to fetch scan job');
+  }
+  return res.json();
+}
+
+// ─── Scan Execution Summary ─────────────────────────────────────────
+
+export interface AnalyzerStatItem {
+  analyzer_id: string;
+  files_analyzed: number;
+  execution_errors: number;
+  error_details: string[];
+}
+
+export interface ScanSummary {
+  scan_id: number;
+  total_files_scanned: number;
+  total_analyzers_loaded: number;
+  total_analyzers_executed: number;
+  total_analyzer_executions: number;
+  total_errors: number;
+  load_errors: string[];
+  analyzer_stats: AnalyzerStatItem[];
+}
+
+export async function fetchScanSummary(projectName: string, scanId: string | number): Promise<ScanSummary | null> {
+  try {
+    const res = await fetch(`/api/v1/projects/${encodeURIComponent(projectName)}/scans/${scanId}/summary`);
+    if (!res.ok) {
+      if (res.status === 404) return null;
+      throw new Error(`Failed to fetch scan summary: ${res.statusText}`);
+    }
+    return await res.json();
+  } catch (error) {
+    console.error("Error fetching scan summary:", error);
+    return null;
+  }
 }
 
 // ─── Repo Listing & Management ──────────────────────────────────────────────

@@ -18,6 +18,10 @@ pub struct Scanner {
     db: Db,
     analyzers: HashMap<String, Box<dyn Analyzer>>,
     config: Arc<CodePrismConfig>,
+    // Scan summary tracking (accumulated during scan lifecycle)
+    analyzer_load_errors: Vec<String>,
+    analyzer_exec_count: HashMap<String, u64>,
+    analyzer_error_details: HashMap<String, Vec<String>>,
 }
 
 // Event to decouple Git (Sync) from DB (Async)
@@ -53,6 +57,7 @@ impl Scanner {
 
     pub fn with_config(db: Db, config: CodePrismConfig) -> Self {
         let mut analyzers: HashMap<String, Box<dyn Analyzer>> = HashMap::new();
+        let mut load_errors: Vec<String> = Vec::new();
 
         // 1. Built-in Analyzers
         let fc = FileCountAnalyzer::new();
@@ -90,7 +95,9 @@ impl Scanner {
                     analyzers.insert(ra.id().to_string(), Box::new(ra));
                 }
                 Err(e) => {
-                    eprintln!("Failed to compile regex analyzer '{}': {}", name, e);
+                    let msg = format!("Failed to compile regex analyzer '{}': {}", name, e);
+                    eprintln!("{}", msg);
+                    load_errors.push(msg);
                 }
             }
         }
@@ -102,10 +109,12 @@ impl Scanner {
                     analyzers.insert(wa.id().to_string(), Box::new(wa));
                 }
                 Err(e) => {
-                    eprintln!(
+                    let msg = format!(
                         "Failed to load wasm analyzer '{}' from '{}': {}",
                         name, path, e
                     );
+                    eprintln!("{}", msg);
+                    load_errors.push(msg);
                 }
             }
         }
@@ -149,15 +158,18 @@ impl Scanner {
             db,
             analyzers,
             config: Arc::new(config),
+            analyzer_load_errors: load_errors,
+            analyzer_exec_count: HashMap::new(),
+            analyzer_error_details: HashMap::new(),
         }
     }
 
     pub async fn scan_snapshot(
-        &self,
+        &mut self,
         repo_path: &str,
         project_name: &str,
         commit_ref: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         let repo_path = repo_path.to_string();
         let commit_ref = commit_ref.map(|s| s.to_string());
         let project_name = project_name.to_string();
@@ -271,17 +283,22 @@ impl Scanner {
             processed_count
         ));
 
+        // Save scan summary
+        if let Err(e) = self.save_scan_summary(scan_id, processed_count).await {
+            eprintln!("Failed to save scan summary: {}", e);
+        }
+
         println!("Snapshot Scan Complete. Scan ID: {}", scan_id);
-        Ok(())
+        Ok(scan_id)
     }
 
     pub async fn scan_diff(
-        &self,
+        &mut self,
         repo_path: &str,
         project_name: &str,
         base_ref: &str,
         target_ref: &str,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         let repo_path = repo_path.to_string();
         let base_ref = base_ref.to_string();
         let target_ref = target_ref.to_string();
@@ -364,6 +381,8 @@ impl Scanner {
         );
         pb.set_message("Calculating diff...");
 
+        let mut processed_count = 0u64;
+
         while let Some(event) = rx.recv().await {
             match event {
                 ScanEvent::Start { total: Some(t) } => {
@@ -386,6 +405,7 @@ impl Scanner {
                 } => {
                     pb.set_message(format!("Processing: {}", path));
                     pb.inc(1);
+                    processed_count += 1;
 
                     // Diff Mode: Analyze both if available
                     let old_metrics = if let Some(c) = old_content {
@@ -420,8 +440,13 @@ impl Scanner {
         }
         pb.finish_with_message("Diff Scan Complete");
 
+        // Save scan summary
+        if let Err(e) = self.save_scan_summary(scan_id, processed_count).await {
+            eprintln!("Failed to save scan summary: {}", e);
+        }
+
         println!("Diff Scan Complete. Scan ID: {}", scan_id);
-        Ok(())
+        Ok(scan_id)
     }
 
     // --- Sync Git Logic (Runs in worker thread) ---
@@ -607,6 +632,69 @@ impl Scanner {
         Ok(())
     }
 
+    /// Save a scan execution summary to the scan_summaries table.
+    async fn save_scan_summary(&self, scan_id: i64, total_files: u64) -> anyhow::Result<()> {
+        let total_errors: u64 = self
+            .analyzer_error_details
+            .values()
+            .map(|v| v.len() as u64)
+            .sum();
+
+        let load_errors_json = serde_json::to_string(&self.analyzer_load_errors)?;
+
+        let analyzer_stats: Vec<serde_json::Value> = self
+            .analyzers
+            .keys()
+            .map(|id| {
+                let files = self.analyzer_exec_count.get(id).copied().unwrap_or(0);
+                let errors = self
+                    .analyzer_error_details
+                    .get(id)
+                    .map(|v| v.len() as u64)
+                    .unwrap_or(0);
+                let details = self
+                    .analyzer_error_details
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_default();
+                serde_json::json!({
+                    "analyzer_id": id,
+                    "files_analyzed": files,
+                    "execution_errors": errors,
+                    "error_details": details,
+                })
+            })
+            .collect();
+        let analyzer_stats_json = serde_json::to_string(&analyzer_stats)?;
+
+        let total_executions: u64 = self.analyzer_exec_count.values().sum();
+        let executed_count = self
+            .analyzer_exec_count
+            .values()
+            .filter(|&&c| c > 0)
+            .count() as u64;
+
+        sqlx::query(
+            "INSERT INTO scan_summaries \
+             (scan_id, total_files_scanned, total_analyzers_loaded, \
+              total_analyzers_executed, total_analyzer_executions, total_errors, \
+              load_errors, analyzer_stats) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(scan_id)
+        .bind(total_files as i64)
+        .bind(self.analyzers.len() as i64)
+        .bind(executed_count as i64)
+        .bind(total_executions as i64)
+        .bind(total_errors as i64)
+        .bind(&load_errors_json)
+        .bind(&analyzer_stats_json)
+        .execute(self.db.pool())
+        .await?;
+
+        Ok(())
+    }
+
     // --- DB Helpers ---
 
     async fn get_or_create_project(&self, name: &str, path: &str) -> Result<i64> {
@@ -651,7 +739,7 @@ impl Scanner {
     // record_file_change_with_old removed: merged into save_metrics
 
     fn analyze_file_content(
-        &self,
+        &mut self,
         file_path: &str,
         content: &str,
         tech_stack_name: Option<&str>,
@@ -676,7 +764,36 @@ impl Scanner {
 
         for analyzer_id in analyzers_to_run {
             if let Some(analyzer) = self.analyzers.get(&analyzer_id) {
-                results.extend(analyzer.analyze(file_path, content));
+                // Isolate each analyzer with catch_unwind so a panic in one
+                // (e.g. Wasm runtime crash, Script process deadlock) does not
+                // crash the entire scan. Failed results are discarded and the
+                // error is logged; remaining analyzers continue unaffected.
+                let result = std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(|| analyzer.analyze(file_path, content)),
+                );
+
+                match result {
+                    Ok(metrics) => {
+                        *self.analyzer_exec_count.entry(analyzer_id.clone()).or_insert(0) += 1;
+                        results.extend(metrics);
+                    }
+                    Err(panic_info) => {
+                        let msg = panic_info
+                            .downcast_ref::<&str>()
+                            .map(|s| s.to_string())
+                            .or_else(|| panic_info.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "unknown panic".to_string());
+                        eprintln!(
+                            "Analyzer '{}' panicked while processing '{}': {}. \
+                             Its results have been skipped.",
+                            analyzer_id, file_path, msg,
+                        );
+                        self.analyzer_error_details
+                            .entry(analyzer_id.clone())
+                            .or_default()
+                            .push(format!("{}: {}", file_path, msg));
+                    }
+                }
             }
         }
         results
