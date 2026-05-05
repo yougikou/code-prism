@@ -83,7 +83,7 @@ fn err_response(status: StatusCode, msg: String) -> Response {
     (status, Json(ErrorResponse { error: msg })).into_response()
 }
 
-fn extract_branches(repo: &Repository) -> Result<(Vec<BranchInfo>, String), String> {
+pub(crate) fn extract_branches(repo: &Repository) -> Result<(Vec<BranchInfo>, String), String> {
     let mut branches: Vec<BranchInfo> = Vec::new();
     let mut current_branch = String::new();
 
@@ -251,6 +251,7 @@ pub async fn clone_repo(
 
     match result {
         Ok(Ok((path, branches, current_branch))) => {
+            let clone_path = path.clone();
             let project_name = req.project_name.clone();
             state.git_cache.insert(
                 repo_id.clone(),
@@ -258,9 +259,58 @@ pub async fn clone_repo(
                     path,
                     git_url: req.git_url.clone(),
                     current_branch: current_branch.clone(),
-                    project_name,
+                    project_name: project_name.clone(),
                 },
             );
+
+            // Persist repo_path to YAML config
+            if let Some(ref proj_name) = project_name {
+                let yaml_content = match std::fs::read_to_string(&state.config_path) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        return (
+                            StatusCode::OK,
+                            Json(CloneResponse {
+                                repo_id,
+                                branches,
+                                current_branch,
+                            }),
+                        )
+                            .into_response();
+                    }
+                };
+                if let Ok(mut core_config) = serde_yaml::from_str::<codeprism_core::CodePrismConfig>(&yaml_content) {
+                    // Only update repo_path if project already exists in config.
+                    // The frontend handles creating the project entry (with template if selected).
+                    if let Some(pos) = core_config.projects.iter().position(|p| p.name == *proj_name) {
+                        core_config.projects[pos].repo_path = Some(clone_path.clone());
+                    }
+                    // Atomic write: tmp + rename
+                    if let Ok(yaml_str) = serde_yaml::to_string(&core_config) {
+                        let tmp_path = format!("{}.tmp", state.config_path);
+                        if std::fs::write(&tmp_path, &yaml_str).is_ok() {
+                            let _ = std::fs::rename(&tmp_path, &state.config_path);
+                        }
+                    }
+                    // Rebuild both in-memory configs (core + AppConfig UI subset)
+                    let projects_config = core_config.get_projects();
+                    *state.core_config.write().unwrap() = core_config;
+                    let mut project_app_configs = Vec::new();
+                    for project in &projects_config {
+                        let views = crate::convert_project_views(project);
+                        let mut tech_stacks: Vec<String> =
+                            project.tech_stacks.iter().map(|ts| ts.name.clone()).collect();
+                        tech_stacks.sort();
+                        project_app_configs.push(crate::config::ProjectAppConfig {
+                            name: project.name.clone(),
+                            views,
+                            tech_stacks,
+                        });
+                    }
+                    *state.config.write().unwrap() =
+                        crate::config::AppConfig { projects: project_app_configs };
+                }
+            }
 
             (
                 StatusCode::OK,
@@ -290,6 +340,7 @@ pub async fn list_repos(
                 "git_url": repo.git_url,
                 "current_branch": repo.current_branch,
                 "path": repo.path,
+                "project_name": repo.project_name,
             })
         })
         .collect();

@@ -3,7 +3,7 @@ use crate::config::{AppConfig, ViewConfig, ViewKind};
 use crate::git_cache::GitCache;
 use axum::{
     extract::{Path, Query, State, Json as AxumJson},
-    response::{IntoResponse, Json},
+    response::{IntoResponse, Json, Response},
     http::StatusCode,
 };
 use codeprism_database::Db;
@@ -123,6 +123,19 @@ pub struct ScanRequest {
     pub repo_id: Option<String>,
     pub ref_1: Option<String>,
     pub ref_2: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct AddLocalProjectRequest {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Serialize)]
+pub struct AddLocalProjectResponse {
+    pub repo_id: String,
+    pub branches: Vec<crate::git_routes::BranchInfo>,
+    pub current_branch: String,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -623,10 +636,34 @@ pub async fn get_full_project_config(
 pub async fn update_project_config(
     State(state): State<AppState>,
     Path(project_name): Path<String>,
-    AxumJson(updated_config): AxumJson<codeprism_core::ProjectConfig>,
+    AxumJson(mut updated_config): AxumJson<codeprism_core::ProjectConfig>,
 ) -> impl IntoResponse {
     if updated_config.name != project_name {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Project name in path must match body"}))).into_response();
+    }
+
+    // Validate no duplicate analyzer names across all categories
+    {
+        let mut seen = std::collections::HashSet::new();
+        let mut duplicates = Vec::new();
+        for key in updated_config.custom_regex_analyzers.keys() {
+            if !seen.insert(key.clone()) {
+                duplicates.push(key.clone());
+            }
+        }
+        for key in updated_config.custom_impl_analyzers.keys() {
+            if !seen.insert(key.clone()) {
+                duplicates.push(key.clone());
+            }
+        }
+        for key in updated_config.external_analyzers.keys() {
+            if !seen.insert(key.clone()) {
+                duplicates.push(key.clone());
+            }
+        }
+        if !duplicates.is_empty() {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("Duplicate analyzer names: {}", duplicates.join(", "))}))).into_response();
+        }
     }
 
     // Read current YAML file
@@ -642,6 +679,14 @@ pub async fn update_project_config(
 
     // Upsert: replace existing project or append new one
     let pos = core_config.projects.iter().position(|p| p.name == project_name);
+
+    // Preserve existing repo_path if update doesn't provide one
+    if updated_config.repo_path.is_none() {
+        if let Some(pos) = pos {
+            updated_config.repo_path = core_config.projects[pos].repo_path.clone();
+        }
+    }
+
     if let Some(pos) = pos {
         core_config.projects[pos] = updated_config;
     } else {
@@ -684,6 +729,118 @@ pub async fn update_project_config(
     *state.core_config.write().unwrap() = core_config;
 
     Json(serde_json::json!({"status": "ok", "message": "Configuration saved successfully"})).into_response()
+}
+
+/// POST /api/v1/projects/add-local — register a local git repository as a project
+pub async fn add_local_project(
+    State(state): State<AppState>,
+    AxumJson(req): AxumJson<AddLocalProjectRequest>,
+) -> Response {
+    if req.name.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Project name is required"}))).into_response();
+    }
+    if req.path.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Path is required"}))).into_response();
+    }
+
+    let repo_path = std::path::Path::new(&req.path);
+
+    // Validate path exists
+    if !repo_path.exists() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("Path does not exist: {}", req.path)}))).into_response();
+    }
+    if !repo_path.is_dir() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("Path is not a directory: {}", req.path)}))).into_response();
+    }
+
+    // Resolve to canonical/absolute path
+    let canonical_path = std::fs::canonicalize(repo_path)
+        .unwrap_or_else(|_| repo_path.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+
+    // Verify it's a valid git repository
+    if git2::Repository::open(&canonical_path).is_err() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("Path is not a valid git repository: {}", req.path)}))).into_response();
+    }
+
+    // Open repo and extract branches
+    let repo = match git2::Repository::open(&canonical_path) {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to open repository: {}", e)}))).into_response(),
+    };
+    let (branches, current_branch) = match crate::git_routes::extract_branches(&repo) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to read branches: {}", e)}))).into_response(),
+    };
+
+    // Write project config with repo_path to YAML
+    let yaml_content = match std::fs::read_to_string(&state.config_path) {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to read config file"}))).into_response(),
+    };
+
+    let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content) {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to parse config file"}))).into_response(),
+    };
+
+    // Upsert project config with repo_path
+    let pos = core_config.projects.iter().position(|p| p.name == req.name);
+    if let Some(pos) = pos {
+        core_config.projects[pos].repo_path = Some(canonical_path.clone());
+    } else {
+        core_config.projects.push(codeprism_core::ProjectConfig {
+            name: req.name.clone(),
+            repo_path: Some(canonical_path.clone()),
+            ..Default::default()
+        });
+    }
+
+    // Atomic write: tmp + rename
+    let yaml_str = match serde_yaml::to_string(&core_config) {
+        Ok(s) => s,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to serialize config"}))).into_response(),
+    };
+    let tmp_path = format!("{}.tmp", state.config_path);
+    if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to write config: {}", e)}))).into_response();
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to save config: {}", e)}))).into_response();
+    }
+
+    // Generate repo_id and add to GitCache
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    state.git_cache.insert(
+        repo_id.clone(),
+        crate::git_cache::GitRepo {
+            path: canonical_path.clone(),
+            git_url: String::new(),
+            current_branch: current_branch.clone(),
+            project_name: Some(req.name.clone()),
+        },
+    );
+
+    // Rebuild in-memory state
+    *state.core_config.write().unwrap() = core_config;
+    let projects_config = state.core_config.read().unwrap().get_projects();
+    let mut project_app_configs = Vec::new();
+    for project in &projects_config {
+        let views = crate::convert_project_views(project);
+        let mut tech_stacks: Vec<String> = project.tech_stacks.iter().map(|ts| ts.name.clone()).collect();
+        tech_stacks.sort();
+        project_app_configs.push(crate::config::ProjectAppConfig {
+            name: project.name.clone(),
+            views,
+            tech_stacks,
+        });
+    }
+    *state.config.write().unwrap() = crate::config::AppConfig { projects: project_app_configs };
+
+    (StatusCode::OK, Json(AddLocalProjectResponse { repo_id, branches, current_branch })).into_response()
 }
 
 /// POST /api/v1/config/reload — reload config from YAML file on disk

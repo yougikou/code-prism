@@ -249,6 +249,20 @@ function AnalyzersEditor({ config, onChange }: {
 }) {
   const { t } = useTranslation()
 
+  // Track temporary name field edits (for smooth controlled input while renaming)
+  const [editValues, setEditValues] = useState<Record<string, string>>({})
+  const [nameErrors, setNameErrors] = useState<Record<string, string>>({})
+
+  const getAllAnalyzerNames = (excludeNames: string[] = []): Set<string> => {
+    const names = new Set<string>()
+    for (const key of Object.keys(config.custom_regex_analyzers || {})) { if (!excludeNames.includes(key)) names.add(key) }
+    for (const key of Object.keys(config.custom_impl_analyzers || {})) { if (!excludeNames.includes(key)) names.add(key) }
+    for (const key of Object.keys(config.external_analyzers || {})) { if (!excludeNames.includes(key)) names.add(key) }
+    return names
+  }
+
+  // ── Regex Analyzers ──
+
   const updateRegex = (name: string, field: string, value: string) => {
     const analyzers = { ...config.custom_regex_analyzers }
     analyzers[name] = { ...analyzers[name], [field]: value }
@@ -268,6 +282,21 @@ function AnalyzersEditor({ config, onChange }: {
     delete analyzers[name]
     onChange({ ...config, custom_regex_analyzers: analyzers })
   }
+
+  const renameRegex = (oldName: string, newName: string) => {
+    if (oldName === newName || !newName.trim()) return
+    if (getAllAnalyzerNames([oldName]).has(newName)) {
+      setNameErrors(prev => ({ ...prev, [`regex:${oldName}`]: t('config.analyzers.nameDuplicate') }))
+      return
+    }
+    setNameErrors(prev => { const next = { ...prev }; delete next[`regex:${oldName}`]; return next })
+    const analyzers = { ...config.custom_regex_analyzers }
+    analyzers[newName] = analyzers[oldName]
+    delete analyzers[oldName]
+    onChange({ ...config, custom_regex_analyzers: analyzers })
+  }
+
+  // ── Impl Analyzers ──
 
   const updateImpl = (name: string, field: string, value: string | undefined) => {
     const analyzers = { ...config.custom_impl_analyzers }
@@ -289,6 +318,21 @@ function AnalyzersEditor({ config, onChange }: {
     onChange({ ...config, custom_impl_analyzers: analyzers })
   }
 
+  const renameImpl = (oldName: string, newName: string) => {
+    if (oldName === newName || !newName.trim()) return
+    if (getAllAnalyzerNames([oldName]).has(newName)) {
+      setNameErrors(prev => ({ ...prev, [`impl:${oldName}`]: t('config.analyzers.nameDuplicate') }))
+      return
+    }
+    setNameErrors(prev => { const next = { ...prev }; delete next[`impl:${oldName}`]; return next })
+    const analyzers = { ...config.custom_impl_analyzers }
+    analyzers[newName] = analyzers[oldName]
+    delete analyzers[oldName]
+    onChange({ ...config, custom_impl_analyzers: analyzers })
+  }
+
+  // ── External Analyzers ──
+
   const updateExternal = (name: string, value: string) => {
     const analyzers = { ...config.external_analyzers }
     analyzers[name] = value
@@ -306,6 +350,19 @@ function AnalyzersEditor({ config, onChange }: {
     onChange({ ...config, external_analyzers: analyzers })
   }
 
+  const renameExternal = (oldName: string, newName: string) => {
+    if (oldName === newName || !newName.trim()) return
+    if (getAllAnalyzerNames([oldName]).has(newName)) {
+      setNameErrors(prev => ({ ...prev, [`external:${oldName}`]: t('config.analyzers.nameDuplicate') }))
+      return
+    }
+    setNameErrors(prev => { const next = { ...prev }; delete next[`external:${oldName}`]; return next })
+    const analyzers = { ...config.external_analyzers }
+    analyzers[newName] = analyzers[oldName]
+    delete analyzers[oldName]
+    onChange({ ...config, external_analyzers: analyzers })
+  }
+
   return (
     <div className="space-y-6">
       {/* Regex Analyzers */}
@@ -320,10 +377,30 @@ function AnalyzersEditor({ config, onChange }: {
           {Object.entries(config.custom_regex_analyzers).length === 0 && (
             <p className="text-sm text-slate-400 italic">{t('dashboard.noData')}</p>
           )}
-          {Object.entries(config.custom_regex_analyzers).map(([name, analyzer]) => (
-            <div key={name} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
+          {Object.entries(config.custom_regex_analyzers).map(([name, analyzer], index) => {
+            const displayName = editValues[`regex:${name}`] ?? name
+            const error = nameErrors[`regex:${name}`]
+            return (
+            <div key={`regex-${index}`} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
               <div className="flex-1 grid grid-cols-4 gap-2">
-                <input type="text" value={name} readOnly className="px-2 py-1 text-xs border rounded bg-slate-50 dark:bg-slate-800 dark:border-slate-700 text-slate-500" />
+                <div className="flex flex-col gap-0.5">
+                  <input
+                    type="text"
+                    value={displayName}
+                    onChange={e => setEditValues(prev => ({ ...prev, [`regex:${name}`]: e.target.value }))}
+                    onFocus={() => setNameErrors(prev => { const n = { ...prev }; delete n[`regex:${name}`]; return n })}
+                    onBlur={() => {
+                      const val = editValues[`regex:${name}`]
+                      if (val !== undefined) {
+                        setEditValues(prev => { const n = { ...prev }; delete n[`regex:${name}`]; return n })
+                        renameRegex(name, val)
+                      }
+                    }}
+                    placeholder="Analyzer name"
+                    className="px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
+                  />
+                  {error && <span className="text-red-500 text-[10px] leading-tight">{error}</span>}
+                </div>
                 <input type="text" value={analyzer.pattern} onChange={e => updateRegex(name, 'pattern', e.target.value)} placeholder="Pattern" className="col-span-2 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
                 <div className="flex gap-2">
                   <input type="text" value={analyzer.metric_key} onChange={e => updateRegex(name, 'metric_key', e.target.value)} placeholder="Metric key" className="flex-1 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
@@ -331,7 +408,8 @@ function AnalyzersEditor({ config, onChange }: {
                 </div>
               </div>
             </div>
-          ))}
+            )
+          })}
         </CardContent>
       </Card>
 
@@ -347,10 +425,30 @@ function AnalyzersEditor({ config, onChange }: {
           {Object.entries(config.custom_impl_analyzers).length === 0 && (
             <p className="text-sm text-slate-400 italic">{t('dashboard.noData')}</p>
           )}
-          {Object.entries(config.custom_impl_analyzers).map(([name, analyzer]) => (
-            <div key={name} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
+          {Object.entries(config.custom_impl_analyzers).map(([name, analyzer], index) => {
+            const displayName = editValues[`impl:${name}`] ?? name
+            const error = nameErrors[`impl:${name}`]
+            return (
+            <div key={`impl-${index}`} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
               <div className="flex-1 grid grid-cols-3 gap-2">
-                <input type="text" value={name} readOnly className="px-2 py-1 text-xs border rounded bg-slate-50 dark:bg-slate-800 dark:border-slate-700 text-slate-500" />
+                <div className="flex flex-col gap-0.5">
+                  <input
+                    type="text"
+                    value={displayName}
+                    onChange={e => setEditValues(prev => ({ ...prev, [`impl:${name}`]: e.target.value }))}
+                    onFocus={() => setNameErrors(prev => { const n = { ...prev }; delete n[`impl:${name}`]; return n })}
+                    onBlur={() => {
+                      const val = editValues[`impl:${name}`]
+                      if (val !== undefined) {
+                        setEditValues(prev => { const n = { ...prev }; delete n[`impl:${name}`]; return n })
+                        renameImpl(name, val)
+                      }
+                    }}
+                    placeholder="Analyzer name"
+                    className="px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
+                  />
+                  {error && <span className="text-red-500 text-[10px] leading-tight">{error}</span>}
+                </div>
                 <input type="text" value={analyzer.metric_key || ''} onChange={e => updateImpl(name, 'metric_key', e.target.value)} placeholder="Metric key" className="px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
                 <div className="flex gap-2">
                   <input type="text" value={analyzer.category || ''} onChange={e => updateImpl(name, 'category', e.target.value)} placeholder="Category" className="flex-1 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
@@ -358,7 +456,8 @@ function AnalyzersEditor({ config, onChange }: {
                 </div>
               </div>
             </div>
-          ))}
+            )
+          })}
         </CardContent>
       </Card>
 
@@ -374,15 +473,36 @@ function AnalyzersEditor({ config, onChange }: {
           {Object.entries(config.external_analyzers).length === 0 && (
             <p className="text-sm text-slate-400 italic">{t('dashboard.noData')}</p>
           )}
-          {Object.entries(config.external_analyzers).map(([name, path]) => (
-            <div key={name} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
+          {Object.entries(config.external_analyzers).map(([name, path], index) => {
+            const displayName = editValues[`external:${name}`] ?? name
+            const error = nameErrors[`external:${name}`]
+            return (
+            <div key={`external-${index}`} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
               <div className="flex-1 grid grid-cols-3 gap-2">
-                <input type="text" value={name} readOnly className="px-2 py-1 text-xs border rounded bg-slate-50 dark:bg-slate-800 dark:border-slate-700 text-slate-500" />
+                <div className="flex flex-col gap-0.5">
+                  <input
+                    type="text"
+                    value={displayName}
+                    onChange={e => setEditValues(prev => ({ ...prev, [`external:${name}`]: e.target.value }))}
+                    onFocus={() => setNameErrors(prev => { const n = { ...prev }; delete n[`external:${name}`]; return n })}
+                    onBlur={() => {
+                      const val = editValues[`external:${name}`]
+                      if (val !== undefined) {
+                        setEditValues(prev => { const n = { ...prev }; delete n[`external:${name}`]; return n })
+                        renameExternal(name, val)
+                      }
+                    }}
+                    placeholder="Analyzer name"
+                    className="px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
+                  />
+                  {error && <span className="text-red-500 text-[10px] leading-tight">{error}</span>}
+                </div>
                 <input type="text" value={path} onChange={e => updateExternal(name, e.target.value)} placeholder="Path to WASM" className="col-span-1 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
                 <button onClick={() => removeExternal(name)} className="text-red-500 hover:text-red-700 text-xs px-1 justify-self-end">&times;</button>
               </div>
             </div>
-          ))}
+            )
+          })}
         </CardContent>
       </Card>
     </div>
@@ -674,6 +794,24 @@ export default function ConfigPage() {
 
   const handleSave = async () => {
     if (!config || !currentProject) return
+
+    // Validate no duplicate analyzer names across all categories
+    const allNames = new Set<string>()
+    const duplicateNames: string[] = []
+    const checkNames = (names: string[]) => {
+      for (const name of names) {
+        if (allNames.has(name)) duplicateNames.push(name)
+        else allNames.add(name)
+      }
+    }
+    checkNames(Object.keys(config.custom_regex_analyzers || {}))
+    checkNames(Object.keys(config.custom_impl_analyzers || {}))
+    checkNames(Object.keys(config.external_analyzers || {}))
+    if (duplicateNames.length > 0) {
+      setMessage({ type: 'error', text: `${t('config.analyzers.nameDuplicate')}: ${duplicateNames.join(', ')}` })
+      return
+    }
+
     setSaving(true)
     setMessage(null)
     try {

@@ -5,6 +5,7 @@ import { useApp } from '@/contexts/AppContext'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card'
 import {
   cloneRepo,
+  addLocalProject,
   listBranches,
   checkoutBranch,
   listCommits,
@@ -174,9 +175,14 @@ export default function ExecutePage() {
   const [loadingRepos, setLoadingRepos] = useState(true)
   const [deletingRepoId, setDeletingRepoId] = useState<string | null>(null)
 
+  // ── Source toggle ──
+  const [repoSource, setRepoSource] = useState<'clone' | 'local'>('clone')
+
   // ── Clone state ──
   const [gitUrl, setGitUrl] = useState('')
   const [isCloning, setIsCloning] = useState(false)
+  const [localPath, setLocalPath] = useState('')
+  const [isAddingLocal, setIsAddingLocal] = useState(false)
   const [repoId, setRepoId] = useState<string | null>(null)
   const [branches, setBranches] = useState<BranchInfo[]>([])
   const [currentBranch, setCurrentBranch] = useState<string>('')
@@ -349,6 +355,30 @@ export default function ExecutePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanProgress.jobId, scanProgress.status])
 
+  // ── Add local repo handler ──
+  const handleAddLocal = async () => {
+    if (!localPath.trim() || !projectName) return
+    setIsAddingLocal(true)
+    setCloneError(null)
+    setCloneSuccess(null)
+    try {
+      const res = await addLocalProject(projectName, localPath.trim())
+      setRepoId(res.repo_id)
+      setBranches(res.branches)
+      setCurrentBranch(res.current_branch)
+      const initialBranch = res.current_branch || (res.branches[0]?.name ?? '')
+      setSelectedBranch(initialBranch)
+      setRef1({ type: 'branch', value: initialBranch, label: `${initialBranch} (branch)` })
+      setRef2(null)
+      setCloneSuccess(t('execute.localRepoAdded'))
+      loadRepos()
+    } catch (err) {
+      setCloneError(err instanceof Error ? err.message : 'Failed to add local repo')
+    } finally {
+      setIsAddingLocal(false)
+    }
+  }
+
   // ── Clone handler ──
   const handleClone = async () => {
     if (!gitUrl.trim()) return
@@ -390,9 +420,11 @@ export default function ExecutePage() {
               }
               await updateProjectConfig(projectName, defaultConfig)
             }
+            // Refresh other pages (e.g. ConfigPage) so they see the new project
+            triggerConfigRefresh()
           }
-        } catch {
-          // Non-critical — user can create config manually via Config page
+        } catch (err) {
+          console.error('Failed to create project config after clone:', err)
         }
       }
       // Refresh the repo list
@@ -409,6 +441,11 @@ export default function ExecutePage() {
     setRepoId(repo.repo_id)
     setCloneError(null)
     setCloneSuccess(null)
+    // Restore project name from the stored repo, so scans use the correct project
+    if (repo.project_name) {
+      setProjectName(repo.project_name)
+      setProjectAliasError(null)
+    }
     try {
       const res = await listBranches(repo.repo_id)
       setBranches(res.branches)
@@ -529,9 +566,11 @@ export default function ExecutePage() {
     if (!repoId || !ref1) return
     setIsScanning(true)
     setScanProgress({ status: 'loading', message: t('execute.startingScan') })
-    const scanProjectName = projectName || shortUrl(
-      reposList.find(r => r.repo_id === repoId)?.git_url || ''
-    ) || 'scanned_project'
+    const scanProjectName = projectName
+      || reposList.find(r => r.repo_id === repoId)?.project_name
+      || shortUrl(
+        reposList.find(r => r.repo_id === repoId)?.git_url || ''
+      ) || 'scanned_project'
     try {
       const response = await executeScanWithRepo({
         repo_id: repoId,
@@ -680,42 +719,96 @@ export default function ExecutePage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="flex gap-3">
-                  <input
-                    type="text"
-                    placeholder={t('execute.clonePlaceholder')}
-                    value={gitUrl}
-                    onChange={(e) => {
-                      setGitUrl(e.target.value)
-                      // Auto-fill alias from URL if user hasn't set one yet
-                      if (!projectName) {
-                        const name = shortUrl(e.target.value)
-                        if (name) {
-                          setProjectName(name)
-                          setProjectAliasError(
-                            existingProjectNames.includes(name)
-                              ? t('execute.projectAliasExists')
-                              : null
-                          )
-                        }
-                      }
-                    }}
-                    onKeyDown={(e) => e.key === 'Enter' && handleClone()}
-                    className="flex-1 px-4 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
-                    disabled={isCloning}
-                  />
+                {/* Source type toggle */}
+                <div className="flex gap-2 mb-4">
                   <button
-                    onClick={handleClone}
-                    disabled={isCloning || !gitUrl.trim() || !projectName || !!projectAliasError}
-                    className="px-5 py-2 bg-sky-600 text-white rounded-lg font-medium hover:bg-sky-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors flex items-center gap-2 shrink-0"
+                    onClick={() => setRepoSource('clone')}
+                    className={`px-4 py-2 text-sm rounded-lg transition-colors ${
+                      repoSource === 'clone'
+                        ? 'bg-sky-600 text-white'
+                        : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400'
+                    }`}
                   >
-                    {isCloning ? (
-                      <><LoaderIcon className="w-4 h-4 animate-spin" /> {t('execute.cloning')}</>
-                    ) : (
-                      <><GitBranchIcon className="w-4 h-4" /> {t('execute.clone')}</>
-                    )}
+                    <GitBranchIcon className="w-4 h-4 inline mr-1.5" />
+                    {t('execute.cloneTab')}
+                  </button>
+                  <button
+                    onClick={() => setRepoSource('local')}
+                    className={`px-4 py-2 text-sm rounded-lg transition-colors ${
+                      repoSource === 'local'
+                        ? 'bg-sky-600 text-white'
+                        : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    <FolderGit2Icon className="w-4 h-4 inline mr-1.5" />
+                    {t('execute.localRepoTab')}
                   </button>
                 </div>
+
+                {/* Clone remote input */}
+                {repoSource === 'clone' && (
+                  <div className="flex gap-3">
+                    <input
+                      type="text"
+                      placeholder={t('execute.clonePlaceholder')}
+                      value={gitUrl}
+                      onChange={(e) => {
+                        setGitUrl(e.target.value)
+                        if (!projectName) {
+                          const name = shortUrl(e.target.value)
+                          if (name) {
+                            setProjectName(name)
+                            setProjectAliasError(
+                              existingProjectNames.includes(name)
+                                ? t('execute.projectAliasExists')
+                                : null
+                            )
+                          }
+                        }
+                      }}
+                      onKeyDown={(e) => e.key === 'Enter' && handleClone()}
+                      className="flex-1 px-4 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
+                      disabled={isCloning}
+                    />
+                    <button
+                      onClick={handleClone}
+                      disabled={isCloning || !gitUrl.trim() || !projectName || !!projectAliasError}
+                      className="px-5 py-2 bg-sky-600 text-white rounded-lg font-medium hover:bg-sky-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors flex items-center gap-2 shrink-0"
+                    >
+                      {isCloning ? (
+                        <><LoaderIcon className="w-4 h-4 animate-spin" /> {t('execute.cloning')}</>
+                      ) : (
+                        <><GitBranchIcon className="w-4 h-4" /> {t('execute.clone')}</>
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {/* Local repo input */}
+                {repoSource === 'local' && (
+                  <div className="flex gap-3">
+                    <input
+                      type="text"
+                      placeholder={t('execute.localPathPlaceholder')}
+                      value={localPath}
+                      onChange={e => setLocalPath(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleAddLocal()}
+                      className="flex-1 px-4 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
+                      disabled={isAddingLocal}
+                    />
+                    <button
+                      onClick={handleAddLocal}
+                      disabled={isAddingLocal || !localPath.trim() || !projectName || !!projectAliasError}
+                      className="px-5 py-2 bg-sky-600 text-white rounded-lg font-medium hover:bg-sky-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors flex items-center gap-2 shrink-0"
+                    >
+                      {isAddingLocal ? (
+                        <><LoaderIcon className="w-4 h-4 animate-spin" /> {t('execute.adding')}</>
+                      ) : (
+                        <><FolderGit2Icon className="w-4 h-4" /> {t('execute.addLocalRepo')}</>
+                      )}
+                    </button>
+                  </div>
+                )}
 
                 {/* Project alias — always visible for setting unique name */}
                 <div className="mt-3">
@@ -734,7 +827,7 @@ export default function ExecutePage() {
                           : null
                       )
                     }}
-                    placeholder={shortUrl(gitUrl) || t('execute.projectPlaceholder')}
+                    placeholder={t('execute.projectPlaceholder')}
                     className="w-full px-4 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 text-sm"
                   />
                   {projectAliasError && (

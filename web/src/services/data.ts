@@ -203,6 +203,7 @@ export interface AggregationView {
 
 export interface FullProjectConfig {
   name: string;
+  repo_path?: string;
   tech_stacks: FullTechStack[];
   global_excludes: string[];
   custom_regex_analyzers: Record<string, CustomAnalyzerDef>;
@@ -337,6 +338,19 @@ export async function cloneRepo(gitUrl: string, projectName?: string): Promise<C
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Clone failed');
+  }
+  return res.json();
+}
+
+export async function addLocalProject(name: string, path: string): Promise<CloneResponse> {
+  const res = await fetch('/api/v1/projects/add-local', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, path }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to add local project');
   }
   return res.json();
 }
@@ -481,6 +495,7 @@ export interface RepoInfo {
   git_url: string;
   current_branch: string;
   path: string;
+  project_name?: string | null;
 }
 
 export interface ListReposResponse {

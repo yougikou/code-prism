@@ -119,7 +119,13 @@
     "scanProgress": "Progress",
     "projectAlias": "Project Alias",
     "projectAliasExists": "This project name already exists. Please use a unique name.",
-    "continueToStep2": "Continue to Step 2"
+    "continueToStep2": "Continue to Step 2",
+    "cloneTab": "Clone Remote",
+    "localRepoTab": "Local Repository",
+    "localPathPlaceholder": "C:\\projects\\myapp or /home/user/project",
+    "addLocalRepo": "Add Local Repo",
+    "adding": "Adding...",
+    "localRepoAdded": "Local repository added successfully."
   },
   "config": {
     "title": "Configuration",
@@ -163,7 +169,8 @@
       "addRegex": "Add Regex",
       "addImpl": "Add Impl",
       "addExternal": "Add External",
-      "delete": "Delete"
+      "delete": "Delete",
+      "nameDuplicate": "An analyzer with this name already exists"
     },
     "views": {
       "title": "View: {{id}}",

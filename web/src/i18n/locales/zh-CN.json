@@ -119,7 +119,13 @@
     "scanProgress": "进度",
     "projectAlias": "项目别名",
     "projectAliasExists": "此项目名称已存在，请使用唯一的名称。",
-    "continueToStep2": "继续到第 2 步"
+    "continueToStep2": "继续到第 2 步",
+    "cloneTab": "克隆远程",
+    "localRepoTab": "本地仓库",
+    "localPathPlaceholder": "C:\\projects\\myapp 或 /home/user/project",
+    "addLocalRepo": "添加本地仓库",
+    "adding": "添加中...",
+    "localRepoAdded": "本地仓库添加成功。"
   },
   "config": {
     "title": "配置管理",
@@ -163,7 +169,8 @@
       "addRegex": "添加正则",
       "addImpl": "添加实现",
       "addExternal": "添加外部",
-      "delete": "删除"
+      "delete": "删除",
+      "nameDuplicate": "同名分析器已存在"
     },
     "views": {
       "title": "视图：{{id}}",
