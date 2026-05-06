@@ -10,10 +10,14 @@ import {
   saveTemplate,
   deleteTemplate,
   reloadConfig,
+  createProject,
+  deleteProject as deleteProjectApi,
   type AppConfig,
   type FullProjectConfig,
   type FullTechStack,
+  type UnifiedProjectInfo,
 } from '@/services/data'
+import { Settings, BookTemplate, Trash2, Database, GitBranch } from 'lucide-react'
 
 // ─── Tag Input ──────────────────────────────────────────────────────────────
 
@@ -382,7 +386,7 @@ function AnalyzersEditor({ config, onChange }: {
             const error = nameErrors[`regex:${name}`]
             return (
             <div key={`regex-${index}`} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
-              <div className="flex-1 grid grid-cols-4 gap-2">
+              <div className="flex-1 grid grid-cols-3 gap-2">
                 <div className="flex flex-col gap-0.5">
                   <input
                     type="text"
@@ -401,11 +405,12 @@ function AnalyzersEditor({ config, onChange }: {
                   />
                   {error && <span className="text-red-500 text-[10px] leading-tight">{error}</span>}
                 </div>
-                <input type="text" value={analyzer.pattern} onChange={e => updateRegex(name, 'pattern', e.target.value)} placeholder="Pattern" className="col-span-2 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+                <input type="text" value={analyzer.metric_key} onChange={e => updateRegex(name, 'metric_key', e.target.value)} placeholder="Metric key" className="px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
                 <div className="flex gap-2">
-                  <input type="text" value={analyzer.metric_key} onChange={e => updateRegex(name, 'metric_key', e.target.value)} placeholder="Metric key" className="flex-1 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+                  <input type="text" value={analyzer.category || ''} onChange={e => updateRegex(name, 'category', e.target.value)} placeholder="Category" className="flex-1 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
                   <button onClick={() => removeRegex(name)} className="text-red-500 hover:text-red-700 text-xs px-1">&times;</button>
                 </div>
+                <input type="text" value={analyzer.pattern} onChange={e => updateRegex(name, 'pattern', e.target.value)} placeholder="Pattern" className="col-span-3 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
               </div>
             </div>
             )
@@ -663,102 +668,20 @@ function ViewsEditor({ config, onChange }: {
 
 // ─── Templates Editor ────────────────────────────────────────────────────────
 
-function TemplatesEditor() {
-  const { t } = useTranslation()
-  const [templateList, setTemplateList] = useState<Record<string, FullProjectConfig>>({})
-  const [loading, setLoading] = useState(true)
-  const [deleting, setDeleting] = useState<string | null>(null)
-
-  const loadTemplates = useCallback(async () => {
-    setLoading(true)
-    try {
-      const list = await fetchTemplates()
-      setTemplateList(list)
-    } catch { /* ignore */ }
-    setLoading(false)
-  }, [])
-
-  useEffect(() => { loadTemplates() }, [loadTemplates])
-
-  const handleDelete = async (name: string) => {
-    if (!confirm(t('templates.deleteConfirm', { name }))) return
-    setDeleting(name)
-    try {
-      await deleteTemplate(name)
-      setTemplateList(prev => {
-        const next = { ...prev }
-        delete next[name]
-        return next
-      })
-    } catch (err) {
-      console.error('Failed to delete template:', err)
-    } finally {
-      setDeleting(null)
-    }
-  }
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="space-y-4">
-      {Object.keys(templateList).length === 0 && (
-        <div className="text-center py-20 text-slate-400">
-          <p>{t('templates.noTemplates')}</p>
-        </div>
-      )}
-      {Object.entries(templateList).map(([name, cfg]) => (
-        <Card key={name}>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-base">{name}</CardTitle>
-            <button
-              onClick={() => handleDelete(name)}
-              disabled={deleting === name}
-              className="text-xs px-2 py-1 rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
-            >
-              {t('config.techStack.delete')}
-            </button>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-slate-500">
-              {cfg.tech_stacks.length} {t('templates.techStacks')} · {Object.keys(cfg.custom_regex_analyzers).length} {t('templates.regexAnalyzers')} · {Object.keys(cfg.aggregation_views).length} {t('templates.views')}
-            </p>
-            {cfg.tech_stacks.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1">
-                {cfg.tech_stacks.map(ts => (
-                  <span key={ts.name} className="px-2 py-0.5 text-xs rounded bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300">
-                    {ts.name} ({ts.extensions.join(', ')})
-                  </span>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  )
-}
-
 // ─── Config Page ────────────────────────────────────────────────────────────
 
-type ConfigTab = 'tech_stacks' | 'global_excludes' | 'analyzers' | 'views' | 'templates'
+type ConfigTab = 'tech_stacks' | 'global_excludes' | 'analyzers' | 'views'
 
 const TABS: { key: ConfigTab; labelKey: string }[] = [
   { key: 'tech_stacks', labelKey: 'config.tabs.techStacks' },
   { key: 'global_excludes', labelKey: 'config.tabs.globalExcludes' },
   { key: 'analyzers', labelKey: 'config.tabs.analyzers' },
   { key: 'views', labelKey: 'config.tabs.views' },
-  { key: 'templates', labelKey: 'config.tabs.templates' },
 ]
 
 export default function ConfigPage() {
   const { t } = useTranslation()
-  const { currentProject, setProject, triggerConfigRefresh, configVersion } = useApp()
+  const { currentProject, setProject, triggerConfigRefresh, configVersion, projectList } = useApp()
 
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null)
   const [config, setConfig] = useState<FullProjectConfig | null>(null)
@@ -770,6 +693,9 @@ export default function ConfigPage() {
   const [showSaveAsTemplate, setShowSaveAsTemplate] = useState(false)
   const [templateNameInput, setTemplateNameInput] = useState('')
   const [templateSaving, setTemplateSaving] = useState(false)
+  // Modal states
+  const [showProjectManager, setShowProjectManager] = useState(false)
+  const [showTemplateManager, setShowTemplateManager] = useState(false)
 
   // Load project list (re-fetch when configVersion changes)
   useEffect(() => {
@@ -865,12 +791,10 @@ export default function ConfigPage() {
         return <AnalyzersEditor config={config} onChange={setConfig} />
       case 'views':
         return <ViewsEditor config={config} onChange={setConfig} />
-      case 'templates':
-        return <TemplatesEditor />
     }
   }
 
-  const projects = appConfig?.projects || []
+  const projects = projectList.length > 0 ? projectList : (appConfig?.projects || []).map(p => ({ name: p.name, has_config: true } as UnifiedProjectInfo))
 
   return (
     <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-900">
@@ -879,17 +803,41 @@ export default function ConfigPage() {
         <div className="flex items-center justify-between max-w-7xl mx-auto">
           <div className="flex items-center gap-4">
             <h1 className="text-lg font-semibold text-slate-800 dark:text-slate-100">{t('config.title')}</h1>
-            {projects.length > 1 && (
+            {projects.length > 1 ? (
               <select
                 value={currentProject}
                 onChange={e => setProject(e.target.value)}
                 className="px-3 py-1.5 text-sm border rounded-lg bg-white dark:bg-slate-700 border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 outline-none focus:ring-2 focus:ring-sky-500"
               >
-                {projects.map(p => (
-                  <option key={p.name} value={p.name}>{p.name}</option>
+                {projects.map((p: UnifiedProjectInfo) => (
+                  <option key={p.name} value={p.name}>
+                    {p.name}{p.has_config ? '' : ' (no config)'}
+                  </option>
                 ))}
               </select>
-            )}
+            ) : projects.length === 1 ? (
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-300 px-2">
+                {projects[0].name}
+              </span>
+            ) : null}
+            {/* Project Management button */}
+            <button
+              onClick={() => setShowProjectManager(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+              title={t('config.manageProjects') || 'Manage Projects'}
+            >
+              <Settings className="w-4 h-4" />
+              <span className="hidden sm:inline">{t('config.manageProjects') || 'Projects'}</span>
+            </button>
+            {/* Templates button */}
+            <button
+              onClick={() => setShowTemplateManager(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+              title={t('templates.title') || 'Templates'}
+            >
+              <BookTemplate className="w-4 h-4" />
+              <span className="hidden sm:inline">{t('templates.title') || 'Templates'}</span>
+            </button>
           </div>
           <div className="flex items-center gap-2">
             {message && (
@@ -901,10 +849,10 @@ export default function ConfigPage() {
                 {message.text}
               </span>
             )}
-            {activeTab !== 'templates' && (
+            {config && (
               <button
                 onClick={() => setShowSaveAsTemplate(true)}
-                disabled={!config || loading}
+                disabled={loading}
                 className="px-3 py-1.5 text-sm rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 transition-colors"
               >
                 {t('templates.saveAsTemplate')}
@@ -973,8 +921,22 @@ export default function ConfigPage() {
           ) : config ? (
             renderTabContent()
           ) : (
-            <div className="text-center py-20 text-slate-400">
-              <p>{t('dashboard.noData')}</p>
+            <div className="text-center py-20 text-slate-400 space-y-4">
+              <Database className="w-12 h-12 mx-auto text-slate-300 dark:text-slate-600" />
+              <p>{t('config.noConfigForProject', { project: currentProject })}</p>
+              <button
+                onClick={async () => {
+                  try {
+                    await createProject(currentProject)
+                    triggerConfigRefresh()
+                  } catch (err) {
+                    console.error(err)
+                  }
+                }}
+                className="px-4 py-2 text-sm rounded-lg bg-sky-500 text-white hover:bg-sky-600 transition-colors"
+              >
+                {t('config.createConfig') || 'Create Config'}
+              </button>
             </div>
           )}
         </div>
@@ -1013,6 +975,238 @@ export default function ConfigPage() {
           </div>
         </div>
       )}
+
+      {/* ── Project Management Modal ─────────────────────────────────── */}
+      {showProjectManager && (
+        <ProjectManagementModal
+          projectList={projectList}
+          currentProject={currentProject}
+          onSelect={(name) => { setProject(name); setShowProjectManager(false) }}
+          onCreateConfig={async (name) => {
+            try {
+              await createProject(name)
+              triggerConfigRefresh()
+            } catch (err) {
+              console.error(err)
+            }
+          }}
+          onDelete={async (name) => {
+            if (!confirm(t('config.deleteProjectConfirm', { name }) || `Delete project '${name}'? This will remove all config, scan data, and cached repos.`)) return
+            try {
+              await deleteProjectApi(name)
+              triggerConfigRefresh()
+            } catch (err) {
+              console.error(err)
+            }
+          }}
+          onClose={() => setShowProjectManager(false)}
+          t={t}
+        />
+      )}
+
+      {/* ── Template Management Modal ────────────────────────────────── */}
+      {showTemplateManager && (
+        <TemplateManagementModal
+          onClose={() => setShowTemplateManager(false)}
+          t={t}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── Project Management Modal ───────────────────────────────────────────
+
+function ProjectManagementModal({ projectList, currentProject, onSelect, onCreateConfig, onDelete, onClose, t }: {
+  projectList: UnifiedProjectInfo[]
+  currentProject: string
+  onSelect: (name: string) => void
+  onCreateConfig: (name: string) => Promise<void>
+  onDelete: (name: string) => Promise<void>
+  onClose: () => void
+  t: (key: string, opts?: any) => string
+}) {
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const [creating, setCreating] = useState<string | null>(null)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-xl shadow-2xl max-w-2xl w-full mx-4 p-5 space-y-4 max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+            {t('config.manageProjects') || 'Manage Projects'}
+          </h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+            ✕
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400">
+                <th className="text-left py-2 px-2 font-medium">Name</th>
+                <th className="text-center py-2 px-2 font-medium">Config</th>
+                <th className="text-center py-2 px-2 font-medium">Scans</th>
+                <th className="text-center py-2 px-2 font-medium">Repo</th>
+                <th className="text-right py-2 px-2 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {projectList.map(p => (
+                <tr key={p.name} className={`border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/30 ${p.name === currentProject ? 'bg-sky-50 dark:bg-sky-900/20' : ''}`}>
+                  <td className="py-2.5 px-2">
+                    <button
+                      onClick={() => onSelect(p.name)}
+                      className="text-sky-600 dark:text-sky-400 hover:underline font-medium text-left"
+                    >
+                      {p.name}
+                    </button>
+                  </td>
+                  <td className="py-2.5 px-2 text-center">
+                    {p.has_config ? (
+                      <span className="text-xs px-2 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">Yes</span>
+                    ) : (
+                      <button
+                        onClick={async () => { setCreating(p.name); await onCreateConfig(p.name); setCreating(null) }}
+                        disabled={creating === p.name}
+                        className="text-xs px-2 py-0.5 rounded bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 hover:bg-sky-200 dark:hover:bg-sky-900/50 disabled:opacity-40"
+                      >
+                        {creating === p.name ? '...' : 'Create'}
+                      </button>
+                    )}
+                  </td>
+                  <td className="py-2.5 px-2 text-center text-slate-600 dark:text-slate-400">
+                    {p.total_scans > 0 ? p.total_scans : '-'}
+                  </td>
+                  <td className="py-2.5 px-2 text-center">
+                    {p.has_cached_repo ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-slate-600 dark:text-slate-400">
+                        <GitBranch className="w-3 h-3" /> {p.cached_repo_branch || 'yes'}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-400">-</span>
+                    )}
+                  </td>
+                  <td className="py-2.5 px-2 text-right">
+                    <button
+                      onClick={async () => { setDeleting(p.name); await onDelete(p.name); setDeleting(null) }}
+                      disabled={deleting === p.name}
+                      className="text-xs px-2 py-1 rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
+                    >
+                      {deleting === p.name ? '...' : <Trash2 className="w-3.5 h-3.5" />}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {projectList.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="text-center py-10 text-slate-400">
+                    {t('dashboard.noData')}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Template Management Modal ─────────────────────────────────────────
+
+function TemplateManagementModal({ onClose, t }: {
+  onClose: () => void
+  t: (key: string, opts?: any) => string
+}) {
+  const [templateList, setTemplateList] = useState<Record<string, FullProjectConfig>>({})
+  const [loading, setLoading] = useState(true)
+  const [deleting, setDeleting] = useState<string | null>(null)
+
+  const loadTemplates = useCallback(async () => {
+    setLoading(true)
+    try {
+      const list = await fetchTemplates()
+      setTemplateList(list)
+    } catch { /* ignore */ }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { loadTemplates() }, [loadTemplates])
+
+  const handleDelete = async (name: string) => {
+    if (!confirm(t('templates.deleteConfirm', { name }))) return
+    setDeleting(name)
+    try {
+      await deleteTemplate(name)
+      setTemplateList(prev => {
+        const next = { ...prev }
+        delete next[name]
+        return next
+      })
+    } catch (err) {
+      console.error('Failed to delete template:', err)
+    } finally {
+      setDeleting(null)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-xl shadow-2xl max-w-2xl w-full mx-4 p-5 space-y-4 max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+            {t('templates.title') || 'Templates'}
+          </h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+            ✕
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
+            </div>
+          ) : Object.keys(templateList).length === 0 ? (
+            <div className="text-center py-20 text-slate-400">
+              <p>{t('templates.noTemplates')}</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {Object.entries(templateList).map(([name, cfg]) => (
+                <Card key={name}>
+                  <CardHeader className="flex flex-row items-center justify-between pb-2">
+                    <CardTitle className="text-base">{name}</CardTitle>
+                    <button
+                      onClick={() => handleDelete(name)}
+                      disabled={deleting === name}
+                      className="text-xs px-2 py-1 rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
+                    >
+                      {t('config.techStack.delete')}
+                    </button>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-xs text-slate-500">
+                      {cfg.tech_stacks.length} {t('templates.techStacks')} · {Object.keys(cfg.custom_regex_analyzers).length} {t('templates.regexAnalyzers')} · {Object.keys(cfg.aggregation_views).length} {t('templates.views')}
+                    </p>
+                    {cfg.tech_stacks.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {cfg.tech_stacks.map(ts => (
+                          <span key={ts.name} className="px-2 py-0.5 text-xs rounded bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300">
+                            {ts.name} ({ts.extensions.join(', ')})
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

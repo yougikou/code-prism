@@ -135,6 +135,7 @@
     "reset": "重置",
     "savedSuccess": "配置保存成功！",
     "saveError": "保存配置失败",
+    "manageProjects": "项目管理",
     "projectSettings": "项目设置",
     "selectProject": "选择一个项目...",
     "tabs": {
@@ -197,6 +198,7 @@
     "ja": "日本語"
   },
   "templates": {
+    "title": "模板管理",
     "selectTemplate": "应用模板（可选）",
     "noTemplate": "无",
     "saveAsTemplate": "另存为模板",

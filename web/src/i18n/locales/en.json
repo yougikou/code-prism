@@ -135,6 +135,7 @@
     "reset": "Reset",
     "savedSuccess": "Configuration saved successfully!",
     "saveError": "Failed to save configuration",
+    "manageProjects": "Manage Projects",
     "projectSettings": "Project Settings",
     "selectProject": "Select a project...",
     "tabs": {
@@ -197,6 +198,7 @@
     "ja": "日本語"
   },
   "templates": {
+    "title": "Templates",
     "selectTemplate": "Apply Template (Optional)",
     "noTemplate": "None",
     "saveAsTemplate": "Save as Template",

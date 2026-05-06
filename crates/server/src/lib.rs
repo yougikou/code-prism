@@ -19,6 +19,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::config::{AppConfig, ProjectAppConfig, SourceConfig, TopNParams, ViewConfig, ViewKind};
 use crate::routes::{
     AppState, get_scan_summary, get_view, get_scans, static_handler, execute_scan, get_scan_job, add_local_project,
+    list_unified_projects, create_project, delete_project,
 };
 use crate::git_routes::{clone_repo, list_branches, checkout_branch, list_commits, list_repos, delete_repo, extract_branches};
 
@@ -272,7 +273,9 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, config_path: Strin
         .route("/api/v1/config/templates", get(crate::template_routes::list_templates))
         .route("/api/v1/config/templates/:name", get(crate::template_routes::get_template).put(crate::template_routes::upsert_template).delete(crate::template_routes::delete_template))
         .route("/api/v1/config/reload", post(crate::routes::reload_config))
-        .route("/api/v1/projects", get(crate::routes::list_projects))
+        .route("/api/v1/projects", get(crate::routes::list_projects).post(create_project))
+        .route("/api/v1/projects/unified", get(list_unified_projects))
+        .route("/api/v1/projects/:project_name", delete(delete_project))
         .route("/api/v1/projects/add-local", post(add_local_project))
         // Git operations
         .route("/api/v1/git/repos", get(list_repos))

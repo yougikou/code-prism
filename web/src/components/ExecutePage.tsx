@@ -13,8 +13,6 @@ import {
   deleteRepo,
   executeScanWithRepo,
   fetchScanJob,
-  fetchConfig,
-  fetchProjects,
   fetchFullProjectConfig,
   updateProjectConfig,
   fetchTemplates,
@@ -169,7 +167,7 @@ function DiffComparison({ ref1, ref2, onSwap }: {
 
 export default function ExecutePage() {
   const { t } = useTranslation()
-  const { setProject, navigateTo, triggerConfigRefresh, configVersion } = useApp()
+  const { currentProject, setProject, navigateTo, triggerConfigRefresh, projectList } = useApp()
   // ── Repo list state ──
   const [reposList, setReposList] = useState<RepoInfo[]>([])
   const [loadingRepos, setLoadingRepos] = useState(true)
@@ -202,13 +200,12 @@ export default function ExecutePage() {
   const [ref1, setRef1] = useState<RefSelection | null>(null)
   const [ref2, setRef2] = useState<RefSelection | null>(null)
   // ── Scan state ──
-  const [projectName, setProjectName] = useState('')
   const [isScanning, setIsScanning] = useState(false)
   const [scanProgress, setScanProgress] = useState<ScanProgress>({ status: 'idle', message: '' })
 
-  // ── Project alias state ──
-  const [existingProjectNames, setExistingProjectNames] = useState<string[]>([])
-  const [projectAliasError, setProjectAliasError] = useState<string | null>(null)
+  // ── Project name: use shared context ──
+  const projectName = currentProject
+  const setProjectName = (name: string) => { if (name) setProject(name) }
 
   // ── Template state ──
   const [templates, setTemplates] = useState<Record<string, FullProjectConfig>>({})
@@ -245,27 +242,6 @@ export default function ExecutePage() {
   useEffect(() => {
     fetchTemplates().then(setTemplates).catch(() => {})
   }, [])
-
-  // ── Load existing project names for alias validation (refresh when config changes) ──
-  useEffect(() => {
-    const loadNames = async () => {
-      const names: string[] = []
-      try {
-        const config = await fetchConfig()
-        for (const p of config.projects) {
-          if (!names.includes(p.name)) names.push(p.name)
-        }
-      } catch { /* ignore */ }
-      try {
-        const dbProjects = await fetchProjects()
-        for (const p of dbProjects) {
-          if (!names.includes(p.name)) names.push(p.name)
-        }
-      } catch { /* ignore */ }
-      setExistingProjectNames(names)
-    }
-    loadNames()
-  }, [configVersion])
 
   // ── Load commits for the selected branch ──
   const loadCommits = useCallback(async (repoId: string, branch: string, offset: number, search: string, append: boolean) => {
@@ -371,6 +347,37 @@ export default function ExecutePage() {
       setRef1({ type: 'branch', value: initialBranch, label: `${initialBranch} (branch)` })
       setRef2(null)
       setCloneSuccess(t('execute.localRepoAdded'))
+
+      // Create project config if it doesn't exist (with template support)
+      if (projectName) {
+        try {
+          const existing = await fetchFullProjectConfig(projectName).catch(() => null)
+          if (!existing) {
+            if (selectedTemplate && templates[selectedTemplate]) {
+              const appliedConfig: FullProjectConfig = {
+                ...templates[selectedTemplate],
+                name: projectName,
+              }
+              await updateProjectConfig(projectName, appliedConfig)
+            } else {
+              const defaultConfig: FullProjectConfig = {
+                name: projectName,
+                tech_stacks: [],
+                global_excludes: [],
+                custom_regex_analyzers: {},
+                custom_impl_analyzers: {},
+                external_analyzers: {},
+                aggregation_views: {},
+              }
+              await updateProjectConfig(projectName, defaultConfig)
+            }
+            triggerConfigRefresh()
+          }
+        } catch (err) {
+          console.error('Failed to create project config after adding local repo:', err)
+        }
+      }
+
       loadRepos()
     } catch (err) {
       setCloneError(err instanceof Error ? err.message : 'Failed to add local repo')
@@ -395,20 +402,18 @@ export default function ExecutePage() {
       setRef1({ type: 'branch', value: initialBranch, label: `${initialBranch} (branch)` })
       setRef2(null)
       setCloneSuccess(t('execute.repoCloned', { branch: res.current_branch || 'unknown' }))
-      // Auto-create or apply template to project config if alias is valid and unique
-      if (projectName && !projectAliasError) {
+      // Auto-create or apply template to project config if it doesn't exist yet
+      if (projectName) {
         try {
           const existing = await fetchFullProjectConfig(projectName).catch(() => null)
           if (!existing) {
             if (selectedTemplate && templates[selectedTemplate]) {
-              // Apply template
               const appliedConfig: FullProjectConfig = {
                 ...templates[selectedTemplate],
                 name: projectName,
               }
               await updateProjectConfig(projectName, appliedConfig)
             } else {
-              // Create empty config
               const defaultConfig: FullProjectConfig = {
                 name: projectName,
                 tech_stacks: [],
@@ -420,7 +425,6 @@ export default function ExecutePage() {
               }
               await updateProjectConfig(projectName, defaultConfig)
             }
-            // Refresh other pages (e.g. ConfigPage) so they see the new project
             triggerConfigRefresh()
           }
         } catch (err) {
@@ -441,10 +445,9 @@ export default function ExecutePage() {
     setRepoId(repo.repo_id)
     setCloneError(null)
     setCloneSuccess(null)
-    // Restore project name from the stored repo, so scans use the correct project
+    // Use the stored project name (shared context), so scans associate with the correct project
     if (repo.project_name) {
-      setProjectName(repo.project_name)
-      setProjectAliasError(null)
+      setProject(repo.project_name)
     }
     try {
       const res = await listBranches(repo.repo_id)
@@ -461,12 +464,15 @@ export default function ExecutePage() {
 
   // ── Delete repo ──
   const handleDeleteRepo = async (id: string) => {
+    if (!confirm(t('execute.deleteRepoConfirm') || 'Remove this cached repository? The project config and scan data will be kept.')) return
     setDeletingRepoId(id)
+    const prevList = reposList
+    setReposList(prev => prev.filter(r => r.repo_id !== id))
     try {
       await deleteRepo(id)
-      setReposList(prev => prev.filter(r => r.repo_id !== id))
       triggerConfigRefresh()
     } catch (err) {
+      setReposList(prevList)
       setCloneError(err instanceof Error ? err.message : t('execute.failedToDeleteRepo'))
     } finally {
       setDeletingRepoId(null)
@@ -671,13 +677,21 @@ export default function ExecutePage() {
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 mb-1">
-                          <GitBranchIcon className="w-4 h-4 text-slate-400 shrink-0" />
+                          {repo.git_url ? (
+                            <GitBranchIcon className="w-4 h-4 text-slate-400 shrink-0" />
+                          ) : (
+                            <FolderGit2Icon className="w-4 h-4 text-slate-400 shrink-0" />
+                          )}
                           <span className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
-                            {shortUrl(repo.git_url)}
+                            {repo.git_url ? shortUrl(repo.git_url) : repo.path.split('\\').pop() || repo.path}
                           </span>
                         </div>
                         <div className="flex items-center gap-3 text-xs text-slate-500 ml-6">
-                          <span className="truncate">{repo.git_url}</span>
+                          {repo.git_url ? (
+                            <span className="truncate">{repo.git_url}</span>
+                          ) : (
+                            <span className="truncate">{repo.path}</span>
+                          )}
                           <span className="shrink-0">·</span>
                           <span className="shrink-0">{t('execute.branchLabel')} <span className="text-slate-400">{repo.current_branch || 'main'}</span></span>
                         </div>
@@ -756,14 +770,7 @@ export default function ExecutePage() {
                         setGitUrl(e.target.value)
                         if (!projectName) {
                           const name = shortUrl(e.target.value)
-                          if (name) {
-                            setProjectName(name)
-                            setProjectAliasError(
-                              existingProjectNames.includes(name)
-                                ? t('execute.projectAliasExists')
-                                : null
-                            )
-                          }
+                          if (name) setProject(name)
                         }
                       }}
                       onKeyDown={(e) => e.key === 'Enter' && handleClone()}
@@ -772,7 +779,7 @@ export default function ExecutePage() {
                     />
                     <button
                       onClick={handleClone}
-                      disabled={isCloning || !gitUrl.trim() || !projectName || !!projectAliasError}
+                      disabled={isCloning || !gitUrl.trim() || !projectName}
                       className="px-5 py-2 bg-sky-600 text-white rounded-lg font-medium hover:bg-sky-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors flex items-center gap-2 shrink-0"
                     >
                       {isCloning ? (
@@ -798,7 +805,7 @@ export default function ExecutePage() {
                     />
                     <button
                       onClick={handleAddLocal}
-                      disabled={isAddingLocal || !localPath.trim() || !projectName || !!projectAliasError}
+                      disabled={isAddingLocal || !localPath.trim() || !projectName}
                       className="px-5 py-2 bg-sky-600 text-white rounded-lg font-medium hover:bg-sky-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors flex items-center gap-2 shrink-0"
                     >
                       {isAddingLocal ? (
@@ -810,7 +817,7 @@ export default function ExecutePage() {
                   </div>
                 )}
 
-                {/* Project alias — always visible for setting unique name */}
+                {/* Project alias — uses shared project context */}
                 <div className="mt-3">
                   <label className="block text-sm font-medium text-slate-400 mb-1.5">
                     {t('execute.projectAlias')}
@@ -820,20 +827,15 @@ export default function ExecutePage() {
                     value={projectName}
                     onChange={(e) => {
                       const val = e.target.value.trim()
-                      setProjectName(val)
-                      setProjectAliasError(
-                        val && existingProjectNames.includes(val)
-                          ? t('execute.projectAliasExists')
-                          : null
-                      )
+                      if (val) setProject(val)
                     }}
                     placeholder={t('execute.projectPlaceholder')}
                     className="w-full px-4 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 text-sm"
                   />
-                  {projectAliasError && (
-                    <div className="mt-1.5 flex items-center gap-1.5 text-red-400 text-xs">
-                      <AlertTriangleIcon className="w-3.5 h-3.5" />
-                      {projectAliasError}
+                  {projectName && projectList.some(p => p.name === projectName) && (
+                    <div className="mt-1.5 flex items-center gap-1.5 text-amber-400 text-xs">
+                      <InfoIcon className="w-3.5 h-3.5" />
+                      {t('execute.projectAliasExists') || 'Project already exists — new scan data will be added to the existing project'}
                     </div>
                   )}
                 </div>
@@ -875,7 +877,13 @@ export default function ExecutePage() {
             <div className="flex items-center justify-between p-3 bg-white/80 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg">
               <div className="flex items-center gap-3 text-sm text-slate-700 dark:text-slate-300 min-w-0">
                 <FolderGit2Icon className="w-4 h-4 text-sky-400 shrink-0" />
-                <span className="truncate font-medium">{shortUrl(branches.find(b => b.is_head)?.name ? reposList.find(r => r.repo_id === repoId)?.git_url || '' : '')}</span>
+                <span className="truncate font-medium">
+                  {(() => {
+                    const repo = reposList.find(r => r.repo_id === repoId)
+                    if (!repo) return ''
+                    return repo.git_url ? shortUrl(repo.git_url) : repo.path.split('\\').pop() || repo.path
+                  })()}
+                </span>
                 <span className="text-slate-500">·</span>
                 <GitBranchIcon className="w-4 h-4 text-slate-500 shrink-0" />
                 <span className="text-sky-300">{currentBranch}</span>

@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, type ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { fetchUnifiedProjects, type UnifiedProjectInfo } from '../services/data';
 
 type ViewMode = 'snapshot' | 'diff';
 type TechStack = string; // Dynamic
@@ -26,6 +27,8 @@ interface AppContextType extends AppState {
   toggleNav: () => void;
   configVersion: number;
   triggerConfigRefresh: () => void;
+  projectList: UnifiedProjectInfo[];
+  loadUnifiedProjects: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -48,8 +51,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [navVisible, setNavVisible] = useState(false);
   const [configVersion, setConfigVersion] = useState(0);
+  const [projectList, setProjectList] = useState<UnifiedProjectInfo[]>([]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     const root = window.document.documentElement;
     root.classList.remove('light', 'dark');
     root.classList.add(theme);
@@ -62,6 +66,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const toggleNav = () => setNavVisible(prev => !prev);
   const triggerConfigRefresh = () => setConfigVersion(v => v + 1);
+
+  const loadUnifiedProjects = useCallback(async () => {
+    try {
+      const projects = await fetchUnifiedProjects();
+      setProjectList(projects);
+      // Auto-select first project if current project is not in the list
+      setCurrentProject(prev => {
+        if (projects.length > 0 && !projects.find(p => p.name === prev)) {
+          return projects[0].name;
+        }
+        return prev;
+      });
+    } catch (e) {
+      console.error('Failed to load unified projects:', e);
+    }
+  }, []);
+
+  // Load unified projects on mount and whenever configVersion changes
+  useEffect(() => {
+    loadUnifiedProjects();
+  }, [configVersion, loadUnifiedProjects]);
 
   return (
     <AppContext.Provider
@@ -84,6 +109,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         toggleNav,
         configVersion,
         triggerConfigRefresh,
+        projectList,
+        loadUnifiedProjects,
       }}
     >
       {children}

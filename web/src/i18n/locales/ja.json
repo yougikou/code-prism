@@ -129,6 +129,7 @@
     "reset": "リセット",
     "savedSuccess": "設定が保存されました！",
     "saveError": "設定の保存に失敗しました",
+    "manageProjects": "プロジェクト管理",
     "projectSettings": "プロジェクト設定",
     "selectProject": "プロジェクトを選択...",
     "tabs": {
@@ -190,6 +191,7 @@
     "ja": "日本語"
   },
   "templates": {
+    "title": "テンプレート管理",
     "selectTemplate": "テンプレートを適用（オプション）",
     "noTemplate": "なし",
     "saveAsTemplate": "テンプレートとして保存",

@@ -698,18 +698,18 @@ impl Scanner {
     // --- DB Helpers ---
 
     async fn get_or_create_project(&self, name: &str, path: &str) -> Result<i64> {
-        let rec = sqlx::query!(
+        let rec = sqlx::query_scalar::<_, i64>(
             "INSERT INTO projects (name, repo_path) VALUES (?, ?)
-             ON CONFLICT(repo_path) DO UPDATE SET name = excluded.name
+             ON CONFLICT(name) DO UPDATE SET repo_path = excluded.repo_path
              RETURNING id",
-            name,
-            path
         )
+        .bind(name)
+        .bind(path)
         .fetch_one(self.db.pool())
         .await
         .context("Failed to get or create project")?;
 
-        Ok(rec.id)
+        Ok(rec)
     }
 
     async fn create_scan_record(

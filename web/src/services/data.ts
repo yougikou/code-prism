@@ -520,3 +520,52 @@ export async function deleteRepo(repoId: string): Promise<void> {
     throw new Error(err.error || 'Failed to delete repo');
   }
 }
+
+// ─── Unified Project API ─────────────────────────────────────────────
+
+export interface UnifiedProjectInfo {
+  name: string;
+  has_config: boolean;
+  config_repo_path: string | null;
+  has_cached_repo: boolean;
+  cached_repo_id: string | null;
+  cached_repo_branch: string | null;
+  total_scans: number;
+  last_scan_time: string | null;
+  scan_modes: string[];
+}
+
+export async function fetchUnifiedProjects(): Promise<UnifiedProjectInfo[]> {
+  try {
+    const res = await fetch('/api/v1/projects/unified');
+    if (!res.ok) throw new Error('Failed to fetch unified project list');
+    return await res.json();
+  } catch (error) {
+    console.error("Error fetching unified projects:", error);
+    return [];
+  }
+}
+
+export async function createProject(name: string): Promise<{ status: string; message: string }> {
+  const res = await fetch('/api/v1/projects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to create project' }));
+    throw new Error(err.error || 'Failed to create project');
+  }
+  return await res.json();
+}
+
+export async function deleteProject(projectName: string): Promise<{ status: string; message: string }> {
+  const res = await fetch(`/api/v1/projects/${encodeURIComponent(projectName)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to delete project' }));
+    throw new Error(err.error || 'Failed to delete project');
+  }
+  return await res.json();
+}

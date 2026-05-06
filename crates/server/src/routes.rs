@@ -58,6 +58,277 @@ pub struct ProjectInfo {
     pub last_scan_time: Option<String>,
 }
 
+// ── Unified Project Info ─────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct UnifiedProjectInfo {
+    pub name: String,
+    pub has_config: bool,
+    pub config_repo_path: Option<String>,
+    pub has_cached_repo: bool,
+    pub cached_repo_id: Option<String>,
+    pub cached_repo_branch: Option<String>,
+    pub total_scans: i64,
+    pub last_scan_time: Option<String>,
+    pub scan_modes: Vec<String>,
+}
+
+/// GET /api/v1/projects/unified — unified project list from config + DB + git cache
+pub async fn list_unified_projects(State(state): State<AppState>) -> impl IntoResponse {
+    use std::collections::HashMap;
+
+    // 1. Query DB projects with scan stats
+    let db_query = r#"
+        SELECT p.name,
+               COUNT(s.id) as total_scans,
+               MAX(s.scan_time) as last_scan_time,
+               GROUP_CONCAT(DISTINCT s.scan_mode) as scan_modes
+        FROM projects p
+        LEFT JOIN scans s ON s.project_id = p.id
+        GROUP BY p.name
+        ORDER BY p.name
+    "#;
+
+    let db_rows = match sqlx::query_as::<_, (String, i64, Option<String>, Option<String>)>(db_query)
+        .fetch_all(state.db.pool())
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("Database Error listing unified projects: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Database Error").into_response();
+        }
+    };
+
+    // 2. Index git cache repos by project name
+    let mut git_repos: HashMap<String, (String, String)> = HashMap::new();
+    for (repo_id, repo) in state.git_cache.list_all() {
+        if let Some(ref pn) = repo.project_name {
+            git_repos.insert(pn.clone(), (repo_id, repo.current_branch));
+        }
+    }
+
+    // 3. Read config projects
+    let core_config = state.core_config.read().unwrap().clone();
+
+    // 4. Build unified map keyed by project name
+    let mut project_map: HashMap<String, UnifiedProjectInfo> = HashMap::new();
+
+    // Start with config projects
+    for p in &core_config.projects {
+        project_map.insert(p.name.clone(), UnifiedProjectInfo {
+            name: p.name.clone(),
+            has_config: true,
+            config_repo_path: p.repo_path.clone(),
+            has_cached_repo: false,
+            cached_repo_id: None,
+            cached_repo_branch: None,
+            total_scans: 0,
+            last_scan_time: None,
+            scan_modes: vec![],
+        });
+    }
+
+    // Merge DB scan data
+    for (name, total_scans, last_scan_time, scan_modes) in &db_rows {
+        let entry = project_map.entry(name.clone()).or_insert(UnifiedProjectInfo {
+            name: name.clone(),
+            has_config: false,
+            config_repo_path: None,
+            has_cached_repo: false,
+            cached_repo_id: None,
+            cached_repo_branch: None,
+            total_scans: 0,
+            last_scan_time: None,
+            scan_modes: vec![],
+        });
+        entry.total_scans = *total_scans;
+        entry.last_scan_time = last_scan_time.clone();
+        entry.scan_modes = scan_modes.as_ref()
+            .map(|s| s.split(',').map(|m| m.to_string()).collect())
+            .unwrap_or_default();
+    }
+
+    // Merge git cache
+    for (name, (repo_id, branch)) in &git_repos {
+        let entry = project_map.entry(name.clone()).or_insert(UnifiedProjectInfo {
+            name: name.clone(),
+            has_config: false,
+            config_repo_path: None,
+            has_cached_repo: false,
+            cached_repo_id: Some(repo_id.clone()),
+            cached_repo_branch: Some(branch.clone()),
+            total_scans: 0,
+            last_scan_time: None,
+            scan_modes: vec![],
+        });
+        entry.has_cached_repo = true;
+        entry.cached_repo_id = Some(repo_id.clone());
+        entry.cached_repo_branch = Some(branch.clone());
+    }
+
+    // 5. Return sorted by name
+    let mut result: Vec<UnifiedProjectInfo> = project_map.into_values().collect();
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Json(result).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct CreateProjectRequest {
+    pub name: String,
+}
+
+/// POST /api/v1/projects — create a bare project config entry
+pub async fn create_project(
+    State(state): State<AppState>,
+    AxumJson(req): AxumJson<CreateProjectRequest>,
+) -> impl IntoResponse {
+    let name = req.name.trim().to_string();
+    if name.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Project name is required"}))).into_response();
+    }
+
+    let yaml_content = match std::fs::read_to_string(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to read config: {}", e)}))).into_response(),
+    };
+
+    let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to parse config: {}", e)}))).into_response(),
+    };
+
+    // Idempotent: if project already exists in config, just return OK
+    if core_config.projects.iter().any(|p| p.name == name) {
+        return Json(serde_json::json!({"status": "ok", "message": "Project already exists"})).into_response();
+    }
+
+    core_config.projects.push(codeprism_core::ProjectConfig {
+        name: name.clone(),
+        ..Default::default()
+    });
+
+    // Atomic write: tmp + rename
+    let yaml_str = match serde_yaml::to_string(&core_config) {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to serialize config: {}", e)}))).into_response(),
+    };
+    let tmp_path = format!("{}.tmp", state.config_path);
+    if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to write config: {}", e)}))).into_response();
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to save config: {}", e)}))).into_response();
+    }
+
+    // Rebuild in-memory state (same pattern as update_project_config)
+    *state.core_config.write().unwrap() = core_config;
+    let projects_config = state.core_config.read().unwrap().get_projects();
+    let mut project_app_configs = Vec::new();
+    for project in &projects_config {
+        let views = crate::convert_project_views(project);
+        let mut tech_stacks: Vec<String> = project.tech_stacks.iter().map(|ts| ts.name.clone()).collect();
+        tech_stacks.sort();
+        project_app_configs.push(crate::config::ProjectAppConfig {
+            name: project.name.clone(),
+            views,
+            tech_stacks,
+        });
+    }
+    *state.config.write().unwrap() = crate::config::AppConfig { projects: project_app_configs };
+
+    Json(serde_json::json!({"status": "ok", "message": format!("Project '{}' created", name)})).into_response()
+}
+
+/// DELETE /api/v1/projects/{project_name} — full project deletion (config + DB + repo files)
+pub async fn delete_project(
+    State(state): State<AppState>,
+    Path(project_name): Path<String>,
+) -> impl IntoResponse {
+    let pool = state.db.pool();
+
+    // 1. Delete all DB records for this project
+    let project_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM projects WHERE name = ?")
+        .bind(&project_name)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+    for pid in &project_ids {
+        sqlx::query("DELETE FROM scan_summaries WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
+            .bind(pid).execute(pool).await.ok();
+        sqlx::query("DELETE FROM metrics WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
+            .bind(pid).execute(pool).await.ok();
+        sqlx::query("DELETE FROM file_changes WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
+            .bind(pid).execute(pool).await.ok();
+        sqlx::query("DELETE FROM scans WHERE project_id = ?")
+            .bind(pid).execute(pool).await.ok();
+    }
+    sqlx::query("DELETE FROM scan_jobs WHERE project_name = ?")
+        .bind(&project_name).execute(pool).await.ok();
+    sqlx::query("DELETE FROM projects WHERE name = ?")
+        .bind(&project_name).execute(pool).await.ok();
+
+    // 2. Remove cached repo entries + on-disk directories
+    let repos = state.git_cache.list_all();
+    for (repo_id, repo) in &repos {
+        if repo.project_name.as_deref() == Some(&project_name) {
+            let path = repo.path.clone();
+            tokio::spawn(async move {
+                let _ = tokio::fs::remove_dir_all(&path).await;
+            });
+            state.git_cache.remove(repo_id);
+        }
+    }
+
+    // 3. Remove project config from YAML
+    let yaml_content = match std::fs::read_to_string(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to read config: {}", e)}))).into_response(),
+    };
+    let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to parse config: {}", e)}))).into_response(),
+    };
+    core_config.projects.retain(|p| p.name != project_name);
+
+    // Atomic write
+    let yaml_str = match serde_yaml::to_string(&core_config) {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to serialize config: {}", e)}))).into_response(),
+    };
+    let tmp_path = format!("{}.tmp", state.config_path);
+    if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to write config: {}", e)}))).into_response();
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to save config: {}", e)}))).into_response();
+    }
+
+    // Rebuild in-memory state
+    *state.core_config.write().unwrap() = core_config;
+    let projects_config = state.core_config.read().unwrap().get_projects();
+    let mut project_app_configs = Vec::new();
+    for project in &projects_config {
+        let views = crate::convert_project_views(project);
+        let mut tech_stacks: Vec<String> = project.tech_stacks.iter().map(|ts| ts.name.clone()).collect();
+        tech_stacks.sort();
+        project_app_configs.push(crate::config::ProjectAppConfig {
+            name: project.name.clone(),
+            views,
+            tech_stacks,
+        });
+    }
+    *state.config.write().unwrap() = crate::config::AppConfig { projects: project_app_configs };
+
+    Json(serde_json::json!({"status": "ok", "message": format!("Project '{}' deleted", project_name)})).into_response()
+}
+
 /// GET /api/v1/projects — list all projects that have scan data in the DB
 pub async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
     let query = r#"

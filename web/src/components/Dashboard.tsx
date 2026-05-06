@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { MetricCard } from './widgets/MetricCard';
 
 import ChartRenderer from './ChartRenderer';
-import { fetchView, fetchProjects, fetchScanSummary, mergeProjectNames, type AggregationResult, type AppConfig, type ProjectInfo, type ScanSummary, getDefaultProject, getProjectNames } from '@/services/data';
+import { fetchView, fetchScanSummary, type AggregationResult, type AppConfig, type ScanSummary, getDefaultProject } from '@/services/data';
 import { Activity, FileText } from 'lucide-react';
 
 
@@ -21,13 +21,13 @@ const Dashboard = () => {
     selectedTechStack, setSelectedTechStack,
     selectedRunId, setSelectedRunId,
     availableTechStacks, setAvailableTechStacks,
-    theme, navigateTo, configVersion
+    theme, navigateTo, configVersion,
+    projectList
   } = useApp();
 
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
-  const configProjectNames = appConfig ? getProjectNames(appConfig) : [];
-  const [dbProjectInfos, setDbProjectInfos] = useState<ProjectInfo[]>([]);
-  const mergedProjectNames = mergeProjectNames(configProjectNames, dbProjectInfos);
+  // Use unified project list from context; derive all names for the dropdown
+  const mergedProjectNames = projectList.map(p => p.name);
 
   const [viewsConfig, setViewsConfig] = useState<any[]>([]);
   const [activeViews, setActiveViews] = useState<any[]>([]);
@@ -48,12 +48,8 @@ const Dashboard = () => {
       const config = await import('@/services/data').then(m => m.fetchConfig());
       setAppConfig(config);
 
-      // Also fetch DB projects (projects with scan data)
-      const dbProjects = await fetchProjects();
-      setDbProjectInfos(dbProjects);
-
-      // Set default project if currentProject is not in config or just starting
-      const allProjectNames = mergeProjectNames(getProjectNames(config), dbProjects);
+      // Use unified project list from context for determining available names
+      const allProjectNames = projectList.map(p => p.name);
       const defaultProject = getDefaultProject(config);
       if (defaultProject) {
         // If currentProject is not in available projects, use the first project
@@ -69,9 +65,9 @@ const Dashboard = () => {
         if (!['Summary', ...projectConfig.tech_stacks].includes(selectedTechStack)) {
           setSelectedTechStack('Summary');
         }
-      } else if (dbProjects.length > 0) {
-        // No config but DB has projects — use the first DB project
-        setProject(dbProjects[0].name);
+      } else if (projectList.length > 0) {
+        // No config but we have projects — use the first one
+        setProject(projectList[0].name);
         setViewsConfig([]);
         setAvailableTechStacks([]);
       }
@@ -88,7 +84,7 @@ const Dashboard = () => {
         setAvailableTechStacks(projectConfig.tech_stacks);
         setSelectedTechStack('Summary'); // Reset to Summary on project change
         setViewDataMap({}); // Clear old data
-      } else if (dbProjectInfos.some(p => p.name === currentProject)) {
+      } else if (projectList.some(p => p.name === currentProject && !p.has_config)) {
         // DB-only project (no config) — show empty views
         setViewsConfig([]);
         setAvailableTechStacks([]);
@@ -97,7 +93,7 @@ const Dashboard = () => {
       }
       // Note: selectedRunId is handled by the fetchRuns effect
     }
-  }, [currentProject, appConfig, dbProjectInfos]);
+  }, [currentProject, appConfig, projectList]);
 
   // Filter Active Views based on selection
   useEffect(() => {
