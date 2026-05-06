@@ -226,11 +226,18 @@ pub struct AggregationView {
     /// Display mode for change types: "all" (stacked) or "switchable" (A/M/D toggle)
     #[serde(default)]
     pub change_type_mode: Option<String>,
+    /// Width in grid columns (1 or 2). Defaults to 1.
+    #[serde(default = "default_width")]
+    pub width: u32,
     pub func: AggregationFunc,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_width() -> u32 {
+    1
 }
 
 fn default_metric_key() -> String {
@@ -546,6 +553,64 @@ project_templates:
                             project.name,
                             analyzer_id,
                             valid_ids.join(", ")
+                        ));
+                    }
+                }
+            }
+
+            // Validate aggregation views
+            for (view_id, view) in &project.aggregation_views {
+                if view.title.is_empty() {
+                    errors.push(format!(
+                        "Aggregation view '{}' in project '{}' has an empty title",
+                        view_id, project.name
+                    ));
+                }
+
+                // Validate func-specific fields
+                match &view.func {
+                    AggregationFunc::TopN { limit, .. } => {
+                        if *limit == 0 {
+                            errors.push(format!(
+                                "TopN view '{}' in project '{}' has limit=0",
+                                view_id, project.name
+                            ));
+                        }
+                    }
+                    AggregationFunc::Distribution { buckets, .. } => {
+                        if buckets.is_empty() {
+                            errors.push(format!(
+                                "Distribution view '{}' in project '{}' has no buckets defined",
+                                view_id, project.name
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+
+                // Validate chart_type if set
+                if let Some(chart_type) = &view.chart_type {
+                    const VALID_CHART_TYPES: &[&str] = &[
+                        "card", "table",
+                        "bar_row", "bar_horizontal",
+                        "bar_col", "bar_vertical",
+                        "pie", "line", "stacked_bar",
+                        "heatmap", "radar", "gauge",
+                    ];
+                    if !VALID_CHART_TYPES.contains(&chart_type.as_str()) {
+                        errors.push(format!(
+                            "Aggregation view '{}' in project '{}' has unknown chart_type '{}'",
+                            view_id, project.name, chart_type
+                        ));
+                    }
+                }
+
+                // Validate change_type_mode if set
+                if let Some(ctm) = &view.change_type_mode {
+                    if ctm != "all" && ctm != "switchable" {
+                        errors.push(format!(
+                            "Aggregation view '{}' in project '{}' has invalid change_type_mode '{}' (expected 'all' or 'switchable')",
+                            view_id, project.name, ctm
                         ));
                     }
                 }

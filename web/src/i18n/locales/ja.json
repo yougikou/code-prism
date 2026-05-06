@@ -183,7 +183,9 @@
       "buckets": "バケット",
       "add": "ビューを追加",
       "delete": "削除"
-    }
+    },
+    "expandAll": "すべて展開",
+    "collapseAll": "すべて折りたたむ"
   },
   "language": {
     "en": "English",

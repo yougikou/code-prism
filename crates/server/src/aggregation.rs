@@ -1,5 +1,6 @@
 use crate::config::{ViewConfig, ViewKind};
 use anyhow::Result;
+use codeprism_core::SortOrder;
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 use std::collections::HashMap;
@@ -75,7 +76,11 @@ impl TopNAggregator {
             query.push_str(" AND change_type = ?");
         }
 
-        query.push_str(" ORDER BY value_after DESC LIMIT ?");
+        let order_dir = match params.order {
+            SortOrder::Asc => "ASC",
+            SortOrder::Desc => "DESC",
+        };
+        query.push_str(&format!(" ORDER BY value_after {} LIMIT ?", order_dir));
 
         let mut sql_query = sqlx::query(&query).bind(scan_id);
 
@@ -455,7 +460,7 @@ impl StatAggregator {
         };
 
         let mut query = format!(
-            "SELECT {}(value_after) as stat_value, tech_stack, category, metric_key, analyzer_id
+            "SELECT {}(value_after) as stat_value, tech_stack, category, metric_key, analyzer_id, change_type
              FROM metrics
              WHERE scan_id = ?",
             stat_fn
@@ -476,6 +481,15 @@ impl StatAggregator {
         if filters.tech_stack.is_some() {
             query.push_str(" AND tech_stack = ?");
         }
+        if filters.category.is_some() {
+            query.push_str(" AND category = ?");
+        }
+        if filters.metric_key.is_some() {
+            query.push_str(" AND metric_key = ?");
+        }
+        if filters.change_type.is_some() {
+            query.push_str(" AND change_type = ?");
+        }
 
         // Grouping
         let effective_group_by = if let Some(g) = &filters.group_by {
@@ -487,10 +501,13 @@ impl StatAggregator {
         };
 
         if let Some(ref group_by_str) = effective_group_by {
+            const ALLOWED_GROUP_KEYS: &[&str] = &[
+                "tech_stack", "category", "change_type", "metric_key", "analyzer_id",
+            ];
             let keys: Vec<&str> = group_by_str
                 .split(',')
                 .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
+                .filter(|s| !s.is_empty() && ALLOWED_GROUP_KEYS.contains(s))
                 .collect();
             if !keys.is_empty() {
                 query.push_str(" GROUP BY ");
@@ -515,6 +532,15 @@ impl StatAggregator {
         if let Some(ts) = &filters.tech_stack {
             sql_query = sql_query.bind(ts);
         }
+        if let Some(cat) = &filters.category {
+            sql_query = sql_query.bind(cat);
+        }
+        if let Some(mk) = &filters.metric_key {
+            sql_query = sql_query.bind(mk);
+        }
+        if let Some(ct) = &filters.change_type {
+            sql_query = sql_query.bind(ct);
+        }
 
         let rows = sql_query.fetch_all(pool).await?;
 
@@ -537,7 +563,9 @@ impl StatAggregator {
                     category: row
                         .try_get::<Option<String>, _>("category")
                         .unwrap_or_default(),
-                    change_type: None,
+                    change_type: row
+                        .try_get::<Option<String>, _>("change_type")
+                        .unwrap_or_default(),
                     metric_key: row
                         .try_get::<Option<String>, _>("metric_key")
                         .unwrap_or_default(),
@@ -591,6 +619,15 @@ impl DistributionAggregator {
         if filters.tech_stack.is_some() {
             query.push_str(" AND tech_stack = ?");
         }
+        if filters.category.is_some() {
+            query.push_str(" AND category = ?");
+        }
+        if filters.metric_key.is_some() {
+            query.push_str(" AND metric_key = ?");
+        }
+        if filters.change_type.is_some() {
+            query.push_str(" AND change_type = ?");
+        }
 
         let mut sql_query = sqlx::query(&query).bind(scan_id);
 
@@ -608,6 +645,15 @@ impl DistributionAggregator {
         // Bind dynamic filters
         if let Some(ts) = &filters.tech_stack {
             sql_query = sql_query.bind(ts);
+        }
+        if let Some(cat) = &filters.category {
+            sql_query = sql_query.bind(cat);
+        }
+        if let Some(mk) = &filters.metric_key {
+            sql_query = sql_query.bind(mk);
+        }
+        if let Some(ct) = &filters.change_type {
+            sql_query = sql_query.bind(ct);
         }
 
         let rows = sql_query.fetch_all(pool).await?;

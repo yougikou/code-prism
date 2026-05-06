@@ -17,7 +17,7 @@ import {
   type FullTechStack,
   type UnifiedProjectInfo,
 } from '@/services/data'
-import { Settings, BookTemplate, Trash2, Database, GitBranch } from 'lucide-react'
+import { Settings, BookTemplate, Trash2, Database, GitBranch, ChevronDown, ChevronRight } from 'lucide-react'
 
 // ─── Tag Input ──────────────────────────────────────────────────────────────
 
@@ -148,6 +148,24 @@ function TechStacksEditor({ config, onChange }: {
   onChange: (c: FullProjectConfig) => void;
 }) {
   const { t } = useTranslation()
+  const [expandedStacks, setExpandedStacks] = useState<Set<number>>(new Set())
+
+  const toggleStack = (index: number) => {
+    setExpandedStacks(prev => {
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }
+
+  const expandAllStacks = () => {
+    setExpandedStacks(new Set(config.tech_stacks.map((_, i) => i)))
+  }
+
+  const collapseAllStacks = () => {
+    setExpandedStacks(new Set())
+  }
 
   const validAnalyzerIds = useMemo(() => {
     const ids = new Set<string>(['file_count', 'char_count'])
@@ -172,22 +190,48 @@ function TechStacksEditor({ config, onChange }: {
 
   const removeStack = (index: number) => {
     onChange({ ...config, tech_stacks: config.tech_stacks.filter((_, i) => i !== index) })
+    setExpandedStacks(prev => {
+      const next = new Set<number>()
+      for (const i of prev) {
+        if (i === index) continue
+        next.add(i > index ? i - 1 : i)
+      }
+      return next
+    })
   }
 
   return (
     <div className="space-y-4">
+      {config.tech_stacks.length > 0 && (
+        <div className="flex items-center gap-2">
+          <button onClick={expandAllStacks} className="text-xs px-2 py-1 rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+            {t('config.expandAll')}
+          </button>
+          <button onClick={collapseAllStacks} className="text-xs px-2 py-1 rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+            {t('config.collapseAll')}
+          </button>
+        </div>
+      )}
       {config.tech_stacks.map((stack, i) => (
         <Card key={i}>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-base">{t('config.techStack.title', { name: stack.name || `#${i + 1}` })}</CardTitle>
-            <button
-              onClick={() => removeStack(i)}
-              className="text-xs px-2 py-1 rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-            >
-              {t('config.techStack.delete')}
-            </button>
-          </CardHeader>
-          <CardContent className="space-y-3">
+          <button className="w-full text-left" onClick={() => toggleStack(i)}>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <span className="flex items-center gap-2 min-w-0">
+                {expandedStacks.has(i) ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-400" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-400" />}
+                <CardTitle className="text-base truncate">{t('config.techStack.title', { name: stack.name || `#${i + 1}` })}</CardTitle>
+              </span>
+              <span className="shrink-0">
+                <button
+                  onClick={e => { e.stopPropagation(); removeStack(i) }}
+                  className="text-xs px-2 py-1 rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                >
+                  {t('config.techStack.delete')}
+                </button>
+              </span>
+            </CardHeader>
+          </button>
+          <div className={`overflow-hidden transition-all duration-200 ease-in-out ${expandedStacks.has(i) ? 'max-h-[3000px] opacity-100' : 'max-h-0 opacity-0'}`}>
+            <CardContent className="space-y-3">
             <div>
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.techStack.name')}</label>
               <input
@@ -214,6 +258,7 @@ function TechStacksEditor({ config, onChange }: {
               <TagInput tags={stack.excludes} onChange={v => updateStack(i, 'excludes', v)} placeholder="e.g. node_modules/" />
             </div>
           </CardContent>
+          </div>
         </Card>
       ))}
       <button
@@ -541,6 +586,24 @@ function ViewsEditor({ config, onChange }: {
   onChange: (c: FullProjectConfig) => void;
 }) {
   const { t } = useTranslation()
+  const [expandedViews, setExpandedViews] = useState<Set<string>>(new Set())
+
+  const toggleView = (id: string) => {
+    setExpandedViews(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const expandAllViews = () => {
+    setExpandedViews(new Set(Object.keys(config.aggregation_views)))
+  }
+
+  const collapseAllViews = () => {
+    setExpandedViews(new Set())
+  }
 
   const updateView = (id: string, field: string, value: string | boolean | string[] | undefined) => {
     const views = { ...config.aggregation_views }
@@ -569,21 +632,44 @@ function ViewsEditor({ config, onChange }: {
     const views = { ...config.aggregation_views }
     delete views[id]
     onChange({ ...config, aggregation_views: views })
+    setExpandedViews(prev => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
   }
 
   return (
     <div className="space-y-4">
+      {Object.keys(config.aggregation_views).length > 0 && (
+        <div className="flex items-center gap-2">
+          <button onClick={expandAllViews} className="text-xs px-2 py-1 rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+            {t('config.expandAll')}
+          </button>
+          <button onClick={collapseAllViews} className="text-xs px-2 py-1 rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+            {t('config.collapseAll')}
+          </button>
+        </div>
+      )}
       {Object.entries(config.aggregation_views).map(([id, view]) => (
         <Card key={id}>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-base">{t('config.views.title', { id })}</CardTitle>
-            <button
-              onClick={() => removeView(id)}
-              className="text-xs px-2 py-1 rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-            >
-              {t('config.techStack.delete')}
-            </button>
-          </CardHeader>
+          <button className="w-full text-left" onClick={() => toggleView(id)}>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <span className="flex items-center gap-2 min-w-0">
+                {expandedViews.has(id) ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-400" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-400" />}
+                <CardTitle className="text-base truncate">{t('config.views.title', { id })}</CardTitle>
+              </span>
+              <span className="shrink-0">
+                <button
+                  onClick={e => { e.stopPropagation(); removeView(id) }}
+                  className="text-xs px-2 py-1 rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                >
+                  {t('config.techStack.delete')}
+                </button>
+              </span>
+            </CardHeader>
+          </button>
+          <div className={`overflow-hidden transition-all duration-200 ease-in-out ${expandedViews.has(id) ? 'max-h-[3000px] opacity-100' : 'max-h-0 opacity-0'}`}>
           <CardContent className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -654,6 +740,7 @@ function ViewsEditor({ config, onChange }: {
               </div>
             </div>
           </CardContent>
+          </div>
         </Card>
       ))}
       <button

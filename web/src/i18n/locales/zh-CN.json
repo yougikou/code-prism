@@ -190,7 +190,9 @@
       "buckets": "分桶",
       "add": "添加视图",
       "delete": "删除"
-    }
+    },
+    "expandAll": "全部展开",
+    "collapseAll": "全部收起"
   },
   "language": {
     "en": "English",

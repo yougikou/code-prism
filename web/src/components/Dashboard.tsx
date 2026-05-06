@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '@/contexts/AppContext';
 import { Header } from './layout/Header';
@@ -112,6 +112,19 @@ const Dashboard = () => {
     }
   }, [selectedTechStack, viewsConfig]);
 
+  // Clean up changeTypeFilters for views that are no longer active
+  useEffect(() => {
+    setChangeTypeFilters(prev => {
+      const activeIds = new Set(activeViews.map(v => v.id));
+      const next = Object.fromEntries(
+        Object.entries(prev).filter(([id]) => activeIds.has(id))
+      );
+      // Avoid re-render if nothing changed
+      if (Object.keys(next).length === Object.keys(prev).length) return prev;
+      return next;
+    });
+  }, [activeViews]);
+
   // Fetch Runs - depends on selected project and view mode
   useEffect(() => {
     if (!currentProject) return;
@@ -220,20 +233,21 @@ const Dashboard = () => {
     return () => { isActive = false; };
   }, [currentProject, selectedRunId]);
 
-  // Handle individual switchable filter changes - only fetch the affected view
-  const [lastChangeTypeFilters, setLastChangeTypeFilters] = useState<Record<string, string>>({});
+  // Track previous change_type filters using ref to avoid re-render cycles
+  const prevChangeTypeFilters = useRef<Record<string, string>>({});
 
   useEffect(() => {
     if (!selectedRunId || activeViews.length === 0) return;
 
     // Find which view's filter changed
     const changedViewId = Object.keys(changeTypeFilters).find(
-      viewId => changeTypeFilters[viewId] !== lastChangeTypeFilters[viewId]
+      viewId => changeTypeFilters[viewId] !== prevChangeTypeFilters.current[viewId]
     );
 
     if (!changedViewId) return;
 
-    setLastChangeTypeFilters(changeTypeFilters);
+    // Update ref immediately — no re-render triggered
+    prevChangeTypeFilters.current = changeTypeFilters;
 
     const view = activeViews.find(v => v.id === changedViewId);
     if (!view || view.change_type_mode !== 'switchable') return;
@@ -265,7 +279,7 @@ const Dashboard = () => {
     return () => {
       isActive = false;
     };
-  }, [changeTypeFilters, selectedRunId, activeViews, selectedTechStack, lastChangeTypeFilters]);
+  }, [changeTypeFilters, selectedRunId, activeViews, selectedTechStack]);
 
   // --- Chart Option Generators ---
 
@@ -682,95 +696,101 @@ const Dashboard = () => {
                 let content;
                 const chartType = view.chart_type || (view.type === 'top_n' ? 'bar_row' : 'card');
 
-                // Special handling for legacy Sum fallback logic (grouped Sum -> Pie)
-                let actualChartType = chartType;
-                if (view.type === 'sum' && !view.chart_type) {
-                  if (view.group_by && view.group_by.length > 0) {
-                    actualChartType = 'pie';
-                  } else {
-                    actualChartType = 'card';
-                  }
-                }
-
-                if (actualChartType === 'card') {
-                  // Metric Card
-                  const totalValue = data.reduce((acc, curr) => acc + curr.value, 0);
+                // Show empty state when data is empty and not loading
+                if (data.length === 0 && !loading) {
                   content = (
-                    <MetricCard
-                      key={view.id}
-                      title={title}
-                      value={totalValue.toLocaleString()}
-                      subValue={t('dashboard.totalValue')}
-                      loading={loading}
-                    />
-                  );
-                  return content;
-                } else if (actualChartType === 'table') {
-                  // Simple Table
-                  content = (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
-                        <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50">
-                          <tr>
-                            <th className="px-4 py-2">{t('table.label')}</th>
-                            <th className="px-4 py-2 text-right">{t('table.value')}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {data.map((d, i) => (
-                            <tr key={i} className="border-b border-slate-200 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/20">
-                              <td className="px-4 py-2 font-medium">{d.label}</td>
-                              <td className="px-4 py-2 text-right">{Math.round(d.value).toLocaleString()}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div className="flex flex-col items-center justify-center h-[300px] text-slate-400 dark:text-slate-500">
+                      <p className="text-sm">{t('dashboard.noData') || 'No data available'}</p>
                     </div>
                   );
                 } else {
-                  // ECharts based types
-                  let options;
-                  const baseColor = view.id.includes('complexity') ? '#ef4444' : '#38bdf8'; // Red for complexity, Blue default
-
-                  switch (actualChartType) {
-                    case 'bar_row':
-                    case 'bar_horizontal': // Alias
-                      options = getBarRowOption(title, data, baseColor);
-                      break;
-                    case 'bar_col':
-                    case 'bar_vertical': // Alias
-                      options = getBarColOption(title, data, baseColor);
-                      break;
-                    case 'pie':
-                      options = getPieOption(title, data);
-                      break;
-                    case 'line':
-                      options = getLineOption(title, data, baseColor);
-                      break;
-                    case 'stacked_bar':
-                      options = getStackedBarOption(title, data);
-                      break;
-                    case 'heatmap':
-                      options = getHeatmapOption(title, data);
-                      break;
-                    case 'radar':
-                      options = getRadarOption(title, data);
-                      break;
-                    case 'gauge':
-                      options = getGaugeOption(title, data);
-                      break;
-                    default:
-                      options = getBarRowOption(title, data, baseColor);
+                  // Special handling for legacy Sum fallback logic (grouped Sum -> Pie)
+                  let actualChartType = chartType;
+                  if (view.type === 'sum' && !view.chart_type) {
+                    if (view.group_by && view.group_by.length > 0) {
+                      actualChartType = 'pie';
+                    } else {
+                      actualChartType = 'card';
+                    }
                   }
-                  content = <ChartRenderer options={options} theme={theme} />;
-                }
 
-                // Wrapper Card
+                  if (actualChartType === 'card') {
+                    // Metric Card
+                    const totalValue = data.reduce((acc, curr) => acc + curr.value, 0);
+                    content = (
+                      <MetricCard
+                        key={view.id}
+                        title={title}
+                        value={totalValue.toLocaleString()}
+                        subValue={t('dashboard.totalValue')}
+                        loading={loading}
+                      />
+                    );
+                  } else if (actualChartType === 'table') {
+                    // Simple Table
+                    content = (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
+                          <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50">
+                            <tr>
+                              <th className="px-4 py-2">{t('table.label')}</th>
+                              <th className="px-4 py-2 text-right">{t('table.value')}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {data.map((d, i) => (
+                              <tr key={i} className="border-b border-slate-200 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/20">
+                                <td className="px-4 py-2 font-medium">{d.label}</td>
+                                <td className="px-4 py-2 text-right">{Math.round(d.value).toLocaleString()}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  } else {
+                    // ECharts based types
+                    let options;
+                    const baseColor = view.id.includes('complexity') ? '#ef4444' : '#38bdf8'; // Red for complexity, Blue default
+
+                    switch (actualChartType) {
+                      case 'bar_row':
+                      case 'bar_horizontal': // Alias
+                        options = getBarRowOption(title, data, baseColor);
+                        break;
+                      case 'bar_col':
+                      case 'bar_vertical': // Alias
+                        options = getBarColOption(title, data, baseColor);
+                        break;
+                      case 'pie':
+                        options = getPieOption(title, data);
+                        break;
+                      case 'line':
+                        options = getLineOption(title, data, baseColor);
+                        break;
+                      case 'stacked_bar':
+                        options = getStackedBarOption(title, data);
+                        break;
+                      case 'heatmap':
+                        options = getHeatmapOption(title, data);
+                        break;
+                      case 'radar':
+                        options = getRadarOption(title, data);
+                        break;
+                      case 'gauge':
+                        options = getGaugeOption(title, data);
+                        break;
+                      default:
+                        options = getBarRowOption(title, data, baseColor);
+                    }
+                    content = <ChartRenderer options={options} theme={theme} />;
+                  }
+                }
                 const changeTypeMode = view.change_type_mode;
                 const currentFilter = changeTypeFilters[view.id] || 'A'; // Default to Add
 
                 return (
-                  <Card key={view.id} className="col-span-1 border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 backdrop-blur shadow-sm dark:shadow-xl transition-colors duration-200">
+                  <Card key={view.id} className={`col-span-1 ${view.width === 2 ? 'lg:col-span-2' : ''} border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 backdrop-blur shadow-sm dark:shadow-xl transition-colors duration-200`}>
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 border-b border-slate-100 dark:border-slate-700/50">
                       <CardTitle className="text-xl font-semibold text-slate-800 dark:text-slate-200">
                         {title}

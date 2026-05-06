@@ -56,7 +56,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                 metric_key,
                 category,
                 limit,
-                order: _,
+                order,
             } => {
                 let source = SourceConfig {
                     analyzer_id: analyzer_id.clone().unwrap_or_default(),
@@ -65,6 +65,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                 };
                 let params = TopNParams {
                     limit: *limit as u32,
+                    order: order.clone(),
                 };
                 views.push(ViewConfig {
                     id: key.clone(),
@@ -75,6 +76,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     group_by: view_def.group_by.clone(),
                     chart_type: view_def.chart_type.clone(),
                     change_type_mode: view_def.change_type_mode.clone(),
+                    width: view_def.width,
                     kind: ViewKind::TopN { source, params },
                 });
             }
@@ -97,6 +99,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     group_by: view_def.group_by.clone(),
                     chart_type: view_def.chart_type.clone(),
                     change_type_mode: view_def.change_type_mode.clone(),
+                    width: view_def.width,
                     kind: ViewKind::Sum { source },
                 });
             }
@@ -119,6 +122,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     group_by: view_def.group_by.clone(),
                     chart_type: view_def.chart_type.clone(),
                     change_type_mode: view_def.change_type_mode.clone(),
+                    width: view_def.width,
                     kind: ViewKind::Avg { source },
                 });
             }
@@ -141,6 +145,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     group_by: view_def.group_by.clone(),
                     chart_type: view_def.chart_type.clone(),
                     change_type_mode: view_def.change_type_mode.clone(),
+                    width: view_def.width,
                     kind: ViewKind::Min { source },
                 });
             }
@@ -163,6 +168,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     group_by: view_def.group_by.clone(),
                     chart_type: view_def.chart_type.clone(),
                     change_type_mode: view_def.change_type_mode.clone(),
+                    width: view_def.width,
                     kind: ViewKind::Max { source },
                 });
             }
@@ -189,6 +195,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     group_by: view_def.group_by.clone(),
                     chart_type: view_def.chart_type.clone(),
                     change_type_mode: view_def.change_type_mode.clone(),
+                    width: view_def.width,
                     kind: ViewKind::Distribution { source, params },
                 });
             }

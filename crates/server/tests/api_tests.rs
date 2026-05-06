@@ -21,13 +21,14 @@ fn test_app_config_serialization() {
                 group_by: vec![],
                 chart_type: Some("bar_row".to_string()),
                 change_type_mode: None,
+                width: 1,
                 kind: ViewKind::TopN {
                     source: SourceConfig {
                         analyzer_id: "char_count".to_string(),
                         metric_key: Some("char_count".to_string()),
                         category: None,
                     },
-                    params: TopNParams { limit: 10 },
+                    params: TopNParams { limit: 10, order: Default::default() },
                 },
             }],
             tech_stacks: vec!["Rust".to_string()],
@@ -106,6 +107,7 @@ fn test_view_kind_serialization() {
         group_by: vec!["tech_stack".to_string()],
         chart_type: Some("pie".to_string()),
         change_type_mode: None,
+        width: 1,
         kind: ViewKind::Sum {
             source: SourceConfig {
                 analyzer_id: "".to_string(),

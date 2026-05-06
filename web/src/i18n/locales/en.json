@@ -190,7 +190,9 @@
       "buckets": "Buckets",
       "add": "Add View",
       "delete": "Delete"
-    }
+    },
+    "expandAll": "Expand All",
+    "collapseAll": "Collapse All"
   },
   "language": {
     "en": "English",

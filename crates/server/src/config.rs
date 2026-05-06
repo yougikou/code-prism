@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use codeprism_core::SortOrder;
 
 /// Project-specific configuration for the UI
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
@@ -52,8 +53,15 @@ pub struct ViewConfig {
     /// Display mode for change types: "all" (stacked) or "switchable" (A/M/D toggle)
     #[serde(default)]
     pub change_type_mode: Option<String>,
+    /// Width in grid columns (1 or 2). Defaults to 1.
+    #[serde(default = "default_width")]
+    pub width: u32,
     #[serde(flatten)]
     pub kind: ViewKind,
+}
+
+fn default_width() -> u32 {
+    1
 }
 
 fn default_include_children() -> bool {
@@ -96,6 +104,8 @@ pub struct SourceConfig {
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
 pub struct TopNParams {
     pub limit: u32,
+    #[serde(default)]
+    pub order: SortOrder,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]

@@ -25,6 +25,7 @@ export interface ViewConfig {
   group_by?: string[];
   chart_type?: string;
   change_type_mode?: 'all' | 'switchable';
+  width?: number;
   type: 'top_n' | 'sum' | 'avg' | 'min' | 'max' | 'distribution';
   source?: {
     analyzer_id: string;
@@ -32,6 +33,7 @@ export interface ViewConfig {
   };
   params?: {
     limit: number;
+    order?: string;
   };
 }
 
