@@ -1,6 +1,7 @@
 use crate::Analyzer;
-use codeprism_core::MetricEntry;
+use codeprism_core::{MetricEntry, TAG_CATEGORY, TAG_METRIC};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -13,9 +14,29 @@ struct ScriptInput {
 
 #[derive(Serialize, Deserialize)]
 struct ScriptOutput {
-    metric_key: String,
     value: f64,
+    /// New tag system — map of key-value tags
+    #[serde(default)]
+    tags: HashMap<String, String>,
+    /// Old metric_key field (deprecated, merged into tags)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metric_key: Option<String>,
+    /// Old category field (deprecated, merged into tags)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     category: Option<String>,
+}
+
+impl ScriptOutput {
+    fn resolve_tags(&self) -> HashMap<String, String> {
+        let mut result = self.tags.clone();
+        if let Some(mk) = &self.metric_key {
+            result.insert(TAG_METRIC.to_string(), mk.clone());
+        }
+        if let Some(cat) = &self.category {
+            result.insert(TAG_CATEGORY.to_string(), cat.clone());
+        }
+        result
+    }
 }
 
 struct ProcessHandle {
@@ -29,24 +50,27 @@ pub struct ScriptAnalyzer {
     script_path: String,
     interpreter: Arc<Mutex<Option<String>>>, // Lazy-detected, wrapped for interior mutability
     process: Arc<Mutex<Option<ProcessHandle>>>,
-    metric_key_override: Option<String>,
-    category_override: Option<String>,
+    tag_overrides: HashMap<String, String>,
+    scan_mode: Option<String>,
+    change_type: Option<String>,
 }
 
 impl ScriptAnalyzer {
     pub fn new(
         id: &str,
         script_path: &str,
-        metric_key_override: Option<String>,
-        category_override: Option<String>,
+        tag_overrides: HashMap<String, String>,
+        scan_mode: Option<String>,
+        change_type: Option<String>,
     ) -> Self {
         Self {
             id: id.to_string(),
             script_path: script_path.to_string(),
             interpreter: Arc::new(Mutex::new(None)), // Will be detected on first use
             process: Arc::new(Mutex::new(None)),
-            metric_key_override,
-            category_override,
+            tag_overrides,
+            scan_mode,
+            change_type,
         }
     }
 
@@ -118,6 +142,14 @@ impl Analyzer for ScriptAnalyzer {
         &self.id
     }
 
+    fn scan_mode(&self) -> Option<&str> {
+        self.scan_mode.as_deref()
+    }
+
+    fn change_type(&self) -> Option<&str> {
+        self.change_type.as_deref()
+    }
+
     fn analyze(&self, file_path: &str, content: &str) -> Vec<MetricEntry> {
         if let Err(e) = self.ensure_process() {
             eprintln!("{}", e);
@@ -172,13 +204,19 @@ impl Analyzer for ScriptAnalyzer {
 
                     return raw_outputs
                         .into_iter()
-                        .map(|o| MetricEntry {
-                            analyzer_id: self.id.clone(),
-                            metric_key: self.metric_key_override.clone().unwrap_or(o.metric_key),
-                            category: self.category_override.clone().or(o.category),
-                            value: o.value,
-                            scope: None,
-                            tech_stack: None,
+                        .map(|o| {
+                            let mut tags = o.resolve_tags();
+                            // Apply tag_overrides on top (they take precedence)
+                            for (k, v) in &self.tag_overrides {
+                                tags.insert(k.clone(), v.clone());
+                            }
+                            MetricEntry {
+                                analyzer_id: self.id.clone(),
+                                tags,
+                                value: o.value,
+                                scope: None,
+                                tech_stack: None,
+                            }
                         })
                         .collect();
                 }

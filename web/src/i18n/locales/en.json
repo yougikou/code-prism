@@ -33,12 +33,15 @@
     "loadErrors": "Load Errors",
     "executionErrors": "Execution Errors",
     "noSummary": "No summary data available for this scan",
+    "viewRawResults": "View Raw Results",
+    "items": "items",
     "analyzerId": "Analyzer",
     "filesAnalyzed": "Files Analyzed"
   },
   "table": {
     "label": "Label",
-    "value": "Value"
+    "value": "Value",
+    "group": "Group"
   },
   "chart": {
     "unknown": "Unknown"

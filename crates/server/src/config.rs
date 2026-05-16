@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use codeprism_core::SortOrder;
+use std::collections::HashMap;
 
 /// Project-specific configuration for the UI
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
@@ -43,7 +44,6 @@ pub struct ViewConfig {
     pub id: String,
     pub title: String,
     pub tech_stacks: Vec<String>,
-    pub category: Option<String>,
     #[serde(default = "default_include_children")]
     pub include_children: bool,
     #[serde(default)]
@@ -93,12 +93,18 @@ pub enum ViewKind {
 
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
 pub struct SourceConfig {
+    #[serde(default, deserialize_with = "codeprism_core::deserialize_string_or_vec")]
+    pub analyzer_id: Vec<String>,
+    /// Tag key-value filters
     #[serde(default)]
-    pub analyzer_id: String,
-    #[serde(default)]
-    pub metric_key: Option<String>,
-    #[serde(default)]
-    pub category: Option<String>,
+    pub tag_filters: HashMap<String, String>,
+}
+
+impl SourceConfig {
+    /// Return the tag_filters directly.
+    pub fn effective_tag_filters(&self) -> &HashMap<String, String> {
+        &self.tag_filters
+    }
 }
 
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
@@ -127,9 +133,8 @@ projects:
       - id: "top_file_size"
         title: "Top File Size"
         tech_stacks: ["Gosu"]
-        category: "maintainability"
         type: "top_n"
-        source: { analyzer_id: "char_count", metric_key: "length" }
+        source: { analyzer_id: "char_count" }
         params: { limit: 10 }
     tech_stacks: ["Gosu"]
 "#;
@@ -142,12 +147,10 @@ projects:
         let view = &project.views[0];
         assert_eq!(view.id, "top_file_size");
         assert_eq!(view.tech_stacks, vec!["Gosu"]);
-        assert_eq!(view.category, Some("maintainability".to_string()));
 
         match &view.kind {
             ViewKind::TopN { source, params } => {
-                assert_eq!(source.analyzer_id, "char_count");
-                assert_eq!(source.metric_key, Some("length".to_string()));
+                assert_eq!(source.analyzer_id, vec!["char_count"]);
                 assert_eq!(params.limit, 10);
             }
             _ => panic!("Expected TopN view"),

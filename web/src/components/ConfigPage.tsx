@@ -21,12 +21,13 @@ import { Settings, BookTemplate, Trash2, Database, GitBranch, ChevronDown, Chevr
 
 // ─── Tag Input ──────────────────────────────────────────────────────────────
 
-function TagInput({ tags, onChange, placeholder, suggestions, allowCustom = true }: {
+function TagInput({ tags, onChange, placeholder, suggestions, allowCustom = true, maxTags }: {
   tags: string[];
   onChange: (tags: string[]) => void;
   placeholder?: string;
   suggestions?: string[];
   allowCustom?: boolean;
+  maxTags?: number;
 }) {
   const [input, setInput] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
@@ -37,6 +38,7 @@ function TagInput({ tags, onChange, placeholder, suggestions, allowCustom = true
     : []
 
   const addTag = (val?: string) => {
+    if (maxTags !== undefined && tags.length >= maxTags) return
     const value = val || input.trim()
     if (!value) return
     if (suggestions && !allowCustom && !suggestions.includes(value)) return
@@ -96,7 +98,11 @@ function TagInput({ tags, onChange, placeholder, suggestions, allowCustom = true
           onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
           placeholder={tags.length === 0 ? (placeholder || 'Type and press Enter...') : ''}
           className="flex-1 min-w-[100px] outline-none bg-transparent text-sm text-slate-700 dark:text-slate-300 placeholder-slate-400"
+          disabled={maxTags !== undefined && tags.length >= maxTags}
         />
+        {maxTags !== undefined && (
+          <span className="text-xs text-slate-400 dark:text-slate-500 ml-1 self-center">{tags.length}/{maxTags}</span>
+        )}
       </div>
       {showDropdown && filtered.length > 0 && (
         <div className="absolute z-20 top-full mt-1 left-0 right-0 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg max-h-48 overflow-y-auto">
@@ -230,7 +236,7 @@ function TechStacksEditor({ config, onChange }: {
               </span>
             </CardHeader>
           </button>
-          <div className={`overflow-hidden transition-all duration-200 ease-in-out ${expandedStacks.has(i) ? 'max-h-[3000px] opacity-100' : 'max-h-0 opacity-0'}`}>
+          <div className={`transition-all duration-200 ease-in-out ${expandedStacks.has(i) ? 'max-h-[3000px] opacity-100 overflow-visible' : 'max-h-0 opacity-0 overflow-hidden'}`}>
             <CardContent className="space-y-3">
             <div>
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.techStack.name')}</label>
@@ -581,6 +587,8 @@ const CHANGE_TYPE_MODES = [
   { value: 'switchable', label: 'Switchable (A/M/D)' },
 ]
 
+const GROUP_BY_OPTIONS = ['tech_stack', 'category', 'metric_key', 'analyzer_id']
+
 function ViewsEditor({ config, onChange }: {
   config: FullProjectConfig;
   onChange: (c: FullProjectConfig) => void;
@@ -605,13 +613,21 @@ function ViewsEditor({ config, onChange }: {
     setExpandedViews(new Set())
   }
 
+  const validAnalyzerIds = useMemo(() => {
+    const ids = new Set<string>(['file_count', 'char_count'])
+    for (const key of Object.keys(config.custom_regex_analyzers || {})) ids.add(key)
+    for (const key of Object.keys(config.custom_impl_analyzers || {})) ids.add(key)
+    for (const key of Object.keys(config.external_analyzers || {})) ids.add(key)
+    return Array.from(ids).sort()
+  }, [config.custom_regex_analyzers, config.custom_impl_analyzers, config.external_analyzers])
+
   const updateView = (id: string, field: string, value: string | boolean | string[] | undefined) => {
     const views = { ...config.aggregation_views }
     views[id] = { ...views[id], [field]: value }
     onChange({ ...config, aggregation_views: views })
   }
 
-  const updateFunc = (id: string, field: string, value: string | number | number[] | undefined) => {
+  const updateFunc = (id: string, field: string, value: string | string[] | number | number[] | undefined) => {
     const views = { ...config.aggregation_views }
     views[id] = { ...views[id], func: { ...views[id].func, [field]: value } }
     onChange({ ...config, aggregation_views: views })
@@ -669,7 +685,7 @@ function ViewsEditor({ config, onChange }: {
               </span>
             </CardHeader>
           </button>
-          <div className={`overflow-hidden transition-all duration-200 ease-in-out ${expandedViews.has(id) ? 'max-h-[3000px] opacity-100' : 'max-h-0 opacity-0'}`}>
+          <div className={`transition-all duration-200 ease-in-out ${expandedViews.has(id) ? 'max-h-[3000px] opacity-100 overflow-visible' : 'max-h-0 opacity-0 overflow-hidden'}`}>
           <CardContent className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -684,59 +700,48 @@ function ViewsEditor({ config, onChange }: {
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.techStacks')}</label>
-              <TagInput tags={view.tech_stacks || []} onChange={v => updateView(id, 'tech_stacks', v)} placeholder="Leave empty for Summary" />
+              <TagInput tags={view.tech_stacks || []} onChange={v => updateView(id, 'tech_stacks', v)} placeholder="Leave empty for Summary" suggestions={config.tech_stacks.map(s => s.name)} allowCustom={false} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.changeTypeMode')}</label>
-                <SelectInput value={view.change_type_mode || ''} onChange={v => updateView(id, 'change_type_mode', v || undefined)} options={CHANGE_TYPE_MODES} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.includeChildren')}</label>
-                <label className="relative inline-flex items-center cursor-pointer mt-2">
-                  <input type="checkbox" checked={view.include_children !== false} onChange={e => updateView(id, 'include_children', e.target.checked)}
-                    className="sr-only peer" />
-                  <div className="w-9 h-5 bg-slate-300 dark:bg-slate-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-sky-500 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
-                </label>
-              </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.changeTypeMode')}</label>
+              <SelectInput value={view.change_type_mode || ''} onChange={v => updateView(id, 'change_type_mode', v || undefined)} options={CHANGE_TYPE_MODES} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.groupBy')}</label>
-              <TagInput tags={view.group_by || []} onChange={v => updateView(id, 'group_by', v)} />
+              <TagInput tags={view.group_by || []} onChange={v => updateView(id, 'group_by', v)} suggestions={GROUP_BY_OPTIONS} allowCustom={false} placeholder="e.g. tech_stack, category" maxTags={2} />
             </div>
             <div className="border-t dark:border-slate-700 pt-3">
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">{t('config.views.funcType')}: {view.func.type}</label>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">{t('config.views.analyzerId')}</label>
-                  <input type="text" value={view.func.analyzer_id || ''} onChange={e => updateFunc(id, 'analyzer_id', e.target.value || undefined)}
-                    className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+                  <TagInput tags={view.func.analyzer_id || []} onChange={v => updateFunc(id, 'analyzer_id', v.length > 0 ? v : undefined)} suggestions={validAnalyzerIds} allowCustom={false} placeholder="Select analyzer IDs..." />
                 </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">{t('config.views.metricKey')}</label>
-                  <input type="text" value={view.func.metric_key || ''} onChange={e => updateFunc(id, 'metric_key', e.target.value || undefined)}
-                    className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">{t('config.views.category')}</label>
-                  <input type="text" value={view.func.category || ''} onChange={e => updateFunc(id, 'category', e.target.value || undefined)}
-                    className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-                </div>
-                {view.func.type === 'top_n' && (
+                <div className="space-y-3">
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1">{t('config.views.limit')}</label>
-                    <input type="number" value={view.func.limit || 10} onChange={e => updateFunc(id, 'limit', parseInt(e.target.value) || 10)}
-                      className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+                    <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.includeChildren')}</label>
+                    <label className="relative inline-flex items-center cursor-pointer mt-2">
+                      <input type="checkbox" checked={view.include_children !== false} onChange={e => updateView(id, 'include_children', e.target.checked)}
+                        className="sr-only peer" />
+                      <div className="w-9 h-5 bg-slate-300 dark:bg-slate-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-sky-500 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
+                    </label>
                   </div>
-                )}
-                {view.func.type === 'distribution' && (
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">{t('config.views.buckets')}</label>
-                    <input type="text" value={(view.func.buckets || []).join(',')} onChange={e => updateFunc(id, 'buckets', e.target.value.split(',').map(Number).filter(n => !isNaN(n)))}
-                      placeholder="e.g. 0,10,50,100"
-                      className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-                  </div>
-                )}
+                  {view.func.type === 'top_n' && (
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">{t('config.views.limit')}</label>
+                      <input type="number" value={view.func.limit || 10} onChange={e => updateFunc(id, 'limit', parseInt(e.target.value) || 10)}
+                        className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+                    </div>
+                  )}
+                  {view.func.type === 'distribution' && (
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">{t('config.views.buckets')}</label>
+                      <input type="text" value={(view.func.buckets || []).join(',')} onChange={e => updateFunc(id, 'buckets', e.target.value.split(',').map(Number).filter(n => !isNaN(n)))}
+                        placeholder="e.g. 0,10,50,100"
+                        className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </CardContent>

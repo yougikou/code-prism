@@ -5,14 +5,14 @@ use codeprism_analyzer::{
 
 use codeprism_database::Db;
 use git2::{Delta, ObjectType, Repository, Tree};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use tokio::sync::mpsc;
 
 use codeprism_core::CodePrismConfig;
 use indicatif::{ProgressBar, ProgressStyle};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub struct Scanner {
     db: Db,
@@ -22,6 +22,8 @@ pub struct Scanner {
     analyzer_load_errors: Vec<String>,
     analyzer_exec_count: HashMap<String, u64>,
     analyzer_error_details: HashMap<String, Vec<String>>,
+    // Track tag keys from this scan for auto-index creation
+    seen_tag_keys: Mutex<HashSet<String>>,
 }
 
 // Event to decouple Git (Sync) from DB (Async)
@@ -81,16 +83,27 @@ impl Scanner {
 
         // Apply Regex Analyzers
         for (name, def) in &regex_defs {
-            let (pattern, metric_key, category) = match def {
-                codeprism_core::CustomAnalyzerDef::Pattern(p) => (p.clone(), None, None),
+            let (pattern, tags, scan_mode, change_type) = match def {
+                codeprism_core::CustomAnalyzerDef::Pattern(p) => {
+                    let mut tags = std::collections::HashMap::new();
+                    tags.insert(codeprism_core::TAG_METRIC.to_string(), "matches".to_string());
+                    (p.clone(), tags, None, None)
+                }
                 codeprism_core::CustomAnalyzerDef::Config {
                     pattern,
-                    metric_key,
-                    category,
-                } => (pattern.clone(), Some(metric_key.clone()), category.clone()),
+                    scan_mode,
+                    change_type,
+                    ..
+                } => (
+                    pattern.clone(),
+                    def.resolve_tags(),
+                    scan_mode.clone(),
+                    change_type.clone(),
+                ),
             };
 
-            match RegexAnalyzer::new(name, &pattern, metric_key, category) {
+            match RegexAnalyzer::new(name, &pattern, tags, scan_mode, change_type)
+            {
                 Ok(ra) => {
                     analyzers.insert(ra.id().to_string(), Box::new(ra));
                 }
@@ -131,19 +144,24 @@ impl Scanner {
                                 let full_path = path.to_string_lossy().to_string();
 
                                 // Check for overrides (search root then projects)
-                                let (metric_key_override, category_override) =
+                                let (tag_overrides, scan_mode, change_type) =
                                     if let Some(conf) = impl_defs.get(&analyzer_id) {
-                                        (conf.metric_key.clone(), conf.category.clone())
+                                        (
+                                            conf.resolve_tags(),
+                                            conf.scan_mode.clone(),
+                                            conf.change_type.clone(),
+                                        )
                                     } else {
-                                        (None, None)
+                                        (HashMap::new(), None, None)
                                     };
 
                                 // Create ScriptAnalyzer
                                 let sa = ScriptAnalyzer::new(
                                     &analyzer_id,
                                     &full_path,
-                                    metric_key_override,
-                                    category_override,
+                                    tag_overrides,
+                                    scan_mode,
+                                    change_type,
                                 );
                                 analyzers.insert(analyzer_id, Box::new(sa));
                                 println!("Loaded custom analyzer: {}", stem);
@@ -161,6 +179,7 @@ impl Scanner {
             analyzer_load_errors: load_errors,
             analyzer_exec_count: HashMap::new(),
             analyzer_error_details: HashMap::new(),
+            seen_tag_keys: Mutex::new(HashSet::new()),
         }
     }
 
@@ -259,7 +278,14 @@ impl Scanner {
 
                     // Run analyzers if content is available
                     let file_metrics = if let Some(c) = content {
-                        self.analyze_file_content(&path, &c, tech_stack.as_deref(), &project_config)
+                        self.analyze_file_content(
+                            &path,
+                            &c,
+                            "SNAPSHOT",
+                            &change_type,
+                            tech_stack.as_deref(),
+                            &project_config,
+                        )
                     } else {
                         Vec::<codeprism_core::MetricEntry>::new()
                     };
@@ -282,6 +308,9 @@ impl Scanner {
             "Snapshot Scan Complete. Scanned {} files.",
             processed_count
         ));
+
+        // Auto-create expression indexes for newly seen tag keys
+        self.ensure_tag_indexes().await;
 
         // Save scan summary
         if let Err(e) = self.save_scan_summary(scan_id, processed_count).await {
@@ -412,6 +441,8 @@ impl Scanner {
                         self.analyze_file_content(
                             old_path.as_deref().unwrap_or(&path),
                             &c,
+                            "DIFF",
+                            &change_type,
                             tech_stack.as_deref(),
                             &project_config,
                         )
@@ -420,7 +451,14 @@ impl Scanner {
                     };
 
                     let new_metrics = if let Some(c) = content {
-                        self.analyze_file_content(&path, &c, tech_stack.as_deref(), &project_config)
+                        self.analyze_file_content(
+                            &path,
+                            &c,
+                            "DIFF",
+                            &change_type,
+                            tech_stack.as_deref(),
+                            &project_config,
+                        )
                     } else {
                         Vec::<codeprism_core::MetricEntry>::new()
                     };
@@ -439,6 +477,9 @@ impl Scanner {
             }
         }
         pb.finish_with_message("Diff Scan Complete");
+
+        // Auto-create expression indexes for newly seen tag keys
+        self.ensure_tag_indexes().await;
 
         // Save scan summary
         if let Err(e) = self.save_scan_summary(scan_id, processed_count).await {
@@ -742,6 +783,8 @@ impl Scanner {
         &mut self,
         file_path: &str,
         content: &str,
+        scan_mode: &str,
+        change_type: &str,
         tech_stack_name: Option<&str>,
         project_config: &codeprism_core::ProjectConfig,
     ) -> Vec<codeprism_core::MetricEntry> {
@@ -764,6 +807,19 @@ impl Scanner {
 
         for analyzer_id in analyzers_to_run {
             if let Some(analyzer) = self.analyzers.get(&analyzer_id) {
+                // Respect per-analyzer scan_mode filter (None = all modes)
+                if let Some(mode) = analyzer.scan_mode() {
+                    if mode != scan_mode {
+                        continue;
+                    }
+                }
+                // Respect per-analyzer change_type filter (None = all types)
+                if let Some(ct) = analyzer.change_type() {
+                    if ct != change_type {
+                        continue;
+                    }
+                }
+
                 // Isolate each analyzer with catch_unwind so a panic in one
                 // (e.g. Wasm runtime crash, Script process deadlock) does not
                 // crash the entire scan. Failed results are discarded and the
@@ -809,74 +865,94 @@ impl Scanner {
         new_metrics: Vec<codeprism_core::MetricEntry>,
         old_metrics: Vec<codeprism_core::MetricEntry>,
     ) -> Result<()> {
-        // Collect all unique keys (analyzer_id + metric_key + category + scope)
-        use std::collections::{HashMap, HashSet};
+        // Track tag keys for auto-indexing
+        for m in &old_metrics {
+            for k in m.tags.keys() {
+                self.seen_tag_keys.lock().unwrap().insert(k.clone());
+            }
+        }
+        for m in &new_metrics {
+            for k in m.tags.keys() {
+                self.seen_tag_keys.lock().unwrap().insert(k.clone());
+            }
+        }
+
+        // Deterministic JSON serialization for dedup hashing
+        fn serialize_tags(tags: &HashMap<String, String>) -> String {
+            let sorted: BTreeMap<_, _> = tags.iter().collect();
+            serde_json::to_string(&sorted).unwrap_or_default()
+        }
+
         #[derive(Hash, Eq, PartialEq)]
         struct MetricKey {
             analyzer: String,
-            key: String,
-            category: Option<String>,
+            tags_json: String,
             scope: Option<String>,
         }
 
-        let mut all_keys = HashSet::new();
         // Map to store values: Key -> (ValueBefore, ValueAfter)
         let mut merged_data: HashMap<MetricKey, (Option<f64>, Option<f64>)> = HashMap::new();
 
         for m in &old_metrics {
             let key = MetricKey {
                 analyzer: m.analyzer_id.clone(),
-                key: m.metric_key.clone(),
-                category: m.category.clone(),
+                tags_json: serialize_tags(&m.tags),
                 scope: m.scope.clone(),
             };
-            all_keys.insert(MetricKey {
-                analyzer: key.analyzer.clone(),
-                key: key.key.clone(),
-                category: key.category.clone(),
-                scope: key.scope.clone(),
-            });
             merged_data.entry(key).or_insert((None, None)).0 = Some(m.value);
         }
 
         for m in &new_metrics {
             let key = MetricKey {
                 analyzer: m.analyzer_id.clone(),
-                key: m.metric_key.clone(),
-                category: m.category.clone(),
+                tags_json: serialize_tags(&m.tags),
                 scope: m.scope.clone(),
             };
-            all_keys.insert(MetricKey {
-                analyzer: key.analyzer.clone(),
-                key: key.key.clone(),
-                category: key.category.clone(),
-                scope: key.scope.clone(),
-            });
             merged_data.entry(key).or_insert((None, None)).1 = Some(m.value);
         }
 
         for (key, (val_before, val_after)) in merged_data {
-            // For Add: val_before is None (or 0?). User said "before data can be null".
-            // For Delete: val_after is None.
-
-            sqlx::query!(
-                "INSERT INTO metrics (scan_id, file_path, change_type, old_file_path, tech_stack, analyzer_id, metric_key, category, value_before, value_after, scope)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                scan_id,
-                file_path,
-                change_type,
-                old_path,
-                tech_stack,
-                key.analyzer,
-                key.key,
-                key.category,
-                val_before,
-                val_after,
-                key.scope
+            sqlx::query(
+                "INSERT INTO metrics (scan_id, file_path, change_type, old_file_path, tech_stack, analyzer_id, tags, value_before, value_after, scope)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
+            .bind(scan_id)
+            .bind(file_path)
+            .bind(change_type)
+            .bind(old_path)
+            .bind(tech_stack)
+            .bind(&key.analyzer)
+            .bind(&key.tags_json)
+            .bind(val_before)
+            .bind(val_after)
+            .bind(&key.scope)
             .execute(self.db.pool())
             .await?;
         }
         Ok(())
+    }
+
+    /// Auto-create expression indexes for tag keys discovered during this scan.
+    /// Uses CREATE INDEX IF NOT EXISTS so repeated calls are harmless.
+    async fn ensure_tag_indexes(&self) {
+        let keys = self.seen_tag_keys.lock().unwrap().clone();
+        for key in keys {
+            let idx_name: String = key
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let idx_name = if idx_name.is_empty() {
+                "idx_metrics_tag_unknown".to_string()
+            } else {
+                format!("idx_metrics_tag_{}", idx_name)
+            };
+            let escaped_key = key.replace('\\', "\\\\").replace('"', "\\\"");
+            let sql = format!(
+                "CREATE INDEX IF NOT EXISTS {idx_name} ON metrics(json_extract(tags, '$.\"{escaped_key}\"'))"
+            );
+            if let Err(e) = sqlx::query(&sql).execute(self.db.pool()).await {
+                eprintln!("Warning: failed to create index for tag '{}': {}", key, e);
+            }
+        }
     }
 }

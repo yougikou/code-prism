@@ -123,9 +123,11 @@ def main():
             # Output
             output = [
                 {
-                    "metric_key": "complexity",
                     "value": float(value),
-                    "category": "complexity"
+                    "tags": {
+                        "metric": "complexity",
+                        "category": "complexity"
+                    }
                 }
             ]
             

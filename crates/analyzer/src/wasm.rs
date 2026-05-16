@@ -1,6 +1,7 @@
 use crate::Analyzer;
 use codeprism_core::MetricEntry;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::sync::{Arc, RwLock};
 use wasi_common::pipe::{ReadPipe, WritePipe};
@@ -15,9 +16,29 @@ struct WasmInput {
 
 #[derive(Serialize, Deserialize)]
 struct WasmOutput {
-    metric_key: String,
     value: f64,
+    /// New tag system — map of key-value tags
+    #[serde(default)]
+    tags: HashMap<String, String>,
+    /// Old metric_key field (deprecated, merged into tags)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metric_key: Option<String>,
+    /// Old category field (deprecated, merged into tags)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     category: Option<String>,
+}
+
+impl WasmOutput {
+    fn resolve_tags(&self) -> HashMap<String, String> {
+        let mut result = self.tags.clone();
+        if let Some(mk) = &self.metric_key {
+            result.insert(codeprism_core::TAG_METRIC.to_string(), mk.clone());
+        }
+        if let Some(cat) = &self.category {
+            result.insert(codeprism_core::TAG_CATEGORY.to_string(), cat.clone());
+        }
+        result
+    }
 }
 
 pub struct WasmAnalyzer {
@@ -124,8 +145,7 @@ impl Analyzer for WasmAnalyzer {
             .into_iter()
             .map(|o| MetricEntry {
                 analyzer_id: self.id.clone(),
-                metric_key: o.metric_key,
-                category: o.category,
+                tags: o.resolve_tags(),
                 value: o.value,
                 scope: None,
                 tech_stack: None,

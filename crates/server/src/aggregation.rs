@@ -15,9 +15,28 @@ pub struct AggregationResult {
     pub change_type: Option<String>,
     pub metric_key: Option<String>,
     pub analyzer_id: Option<String>,
+    /// Full tag map parsed from DB (available when query selects tags)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<std::collections::HashMap<String, String>>,
     #[schema(value_type = Option<Vec<AggregationResult>>)]
     pub children: Option<Vec<AggregationResult>>,
     pub group_key: Option<String>,
+}
+
+impl AggregationResult {
+    /// Parse tags from a JSON string and set tags + legacy metric_key/category fields.
+    fn with_tags(mut self, tags_json: &str) -> Self {
+        if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, String>>(tags_json) {
+            self.tags = Some(map.clone());
+            if let Some(v) = map.get(codeprism_core::TAG_METRIC) {
+                self.metric_key = Some(v.clone());
+            }
+            if let Some(v) = map.get(codeprism_core::TAG_CATEGORY) {
+                self.category = Some(v.clone());
+            }
+        }
+        self
+    }
 }
 
 #[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
@@ -45,21 +64,27 @@ impl TopNAggregator {
             _ => return Ok(vec![]), // Should not reach here if routed correctly
         };
 
+        let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
+
         let mut query = String::from(
-            "SELECT file_path, value_after, tech_stack, category, change_type, metric_key, analyzer_id
-             FROM metrics 
+            "SELECT file_path, value_after, tech_stack, tags, change_type, analyzer_id
+             FROM metrics
              WHERE scan_id = ?",
         );
 
-        // Optional source filters (from view config)
-        if source.metric_key.is_some() {
-            query.push_str(" AND metric_key = ?");
+        // Source tag filters (sorted for deterministic bind order)
+        for (key, _val) in &source_tag_filters {
+            if key == codeprism_core::TAG_METRIC {
+                query.push_str(" AND json_extract(tags, '$.metric') = ?");
+            } else if key == codeprism_core::TAG_CATEGORY {
+                query.push_str(" AND json_extract(tags, '$.category') = ?");
+            } else {
+                query.push_str(&format!(" AND json_extract(tags, '$.\"{}\"') = ?", key));
+            }
         }
         if !source.analyzer_id.is_empty() {
-            query.push_str(" AND analyzer_id = ?");
-        }
-        if source.category.is_some() {
-            query.push_str(" AND category = ?");
+            let placeholders: Vec<String> = source.analyzer_id.iter().map(|_| "?".to_string()).collect();
+            query.push_str(&format!(" AND analyzer_id IN ({})", placeholders.join(", ")));
         }
 
         // Apply dynamic filters (from request params)
@@ -67,10 +92,10 @@ impl TopNAggregator {
             query.push_str(" AND tech_stack = ?");
         }
         if filters.category.is_some() {
-            query.push_str(" AND category = ?");
+            query.push_str(" AND json_extract(tags, '$.category') = ?");
         }
         if filters.metric_key.is_some() {
-            query.push_str(" AND metric_key = ?");
+            query.push_str(" AND json_extract(tags, '$.metric') = ?");
         }
         if filters.change_type.is_some() {
             query.push_str(" AND change_type = ?");
@@ -84,15 +109,12 @@ impl TopNAggregator {
 
         let mut sql_query = sqlx::query(&query).bind(scan_id);
 
-        // Bind source filters
-        if let Some(mk) = &source.metric_key {
-            sql_query = sql_query.bind(mk);
+        // Bind source tag filters (same iteration order as above)
+        for (_key, val) in &source_tag_filters {
+            sql_query = sql_query.bind(val);
         }
-        if !source.analyzer_id.is_empty() {
-            sql_query = sql_query.bind(&source.analyzer_id);
-        }
-        if let Some(cat) = &source.category {
-            sql_query = sql_query.bind(cat);
+        for id in &source.analyzer_id {
+            sql_query = sql_query.bind(id);
         }
 
         // Bind dynamic filters
@@ -115,26 +137,27 @@ impl TopNAggregator {
 
         let mut results: Vec<AggregationResult> = rows
             .into_iter()
-            .map(|row| AggregationResult {
-                label: row.try_get::<String, _>("file_path").unwrap_or_default(),
-                value: row.try_get::<f64, _>("value_after").unwrap_or_default(),
-                tech_stack: row
-                    .try_get::<Option<String>, _>("tech_stack")
-                    .unwrap_or_default(),
-                category: row
-                    .try_get::<Option<String>, _>("category")
-                    .unwrap_or_default(),
-                change_type: row
-                    .try_get::<Option<String>, _>("change_type")
-                    .unwrap_or_default(),
-                metric_key: row
-                    .try_get::<Option<String>, _>("metric_key")
-                    .unwrap_or_default(),
-                analyzer_id: row
-                    .try_get::<Option<String>, _>("analyzer_id")
-                    .unwrap_or_default(),
-                children: None,
-                group_key: None,
+            .map(|row| {
+                let tags_json: String = row.try_get("tags").unwrap_or_default();
+                AggregationResult {
+                    label: row.try_get::<String, _>("file_path").unwrap_or_default(),
+                    value: row.try_get::<f64, _>("value_after").unwrap_or_default(),
+                    tech_stack: row
+                        .try_get::<Option<String>, _>("tech_stack")
+                        .unwrap_or_default(),
+                    change_type: row
+                        .try_get::<Option<String>, _>("change_type")
+                        .unwrap_or_default(),
+                    analyzer_id: row
+                        .try_get::<Option<String>, _>("analyzer_id")
+                        .unwrap_or_default(),
+                    children: None,
+                    group_key: None,
+                    category: None,
+                    metric_key: None,
+                    tags: None,
+                }
+                .with_tags(&tags_json)
             })
             .collect();
 
@@ -197,7 +220,11 @@ impl TopNAggregator {
                     .analyzer_id
                     .clone()
                     .unwrap_or_else(|| "Unknown".to_string()),
-                // Add more keys as needed, maybe reflection or map?
+                key if key.starts_with("tag:") => item
+                    .tags
+                    .as_ref()
+                    .and_then(|t| t.get(&key[4..]).cloned())
+                    .unwrap_or_else(|| "Unknown".to_string()),
                 _ => "Other".to_string(), // Fallback
             };
             groups.entry(key_value).or_default().push(item);
@@ -235,6 +262,7 @@ impl TopNAggregator {
                 analyzer_id: None,
                 children: children_val,
                 group_key: Some(current_key.to_string()),
+                tags: None,
             };
 
             // Populate the specific field for this group
@@ -281,21 +309,27 @@ impl SumAggregator {
         // If we use the same query as TopN but w/o LIMIT, we get all rows.
         // Then we can group or just sum everything.
 
+        let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
+
         let mut query = String::from(
-            "SELECT file_path, value_after, tech_stack, category, change_type, metric_key, analyzer_id
-             FROM metrics 
+            "SELECT file_path, value_after, tech_stack, tags, change_type, analyzer_id
+             FROM metrics
              WHERE scan_id = ?",
         );
 
-        // Optional source filters (from view config)
-        if source.metric_key.is_some() {
-            query.push_str(" AND metric_key = ?");
+        // Source tag filters (sorted for deterministic bind order)
+        for (key, _val) in &source_tag_filters {
+            if key == codeprism_core::TAG_METRIC {
+                query.push_str(" AND json_extract(tags, '$.metric') = ?");
+            } else if key == codeprism_core::TAG_CATEGORY {
+                query.push_str(" AND json_extract(tags, '$.category') = ?");
+            } else {
+                query.push_str(&format!(" AND json_extract(tags, '$.\"{}\"') = ?", key));
+            }
         }
         if !source.analyzer_id.is_empty() {
-            query.push_str(" AND analyzer_id = ?");
-        }
-        if source.category.is_some() {
-            query.push_str(" AND category = ?");
+            let placeholders: Vec<String> = source.analyzer_id.iter().map(|_| "?".to_string()).collect();
+            query.push_str(&format!(" AND analyzer_id IN ({})", placeholders.join(", ")));
         }
 
         // Apply dynamic filters (from request params)
@@ -303,10 +337,10 @@ impl SumAggregator {
             query.push_str(" AND tech_stack = ?");
         }
         if filters.category.is_some() {
-            query.push_str(" AND category = ?");
+            query.push_str(" AND json_extract(tags, '$.category') = ?");
         }
         if filters.metric_key.is_some() {
-            query.push_str(" AND metric_key = ?");
+            query.push_str(" AND json_extract(tags, '$.metric') = ?");
         }
         if filters.change_type.is_some() {
             query.push_str(" AND change_type = ?");
@@ -316,15 +350,12 @@ impl SumAggregator {
 
         let mut sql_query = sqlx::query(&query).bind(scan_id);
 
-        // Bind source filters
-        if let Some(mk) = &source.metric_key {
-            sql_query = sql_query.bind(mk);
+        // Bind source tag filters (same iteration order as above)
+        for (_key, val) in &source_tag_filters {
+            sql_query = sql_query.bind(val);
         }
-        if !source.analyzer_id.is_empty() {
-            sql_query = sql_query.bind(&source.analyzer_id);
-        }
-        if let Some(cat) = &source.category {
-            sql_query = sql_query.bind(cat);
+        for id in &source.analyzer_id {
+            sql_query = sql_query.bind(id);
         }
 
         // Bind dynamic filters
@@ -345,26 +376,27 @@ impl SumAggregator {
 
         let mut results: Vec<AggregationResult> = rows
             .into_iter()
-            .map(|row| AggregationResult {
-                label: row.try_get::<String, _>("file_path").unwrap_or_default(),
-                value: row.try_get::<f64, _>("value_after").unwrap_or_default(),
-                tech_stack: row
-                    .try_get::<Option<String>, _>("tech_stack")
-                    .unwrap_or_default(),
-                category: row
-                    .try_get::<Option<String>, _>("category")
-                    .unwrap_or_default(),
-                change_type: row
-                    .try_get::<Option<String>, _>("change_type")
-                    .unwrap_or_default(),
-                metric_key: row
-                    .try_get::<Option<String>, _>("metric_key")
-                    .unwrap_or_default(),
-                analyzer_id: row
-                    .try_get::<Option<String>, _>("analyzer_id")
-                    .unwrap_or_default(),
-                children: None,
-                group_key: None,
+            .map(|row| {
+                let tags_json: String = row.try_get("tags").unwrap_or_default();
+                AggregationResult {
+                    label: row.try_get::<String, _>("file_path").unwrap_or_default(),
+                    value: row.try_get::<f64, _>("value_after").unwrap_or_default(),
+                    tech_stack: row
+                        .try_get::<Option<String>, _>("tech_stack")
+                        .unwrap_or_default(),
+                    change_type: row
+                        .try_get::<Option<String>, _>("change_type")
+                        .unwrap_or_default(),
+                    analyzer_id: row
+                        .try_get::<Option<String>, _>("analyzer_id")
+                        .unwrap_or_default(),
+                    children: None,
+                    group_key: None,
+                    category: None,
+                    metric_key: None,
+                    tags: None,
+                }
+                .with_tags(&tags_json)
             })
             .collect();
 
@@ -406,6 +438,7 @@ impl SumAggregator {
                     analyzer_id: None,
                     children: None,
                     group_key: None,
+                    tags: None,
                 }];
             }
         } else {
@@ -421,6 +454,7 @@ impl SumAggregator {
                 analyzer_id: None,
                 children: None,
                 group_key: None,
+                tags: None,
             }];
         }
 
@@ -459,22 +493,28 @@ impl StatAggregator {
             StatType::Max => "MAX",
         };
 
+        let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
+
         let mut query = format!(
-            "SELECT {}(value_after) as stat_value, tech_stack, category, metric_key, analyzer_id, change_type
+            "SELECT {}(value_after) as stat_value, tech_stack, tags, change_type, analyzer_id
              FROM metrics
              WHERE scan_id = ?",
             stat_fn
         );
 
-        // Optional source filters (from view config)
-        if source.metric_key.is_some() {
-            query.push_str(" AND metric_key = ?");
+        // Source tag filters (sorted for deterministic bind order)
+        for (key, _val) in &source_tag_filters {
+            if key == codeprism_core::TAG_METRIC {
+                query.push_str(" AND json_extract(tags, '$.metric') = ?");
+            } else if key == codeprism_core::TAG_CATEGORY {
+                query.push_str(" AND json_extract(tags, '$.category') = ?");
+            } else {
+                query.push_str(&format!(" AND json_extract(tags, '$.\"{}\"') = ?", key));
+            }
         }
         if !source.analyzer_id.is_empty() {
-            query.push_str(" AND analyzer_id = ?");
-        }
-        if source.category.is_some() {
-            query.push_str(" AND category = ?");
+            let placeholders: Vec<String> = source.analyzer_id.iter().map(|_| "?".to_string()).collect();
+            query.push_str(&format!(" AND analyzer_id IN ({})", placeholders.join(", ")));
         }
 
         // Dynamic filters
@@ -482,10 +522,10 @@ impl StatAggregator {
             query.push_str(" AND tech_stack = ?");
         }
         if filters.category.is_some() {
-            query.push_str(" AND category = ?");
+            query.push_str(" AND json_extract(tags, '$.category') = ?");
         }
         if filters.metric_key.is_some() {
-            query.push_str(" AND metric_key = ?");
+            query.push_str(" AND json_extract(tags, '$.metric') = ?");
         }
         if filters.change_type.is_some() {
             query.push_str(" AND change_type = ?");
@@ -510,22 +550,25 @@ impl StatAggregator {
                 .filter(|s| !s.is_empty() && ALLOWED_GROUP_KEYS.contains(s))
                 .collect();
             if !keys.is_empty() {
+                // Build GROUP BY with json_extract for tag-based keys
+                let group_parts: Vec<String> = keys.iter().map(|k| match *k {
+                    "category" => "json_extract(tags, '$.category')".to_string(),
+                    "metric_key" => "json_extract(tags, '$.metric')".to_string(),
+                    other => other.to_string(),
+                }).collect();
                 query.push_str(" GROUP BY ");
-                query.push_str(&keys.join(", "));
+                query.push_str(&group_parts.join(", "));
             }
         }
 
         let mut sql_query = sqlx::query(&query).bind(scan_id);
 
-        // Bind source filters
-        if let Some(mk) = &source.metric_key {
-            sql_query = sql_query.bind(mk);
+        // Bind source tag filters (same iteration order as above)
+        for (_key, val) in &source_tag_filters {
+            sql_query = sql_query.bind(val);
         }
-        if !source.analyzer_id.is_empty() {
-            sql_query = sql_query.bind(&source.analyzer_id);
-        }
-        if let Some(cat) = &source.category {
-            sql_query = sql_query.bind(cat);
+        for id in &source.analyzer_id {
+            sql_query = sql_query.bind(id);
         }
 
         // Bind dynamic filters
@@ -547,6 +590,7 @@ impl StatAggregator {
         let results: Vec<AggregationResult> = rows
             .into_iter()
             .map(|row| {
+                let tags_json: String = row.try_get("tags").unwrap_or_default();
                 let label = if effective_group_by.is_some() {
                     row.try_get::<Option<String>, _>("tech_stack")
                         .unwrap_or_default()
@@ -560,21 +604,19 @@ impl StatAggregator {
                     tech_stack: row
                         .try_get::<Option<String>, _>("tech_stack")
                         .unwrap_or_default(),
-                    category: row
-                        .try_get::<Option<String>, _>("category")
-                        .unwrap_or_default(),
                     change_type: row
                         .try_get::<Option<String>, _>("change_type")
-                        .unwrap_or_default(),
-                    metric_key: row
-                        .try_get::<Option<String>, _>("metric_key")
                         .unwrap_or_default(),
                     analyzer_id: row
                         .try_get::<Option<String>, _>("analyzer_id")
                         .unwrap_or_default(),
                     children: None,
                     group_key: None,
+                    category: None,
+                    metric_key: None,
+                    tags: None,
                 }
+                .with_tags(&tags_json)
             })
             .collect();
 
@@ -597,22 +639,28 @@ impl DistributionAggregator {
             _ => return Ok(vec![]),
         };
 
+        let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
+
         // Fetch all values
         let mut query = String::from(
-            "SELECT value_after, tech_stack, category, metric_key, analyzer_id
+            "SELECT value_after, tech_stack, analyzer_id
              FROM metrics
              WHERE scan_id = ?",
         );
 
-        // Optional source filters (from view config)
-        if source.metric_key.is_some() {
-            query.push_str(" AND metric_key = ?");
+        // Source tag filters (sorted for deterministic bind order)
+        for (key, _val) in &source_tag_filters {
+            if key == codeprism_core::TAG_METRIC {
+                query.push_str(" AND json_extract(tags, '$.metric') = ?");
+            } else if key == codeprism_core::TAG_CATEGORY {
+                query.push_str(" AND json_extract(tags, '$.category') = ?");
+            } else {
+                query.push_str(&format!(" AND json_extract(tags, '$.\"{}\"') = ?", key));
+            }
         }
         if !source.analyzer_id.is_empty() {
-            query.push_str(" AND analyzer_id = ?");
-        }
-        if source.category.is_some() {
-            query.push_str(" AND category = ?");
+            let placeholders: Vec<String> = source.analyzer_id.iter().map(|_| "?".to_string()).collect();
+            query.push_str(&format!(" AND analyzer_id IN ({})", placeholders.join(", ")));
         }
 
         // Dynamic filters
@@ -620,10 +668,10 @@ impl DistributionAggregator {
             query.push_str(" AND tech_stack = ?");
         }
         if filters.category.is_some() {
-            query.push_str(" AND category = ?");
+            query.push_str(" AND json_extract(tags, '$.category') = ?");
         }
         if filters.metric_key.is_some() {
-            query.push_str(" AND metric_key = ?");
+            query.push_str(" AND json_extract(tags, '$.metric') = ?");
         }
         if filters.change_type.is_some() {
             query.push_str(" AND change_type = ?");
@@ -631,15 +679,12 @@ impl DistributionAggregator {
 
         let mut sql_query = sqlx::query(&query).bind(scan_id);
 
-        // Bind source filters
-        if let Some(mk) = &source.metric_key {
-            sql_query = sql_query.bind(mk);
+        // Bind source tag filters (same iteration order as above)
+        for (_key, val) in &source_tag_filters {
+            sql_query = sql_query.bind(val);
         }
-        if !source.analyzer_id.is_empty() {
-            sql_query = sql_query.bind(&source.analyzer_id);
-        }
-        if let Some(cat) = &source.category {
-            sql_query = sql_query.bind(cat);
+        for id in &source.analyzer_id {
+            sql_query = sql_query.bind(id);
         }
 
         // Bind dynamic filters
@@ -698,6 +743,7 @@ impl DistributionAggregator {
                 analyzer_id: None,
                 children: None,
                 group_key: Some(format!("bucket_{}", i)),
+                tags: None,
             });
         }
 

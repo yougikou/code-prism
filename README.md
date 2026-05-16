@@ -33,10 +33,12 @@ CodePrism is a **high-performance code analysis tool** built with Rust. It scans
 
 - 🚀 **High Performance** - Built with Rust for maximum speed
 - 📊 **Rich Analytics** - Multiple aggregation types and chart visualizations
-- 🔄 **Git Integration** - Snapshot and Diff scanning modes
-- 🎨 **Server-Driven UI** - Configurable dashboard via YAML
-- 📦 **Multi-Project Support** - Manage multiple projects in one config
+- 🔄 **Git Integration** - Snapshot and Diff scanning modes with background job tracking
+- 🎨 **Server-Driven UI** - Configurable dashboard via YAML with flexible grid layout
+- 📦 **Multi-Project Support** - Manage multiple projects in one config with reusable templates
 - 🔌 **Extensible Analyzers** - Built-in, regex, Python, and WASM analyzers
+- 🌐 **i18n Support** - Built-in multi-language UI (English, Chinese, Japanese)
+- 📋 **Scan Job Tracking** - Background scan execution with real-time status monitoring
 
 ### Architecture
 
@@ -54,19 +56,50 @@ CodePrism is a **high-performance code analysis tool** built with Rust. It scans
 - `serve` - Start web server with dashboard
 - `init-config` - Generate default configuration file
 - `check-config` - Validate configuration file
-- `test-analyzers` - Test custom analyzers
+- `test-analyzers` - Run self-tests for all Python analyzers in `custom_analyzers/`
 
 ### Analyzers
 
 - **Built-in**: File count, character count
 - **Regex**: Configurable pattern matching via YAML
-- **Script**: Python scripts in `custom_analyzers/` directory
-- **WASM**: WebAssembly modules for advanced analysis
+- **Python Script**: Persistent process analyzers in `custom_analyzers/` directory
+- **WASM**: WebAssembly modules for advanced analysis via wasmtime runtime
+
+#### Python Script Analyzers
+
+Python analyzers operate in a **persistent loop mode** over stdin/stdout for efficiency:
+
+- **Input**: Each script receives one JSON object per line via stdin:
+  ```json
+  {"file_path": "src/main.rs", "content": "fn main() { ... }"}
+  ```
+- **Output**: Scripts write a JSON array of results via stdout:
+  ```json
+  [{"value": 5.0, "tags": {"metric": "complexity", "category": "complexity"}}]
+  ```
+- **Lifecycle**: Scripts are spawned once and kept alive across analysis requests, avoiding interpreter startup overhead.
+
+Each Python analyzer can include a `test()` function invoked via:
+```bash
+python custom_analyzers/my_analyzer.py test
+```
+
+Run self-tests for all analyzers at once:
+```bash
+codeprism test-analyzers
+```
+This auto-discovers all `.py` files in `custom_analyzers/` and runs their test entry point.
+
+**Example analyzers** (`custom_analyzers/`):
+- [`gosu_complexity.py`](custom_analyzers/gosu_complexity.py) — Cyclomatic complexity for Gosu language
+- [`java_complexity.py`](custom_analyzers/java_complexity.py) — Cyclomatic complexity for Java
 
 ### Scanning Modes
 
 - **Snapshot Mode**: Analyze entire repository at a specific commit
-- **Diff Mode**: Analyze changes between two commits or branches
+- **Diff Mode**: Analyze changes between two commits or branches (tracks A/M/D change types)
+
+Scans run as background jobs with trackable status via the API and web dashboard.
 
 ## 📥 Installation
 
@@ -285,6 +318,7 @@ The `func` object in aggregation views supports the following fields:
 | `analyzer_id` | string | No | Filter by analyzer ID |
 | `limit` | integer | For `top_n` | Number of results to return |
 | `buckets` | float[] | For `distribution` | Bucket boundaries for distribution |
+| `width` | integer | No | Grid width: `1` (half) or `2` (full). Defaults to `1`. |
 
 **Supported Grouping Keys:**
 
@@ -368,6 +402,25 @@ projects:
     aggregation_views: {}
 ```
 
+Projects can be managed via the **web dashboard UI** — add, rename, and remove projects without editing YAML files directly.
+
+### Project Templates
+
+Reusable project configurations are defined under `project_templates`:
+
+```yaml
+project_templates:
+  java_service:
+    tech_stacks:
+      - name: "Java"
+        extensions: ["java", "xml"]
+        analyzers: ["char_count"]
+    global_excludes:
+      - "**/target/**"
+```
+
+New projects can be created from templates via the web dashboard.
+
 ## 📊 Aggregation & Chart Types
 
 ### Aggregation Types
@@ -404,9 +457,8 @@ flowchart TD
 
 ## 📚 Documentation
 
-- [Project Blueprint](./PROJECT_BLUEPRINT.md)
-- [Module Structure](./STRUCTURE_AND_MODULES.md)
 - [API Documentation](http://localhost:3000/swagger-ui) (when server running)
+- OpenAPI spec at `/api-docs/openapi.json`
 
 ## 🤝 Contributing
 

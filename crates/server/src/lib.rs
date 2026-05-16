@@ -53,15 +53,13 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
         match &view_def.func {
             AggregationFunc::TopN {
                 analyzer_id,
-                metric_key,
-                category,
+                tag_filters,
                 limit,
                 order,
             } => {
                 let source = SourceConfig {
-                    analyzer_id: analyzer_id.clone().unwrap_or_default(),
-                    metric_key: metric_key.clone(),
-                    category: category.clone(),
+                    analyzer_id: analyzer_id.clone(),
+                    tag_filters: tag_filters.clone(),
                 };
                 let params = TopNParams {
                     limit: *limit as u32,
@@ -71,7 +69,6 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     id: key.clone(),
                     title: view_def.title.clone(),
                     tech_stacks: view_def.tech_stacks.clone(),
-                    category: category.clone(),
                     include_children: view_def.include_children,
                     group_by: view_def.group_by.clone(),
                     chart_type: view_def.chart_type.clone(),
@@ -82,19 +79,16 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
             }
             AggregationFunc::Sum {
                 analyzer_id,
-                metric_key,
-                category,
+                tag_filters,
             } => {
                 let source = SourceConfig {
-                    analyzer_id: analyzer_id.clone().unwrap_or_default(),
-                    metric_key: metric_key.clone(),
-                    category: category.clone(),
+                    analyzer_id: analyzer_id.clone(),
+                    tag_filters: tag_filters.clone(),
                 };
                 views.push(ViewConfig {
                     id: key.clone(),
                     title: view_def.title.clone(),
                     tech_stacks: view_def.tech_stacks.clone(),
-                    category: category.clone(),
                     include_children: view_def.include_children,
                     group_by: view_def.group_by.clone(),
                     chart_type: view_def.chart_type.clone(),
@@ -105,19 +99,16 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
             }
             AggregationFunc::Avg {
                 analyzer_id,
-                metric_key,
-                category,
+                tag_filters,
             } => {
                 let source = SourceConfig {
-                    analyzer_id: analyzer_id.clone().unwrap_or_default(),
-                    metric_key: metric_key.clone(),
-                    category: category.clone(),
+                    analyzer_id: analyzer_id.clone(),
+                    tag_filters: tag_filters.clone(),
                 };
                 views.push(ViewConfig {
                     id: key.clone(),
                     title: view_def.title.clone(),
                     tech_stacks: view_def.tech_stacks.clone(),
-                    category: category.clone(),
                     include_children: view_def.include_children,
                     group_by: view_def.group_by.clone(),
                     chart_type: view_def.chart_type.clone(),
@@ -128,19 +119,16 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
             }
             AggregationFunc::Min {
                 analyzer_id,
-                metric_key,
-                category,
+                tag_filters,
             } => {
                 let source = SourceConfig {
-                    analyzer_id: analyzer_id.clone().unwrap_or_default(),
-                    metric_key: metric_key.clone(),
-                    category: category.clone(),
+                    analyzer_id: analyzer_id.clone(),
+                    tag_filters: tag_filters.clone(),
                 };
                 views.push(ViewConfig {
                     id: key.clone(),
                     title: view_def.title.clone(),
                     tech_stacks: view_def.tech_stacks.clone(),
-                    category: category.clone(),
                     include_children: view_def.include_children,
                     group_by: view_def.group_by.clone(),
                     chart_type: view_def.chart_type.clone(),
@@ -151,19 +139,16 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
             }
             AggregationFunc::Max {
                 analyzer_id,
-                metric_key,
-                category,
+                tag_filters,
             } => {
                 let source = SourceConfig {
-                    analyzer_id: analyzer_id.clone().unwrap_or_default(),
-                    metric_key: metric_key.clone(),
-                    category: category.clone(),
+                    analyzer_id: analyzer_id.clone(),
+                    tag_filters: tag_filters.clone(),
                 };
                 views.push(ViewConfig {
                     id: key.clone(),
                     title: view_def.title.clone(),
                     tech_stacks: view_def.tech_stacks.clone(),
-                    category: category.clone(),
                     include_children: view_def.include_children,
                     group_by: view_def.group_by.clone(),
                     chart_type: view_def.chart_type.clone(),
@@ -174,14 +159,12 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
             }
             AggregationFunc::Distribution {
                 analyzer_id,
-                metric_key,
-                category,
+                tag_filters,
                 buckets,
             } => {
                 let source = SourceConfig {
-                    analyzer_id: analyzer_id.clone().unwrap_or_default(),
-                    metric_key: metric_key.clone(),
-                    category: category.clone(),
+                    analyzer_id: analyzer_id.clone(),
+                    tag_filters: tag_filters.clone(),
                 };
                 let params = crate::config::DistributionParams {
                     buckets: buckets.clone(),
@@ -190,7 +173,6 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     id: key.clone(),
                     title: view_def.title.clone(),
                     tech_stacks: view_def.tech_stacks.clone(),
-                    category: category.clone(),
                     include_children: view_def.include_children,
                     group_by: view_def.group_by.clone(),
                     chart_type: view_def.chart_type.clone(),

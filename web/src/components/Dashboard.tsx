@@ -8,8 +8,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { MetricCard } from './widgets/MetricCard';
 
 import ChartRenderer from './ChartRenderer';
+import { ChildrenViewer } from './dashboard/ChildrenViewer';
 import { fetchView, fetchScanSummary, type AggregationResult, type AppConfig, type ScanSummary, getDefaultProject } from '@/services/data';
-import { Activity, FileText } from 'lucide-react';
+import { FileText } from 'lucide-react';
 
 
 
@@ -37,6 +38,18 @@ const Dashboard = () => {
   const [scanSummary, setScanSummary] = useState<ScanSummary | null>(null);
   // Track change_type filter per view (for switchable mode)
   const [changeTypeFilters, setChangeTypeFilters] = useState<Record<string, string>>({});
+
+  // Children viewer modal state
+  interface LeafItem {
+    label: string;
+    value: number;
+    group?: string;
+  }
+  const [childrenView, setChildrenView] = useState<{
+    open: boolean;
+    title: string;
+    items: LeafItem[];
+  }>({ open: false, title: '', items: [] });
 
   // Sidebar State
   const [sidebarWidth, setSidebarWidth] = useState(280);
@@ -610,6 +623,64 @@ const Dashboard = () => {
     };
   };
 
+  // ─── Children Viewer Helpers ──────────────────────────────────────
+
+  const getItemField = (item: AggregationResult, field: string): string | undefined => {
+    switch (field) {
+      case 'tech_stack': return item.tech_stack;
+      case 'category': return item.category;
+      case 'metric_key': return item.metric_key;
+      case 'analyzer_id': return item.analyzer_id;
+      case 'change_type': return item.change_type;
+      default: return undefined;
+    }
+  };
+
+  const collectLeafItems = (items: AggregationResult[], groupByFields: string[]): LeafItem[] => {
+    const result: LeafItem[] = [];
+    for (const item of items) {
+      if (item.children && item.children.length > 0) {
+        result.push(...collectLeafItems(item.children, groupByFields));
+      } else {
+        // Build group label from effective group_by fields
+        const groupParts: string[] = [];
+        let changeType: string | undefined;
+        for (const field of groupByFields) {
+          if (field === 'change_type') {
+            changeType = item.change_type;
+          } else {
+            const val = getItemField(item, field);
+            if (val) groupParts.push(val);
+          }
+        }
+        const groupLabel = groupParts.join(':');
+        const group = changeType && groupLabel
+          ? `${groupLabel}(${changeType})`
+          : changeType
+            ? `(${changeType})`
+            : groupLabel || undefined;
+
+        result.push({ label: item.label, value: Math.round(item.value), group });
+      }
+    }
+    return result;
+  };
+
+  const openChildrenView = (view: any, viewTitle: string) => {
+    const rawData = viewDataMap[view.id] || [];
+    const groupByFields: string[] = [];
+    if (view.group_by) {
+      groupByFields.push(...view.group_by);
+    }
+    if (view.change_type_mode === 'all') {
+      groupByFields.push('change_type');
+    }
+    const items = collectLeafItems(rawData, groupByFields);
+    if (items.length > 0) {
+      setChildrenView({ open: true, title: viewTitle, items });
+    }
+  };
+
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 transition-colors">
@@ -669,27 +740,37 @@ const Dashboard = () => {
                 let data = viewDataMap[view.id] || [];
                 const title = view.title || view.id.replace(/_/g, ' ').toUpperCase();
 
-                // For "all" mode: flatten hierarchical data (e.g., tech_stack -> change_type) 
-                // into flat labels like "Rust (A)", "Rust (M)", etc.
+                // For "all" mode: recursively flatten hierarchical data
+                // (e.g., tech_stack -> change_type -> individual entries) into flat labels
+                // like "Rust(A)", "Rust:compiler(A)", etc.
+                // We know effective group_by = view.group_by + ["change_type"],
+                // so the meaningful grouping depth = (group_by.length || 0) + 1.
+                // Individual entries below the change_type level are summed up.
                 if (view.change_type_mode === 'all' && data.length > 0 && data[0].children) {
-                  const flatData: AggregationResult[] = [];
-                  for (const parent of data) {
-                    if (parent.children && parent.children.length > 0) {
-                      for (const child of parent.children) {
-                        flatData.push({
-                          label: `${parent.label} (${child.label})`,
-                          value: child.value,
-                          tech_stack: parent.tech_stack,
-                          category: parent.category,
-                          change_type: child.change_type,
+                  const groupDepth = (view.group_by?.length || 0) + 1; // +1 for change_type
+                  const flattenByDepth = (items: AggregationResult[], prefix = '', depth = 0): AggregationResult[] => {
+                    const result: AggregationResult[] = [];
+                    for (const item of items) {
+                      if (item.children && item.children.length > 0 && depth < groupDepth - 1) {
+                        // Intermediate group level — recurse deeper, accumulate path
+                        const newPrefix = prefix ? `${prefix}:${item.label}` : item.label;
+                        result.push(...flattenByDepth(item.children, newPrefix, depth + 1));
+                      } else {
+                        // Change_type level (or below) — aggregate values into a flat result
+                        const totalValue = item.children
+                          ? item.children.reduce((sum, c) => sum + (c.value || 0), 0)
+                          : (item.value || 0);
+                        result.push({
+                          ...item,
+                          label: prefix ? `${prefix}(${item.label})` : item.label,
+                          value: totalValue,
+                          children: undefined,
                         });
                       }
-                    } else {
-                      // No children, keep as is
-                      flatData.push(parent);
                     }
-                  }
-                  data = flatData;
+                    return result;
+                  };
+                  data = flattenByDepth(data);
                 }
 
                 // Determine Chart Type
@@ -815,10 +896,15 @@ const Dashboard = () => {
                             ))}
                           </div>
                         )}
-                        {view.id.includes('complexity') ?
-                          <Activity className="h-5 w-5 text-slate-400 dark:text-slate-500" /> :
-                          <FileText className="h-5 w-5 text-slate-400 dark:text-slate-500" />
-                        }
+                        {view.include_children && (
+                          <button
+                            onClick={() => openChildrenView(view, title)}
+                            className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-sky-500 transition-colors"
+                            title={t('dashboard.viewRawResults')}
+                          >
+                            <FileText className="h-5 w-5" />
+                          </button>
+                        )}
                       </div>
                     </CardHeader>
                     <CardContent className="pt-6">
@@ -926,6 +1012,15 @@ const Dashboard = () => {
           </div>
         </main>
       </div>
+
+      {/* ─── Children Viewer Modal ──────────────────────────────── */}
+      <ChildrenViewer
+        open={childrenView.open}
+        title={childrenView.title}
+        items={childrenView.items}
+        onClose={() => setChildrenView({ open: false, title: '', items: [] })}
+      />
+
     </div>
   );
 };

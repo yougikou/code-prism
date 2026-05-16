@@ -33,10 +33,12 @@ CodePrism は Rust で構築された**高性能コード分析ツール**です
 
 - 🚀 **高性能** - Rust で構築された最高速度
 - 📊 **豊富な分析** - 複数の集計タイプとチャート可視化
-- 🔄 **Git 統合** - スナップショットと差分スキャンモード
-- 🎨 **サーバー駆動 UI** - YAML で設定可能なダッシュボード
-- 📦 **マルチプロジェクト対応** - 1つの設定で複数プロジェクトを管理
+- 🔄 **Git 統合** - スナップショットと差分スキャンモード、バックグラウンドジョブ追跡
+- 🎨 **サーバー駆動 UI** - YAML で設定可能なダッシュボード、フレキシブルグリッドレイアウト
+- 📦 **マルチプロジェクト対応** - 1つの設定で複数プロジェクトを管理、再利用可能なテンプレート
 - 🔌 **拡張可能なアナライザー** - 組み込み、正規表現、Python、WASM アナライザー
+- 🌐 **多言語対応 (i18n)** - 英語、中国語、日本語の UI
+- 📋 **スキャンジョブ追跡** - バックグラウンド実行とリアルタイムステータス監視
 
 ### アーキテクチャ
 
@@ -54,19 +56,50 @@ CodePrism は Rust で構築された**高性能コード分析ツール**です
 - `serve` - ダッシュボード付き Web サーバーを起動
 - `init-config` - デフォルト設定ファイルを生成
 - `check-config` - 設定ファイルを検証
-- `test-analyzers` - カスタムアナライザーをテスト
+- `test-analyzers` - `custom_analyzers/` 内の全 Python アナライザーのセルフテストを実行
 
 ### アナライザー
 
 - **組み込み**: ファイルカウント、文字カウント
 - **正規表現**: YAML で設定可能なパターンマッチング
-- **スクリプト**: `custom_analyzers/` ディレクトリの Python スクリプト
-- **WASM**: 高度な分析のための WebAssembly モジュール
+- **Python スクリプト**: `custom_analyzers/` ディレクトリの永続プロセスアナライザー
+- **WASM**: wasmtime ランタイムによる WebAssembly モジュール
+
+#### Python スクリプトアナライザー
+
+Python アナライザーは **永続ループモード** で動作し、stdin/stdout を介して効率的に通信します：
+
+- **入力**: 各スクリプトは 1 行に 1 つの JSON オブジェクトを stdin で受け取ります：
+  ```json
+  {"file_path": "src/main.rs", "content": "fn main() { ... }"}
+  ```
+- **出力**: スクリプトは JSON 配列を stdout に書き込みます：
+  ```json
+  [{"value": 5.0, "tags": {"metric": "complexity", "category": "complexity"}}]
+  ```
+- **ライフサイクル**: スクリプトは一度起動され、複数の分析リクエスト間で再利用されます。
+
+各 Python アナライザーには `test()` 関数を含めることができ、以下のように実行します：
+```bash
+python custom_analyzers/my_analyzer.py test
+```
+
+全アナライザーのセルフテストを一度に実行：
+```bash
+codeprism test-analyzers
+```
+`custom_analyzers/` 内のすべての `.py` ファイルを自動検出し、テストエントリポイントを実行します。
+
+**アナライザー例**（`custom_analyzers/`）：
+- [`gosu_complexity.py`](custom_analyzers/gosu_complexity.py) — Gosu 言語の循環的複雑度
+- [`java_complexity.py`](custom_analyzers/java_complexity.py) — Java の循環的複雑度
 
 ### スキャンモード
 
 - **スナップショットモード**: 特定のコミットでリポジトリ全体を分析
-- **差分モード**: 2つのコミットまたはブランチ間の変更を分析
+- **差分モード**: 2つのコミットまたはブランチ間の変更を分析（追加/変更/削除の追跡）
+
+スキャンはバックグラウンドジョブとして実行され、API と Web ダッシュボードからステータスを追跡できます。
 
 ## 📥 インストール
 
@@ -285,6 +318,7 @@ aggregation_views:
 | `analyzer_id` | string | いいえ | アナライザー ID でフィルタ |
 | `limit` | integer | `top_n` の場合 | 返す結果数 |
 | `buckets` | float[] | `distribution` の場合 | 分布統計のバケット境界 |
+| `width` | integer | いいえ | グリッド幅：`1`（半幅）または `2`（全幅）。デフォルトは `1`。 |
 
 **サポートされているグループ化キー：**
 
@@ -368,6 +402,25 @@ projects:
     aggregation_views: {}
 ```
 
+プロジェクトは **Web ダッシュボード UI** から追加・削除・編集が可能で、YAML ファイルを直接編集する必要はありません。
+
+### プロジェクトテンプレート
+
+再利用可能なプロジェクト設定は `project_templates` で定義します：
+
+```yaml
+project_templates:
+  java_service:
+    tech_stacks:
+      - name: "Java"
+        extensions: ["java", "xml"]
+        analyzers: ["char_count"]
+    global_excludes:
+      - "**/target/**"
+```
+
+Web ダッシュボードからテンプレートを選択して新規プロジェクトを作成できます。
+
 ## 📊 集計とチャートタイプ
 
 ### 集計タイプ
@@ -404,9 +457,8 @@ flowchart TD
 
 ## 📚 ドキュメント
 
-- [プロジェクトブループリント](./PROJECT_BLUEPRINT.md)
-- [モジュール構造](./STRUCTURE_AND_MODULES.md)
 - [API ドキュメント](http://localhost:3000/swagger-ui)（サーバー実行中）
+- OpenAPI 仕様: `/api-docs/openapi.json`
 
 ## 🤝 コントリビューション
 

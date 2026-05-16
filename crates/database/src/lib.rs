@@ -18,7 +18,8 @@ impl Db {
     }
 
     pub async fn migrate(&self) -> Result<()> {
-        sqlx::migrate!("../../migrations").run(&self.pool).await?;
+        let schema = include_str!("init.sql");
+        sqlx::raw_sql(schema).execute(&self.pool).await?;
         Ok(())
     }
 

@@ -16,7 +16,6 @@ fn test_app_config_serialization() {
                 id: "test_view".to_string(),
                 title: "Test View".to_string(),
                 tech_stacks: vec!["Rust".to_string()],
-                category: None,
                 include_children: true,
                 group_by: vec![],
                 chart_type: Some("bar_row".to_string()),
@@ -24,9 +23,8 @@ fn test_app_config_serialization() {
                 width: 1,
                 kind: ViewKind::TopN {
                     source: SourceConfig {
-                        analyzer_id: "char_count".to_string(),
-                        metric_key: Some("char_count".to_string()),
-                        category: None,
+                        analyzer_id: vec!["char_count".to_string()],
+                        tag_filters: std::collections::HashMap::new(),
                     },
                     params: TopNParams { limit: 10, order: Default::default() },
                 },
@@ -102,7 +100,6 @@ fn test_view_kind_serialization() {
         id: "sum_view".to_string(),
         title: "Sum View".to_string(),
         tech_stacks: vec![],
-        category: None,
         include_children: true,
         group_by: vec!["tech_stack".to_string()],
         chart_type: Some("pie".to_string()),
@@ -110,14 +107,13 @@ fn test_view_kind_serialization() {
         width: 1,
         kind: ViewKind::Sum {
             source: SourceConfig {
-                analyzer_id: "".to_string(),
-                metric_key: Some("file_count".to_string()),
-                category: None,
+                analyzer_id: vec!["file_count".to_string()],
+                tag_filters: std::collections::HashMap::new(),
             },
         },
     };
 
     let json = serde_json::to_string(&sum_view).expect("Failed to serialize");
     assert!(json.contains("\"type\":\"sum\""));
-    assert!(json.contains("\"metric_key\":\"file_count\""));
+    assert!(json.contains("\"analyzer_id\":[\"file_count\"]"));
 }

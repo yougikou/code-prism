@@ -173,7 +173,7 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
 
     // Verify Values for Modify (file1.txt)
     // Verify Values for Modify (file1.txt)
-    let f1_metrics = sqlx::query("SELECT value_before, value_after FROM metrics WHERE scan_id = ? AND file_path = 'file1.txt' AND metric_key = 'file_count'")
+    let f1_metrics = sqlx::query("SELECT value_before, value_after FROM metrics WHERE scan_id = ? AND file_path = 'file1.txt' AND json_extract(tags, '$.metric') = 'file_count'")
 
         .bind(diff_scan_id)
         .fetch_one(db.pool())
@@ -184,7 +184,7 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
 
     // Verify Values for Add (file2.txt)
     // Verify Values for Add (file2.txt)
-    let f2_metrics = sqlx::query("SELECT value_before, value_after FROM metrics WHERE scan_id = ? AND file_path = 'file2.txt' AND metric_key = 'file_count'")
+    let f2_metrics = sqlx::query("SELECT value_before, value_after FROM metrics WHERE scan_id = ? AND file_path = 'file2.txt' AND json_extract(tags, '$.metric') = 'file_count'")
 
         .bind(diff_scan_id)
         .fetch_one(db.pool())
@@ -230,7 +230,7 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
 
     // Verify Deletion Metrics
     // file2.txt should have D, value_before=Some, value_after=None
-    let delete_metric = sqlx::query("SELECT change_type, value_before, value_after, tech_stack FROM metrics WHERE scan_id = ? AND file_path = 'file2.txt' AND metric_key = 'file_count'")
+    let delete_metric = sqlx::query("SELECT change_type, value_before, value_after, tech_stack FROM metrics WHERE scan_id = ? AND file_path = 'file2.txt' AND json_extract(tags, '$.metric') = 'file_count'")
 
         .bind(diff_scan_delete_id)
         .fetch_one(db.pool())

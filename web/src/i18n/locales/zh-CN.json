@@ -33,12 +33,15 @@
     "loadErrors": "加载错误",
     "executionErrors": "执行错误",
     "noSummary": "此扫描暂无摘要数据",
+    "viewRawResults": "查看原始数据",
+    "items": "条",
     "analyzerId": "分析器",
     "filesAnalyzed": "分析文件数"
   },
   "table": {
     "label": "标签",
-    "value": "值"
+    "value": "值",
+    "group": "分组"
   },
   "chart": {
     "unknown": "未知"

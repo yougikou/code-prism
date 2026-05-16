@@ -1,15 +1,31 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-// use indexmap::IndexMap; // Not needed if using fully qualified path
+
+// Well-known tag keys
+pub const TAG_METRIC: &str = "metric";
+pub const TAG_CATEGORY: &str = "category";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricEntry {
     pub analyzer_id: String,
-    pub metric_key: String,
-    pub category: Option<String>,
+    /// Flexible key-value tags replacing old metric_key/category
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
     pub value: f64,
     pub scope: Option<String>,
     pub tech_stack: Option<String>,
+}
+
+impl MetricEntry {
+    pub fn metric_key(&self) -> Option<&str> {
+        self.tags.get(TAG_METRIC).map(|s| s.as_str())
+    }
+    pub fn category(&self) -> Option<&str> {
+        self.tags.get(TAG_CATEGORY).map(|s| s.as_str())
+    }
+    pub fn tag(&self, key: &str) -> Option<&str> {
+        self.tags.get(key).map(|s| s.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +143,15 @@ pub enum CustomAnalyzerDef {
         metric_key: String,
         #[serde(default)]
         category: Option<String>,
+        /// Arbitrary key-value tags attached to analyzer results
+        #[serde(default)]
+        tags: HashMap<String, String>,
+        /// Scan modes this analyzer applies to: "all" (default), "snapshot", "diff"
+        #[serde(default)]
+        scan_mode: Option<String>,
+        /// Change types this analyzer applies to: "all" (default), "A", "M", "D"
+        #[serde(default)]
+        change_type: Option<String>,
     },
 }
 
@@ -134,6 +159,15 @@ pub enum CustomAnalyzerDef {
 pub struct ImplAnalyzerConfig {
     pub metric_key: Option<String>,
     pub category: Option<String>,
+    /// Override or add tags for analyzer results (merged on top of script output)
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
+    /// Scan modes this analyzer applies to: "all" (default), "snapshot", "diff"
+    #[serde(default)]
+    pub scan_mode: Option<String>,
+    /// Change types this analyzer applies to: "all" (default), "A", "M", "D"
+    #[serde(default)]
+    pub change_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,67 +183,132 @@ impl Default for SortOrder {
     }
 }
 
+pub fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+    struct StringOrVec;
+    impl<'de> de::Visitor<'de> for StringOrVec {
+        type Value = Vec<String>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or list of strings")
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Vec<String>, E> {
+            Ok(vec![v.to_string()])
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<Vec<String>, E> {
+            Ok(vec![])
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Vec<String>, E> {
+            Ok(vec![])
+        }
+        fn visit_seq<A: de::SeqAccess<'de>>(self, seq: A) -> Result<Vec<String>, A::Error> {
+            de::Deserialize::deserialize(de::value::SeqAccessDeserializer::new(seq))
+        }
+    }
+    deserializer.deserialize_any(StringOrVec)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum AggregationFunc {
     #[serde(rename = "top_n")]
     TopN {
+        #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+        analyzer_id: Vec<String>,
         #[serde(default)]
-        analyzer_id: Option<String>,
-        #[serde(default)]
-        metric_key: Option<String>,
-        #[serde(default)]
-        category: Option<String>,
+        tag_filters: HashMap<String, String>,
         limit: usize,
         #[serde(default)]
         order: SortOrder,
     },
     #[serde(rename = "sum")]
     Sum {
+        #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+        analyzer_id: Vec<String>,
         #[serde(default)]
-        analyzer_id: Option<String>,
-        #[serde(default)]
-        metric_key: Option<String>,
-        #[serde(default)]
-        category: Option<String>,
+        tag_filters: HashMap<String, String>,
     },
     #[serde(rename = "avg")]
     Avg {
+        #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+        analyzer_id: Vec<String>,
         #[serde(default)]
-        analyzer_id: Option<String>,
-        #[serde(default)]
-        metric_key: Option<String>,
-        #[serde(default)]
-        category: Option<String>,
+        tag_filters: HashMap<String, String>,
     },
     #[serde(rename = "min")]
     Min {
+        #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+        analyzer_id: Vec<String>,
         #[serde(default)]
-        analyzer_id: Option<String>,
-        #[serde(default)]
-        metric_key: Option<String>,
-        #[serde(default)]
-        category: Option<String>,
+        tag_filters: HashMap<String, String>,
     },
     #[serde(rename = "max")]
     Max {
+        #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+        analyzer_id: Vec<String>,
         #[serde(default)]
-        analyzer_id: Option<String>,
-        #[serde(default)]
-        metric_key: Option<String>,
-        #[serde(default)]
-        category: Option<String>,
+        tag_filters: HashMap<String, String>,
     },
     #[serde(rename = "distribution")]
     Distribution {
+        #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+        analyzer_id: Vec<String>,
         #[serde(default)]
-        analyzer_id: Option<String>,
-        #[serde(default)]
-        metric_key: Option<String>,
-        #[serde(default)]
-        category: Option<String>,
+        tag_filters: HashMap<String, String>,
         buckets: Vec<f64>,
     },
+}
+
+impl AggregationFunc {
+    /// Return the tag_filters for this aggregation function.
+    pub fn effective_tag_filters(&self) -> &HashMap<String, String> {
+        match self {
+            AggregationFunc::TopN { tag_filters, .. } => tag_filters,
+            AggregationFunc::Sum { tag_filters, .. } => tag_filters,
+            AggregationFunc::Avg { tag_filters, .. } => tag_filters,
+            AggregationFunc::Min { tag_filters, .. } => tag_filters,
+            AggregationFunc::Max { tag_filters, .. } => tag_filters,
+            AggregationFunc::Distribution { tag_filters, .. } => tag_filters,
+        }
+    }
+}
+
+impl CustomAnalyzerDef {
+    /// Resolve tags by merging old metric_key/category with new tags field.
+    /// Old fields take precedence.
+    pub fn resolve_tags(&self) -> HashMap<String, String> {
+        match self {
+            CustomAnalyzerDef::Pattern(_) => {
+                let mut tags = HashMap::new();
+                tags.insert(TAG_METRIC.to_string(), "matches".to_string());
+                tags
+            }
+            CustomAnalyzerDef::Config { metric_key, category, tags, .. } => {
+                let mut result = tags.clone();
+                result.insert(TAG_METRIC.to_string(), metric_key.clone());
+                if let Some(cat) = category {
+                    result.insert(TAG_CATEGORY.to_string(), cat.clone());
+                }
+                result
+            }
+        }
+    }
+}
+
+impl ImplAnalyzerConfig {
+    /// Resolve tags by merging old metric_key/category with new tags field.
+    pub fn resolve_tags(&self) -> HashMap<String, String> {
+        let mut result = self.tags.clone();
+        if let Some(mk) = &self.metric_key {
+            result.insert(TAG_METRIC.to_string(), mk.clone());
+        }
+        if let Some(cat) = &self.category {
+            result.insert(TAG_CATEGORY.to_string(), cat.clone());
+        }
+        result
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -414,86 +513,110 @@ database_url: "sqlite:codeprism.db"
 # Project templates can be applied when adding a new project via the UI.
 # The key is the template name; the value contains all project settings.
 project_templates:
-  my-project:
-    name: "my-project"
+  code-prism:
+    name: "code-prism"
 
     # Files and directories to exclude from analysis
     global_excludes:
+      - "*"
       - "**/.git/**"
       - "**/node_modules/**"
       - "**/target/**"
-      - "**/dist/**"
-      - "**/build/**"
 
-    # Define custom regex analyzers (Name -> Pattern or Name -> Config)
+    # Define custom regex analyzers (Name -> Pattern with optional config)
     custom_regex_analyzers:
-      todo_finder:
-        pattern: "(TODO|FIXME):.*"
-        metric_key: "matches"
-        category: "pattern"
+      log_info_finder:
+        pattern: "\\b(?:(?:info|print(?:ln)?)!|print(?:ln)?\\b|console\\.(?:log|info)\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.info\\b)"
+        metric_key: "log_info"
+        category: "logging"
+      log_warn_finder:
+        pattern: "\\b(?:warn!|console\\.warn\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.(?:warn|warning)\\b)"
+        metric_key: "log_warn"
+        category: "logging"
+      log_error_finder:
+        pattern: "\\b(?:(?:error|eprint(?:ln)?)!|eprint(?:ln)?\\b|console\\.error\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.(?:error|fatal|exception)\\b)"
+        metric_key: "log_error"
+        category: "logging"
+      log_trace_finder:
+        pattern: "\\b(?:trace!|console\\.trace\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.trace\\b)"
+        metric_key: "log_trace"
+        category: "logging"
+      log_debug_finder:
+        pattern: "\\b(?:debug!|console\\.debug\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.debug\\b)"
+        metric_key: "log_debug"
+        category: "logging"
 
     # Python script analyzers — place .py files in custom_analyzers/ dir
-    # custom_impl_analyzers:
-    #   my_script:
-    #     metric_key: "result"
-    #     category: "custom"
-
-    # External WASM analyzers
-    # external_analyzers:
-    #   java_complexity: "analyzers/java_complexity.wasm"
+    custom_impl_analyzers:
+      java_complexity:
+        tags:
+          metric: "complexity"
+          category: "maintainability"
 
     # Tech stack classification — files are categorized by extension
     tech_stacks:
       - name: "Rust"
         extensions: ["rs", "toml"]
-        # Built-in analyzers: file_count (always active), char_count
-        # Custom analyzers: reference IDs from custom_regex_analyzers
-        analyzers: ["file_count", "char_count", "todo_finder"]
-        # paths: ["src/**"]  # Optional: restrict to specific folders
+        analyzers: ["char_count", "log_info_finder", "log_warn_finder", "log_error_finder", "log_trace_finder", "log_debug_finder"]
 
       - name: "Web"
-        extensions: ["js", "ts", "jsx", "tsx", "html", "css", "json"]
-        analyzers: ["file_count", "char_count", "todo_finder"]
+        extensions: ["js", "ts", "jsx", "tsx", "html", "css"]
+        analyzers: ["char_count", "log_info_finder", "log_warn_finder", "log_error_finder", "log_trace_finder", "log_debug_finder"]
 
       - name: "Python"
         extensions: ["py"]
-        analyzers: ["file_count", "char_count", "todo_finder"]
+        analyzers: ["char_count", "log_info_finder", "log_warn_finder", "log_error_finder", "log_trace_finder", "log_debug_finder"]
 
     # Dashboard views — each view creates a chart on the dashboard
     aggregation_views:
-      file_count_by_stack:
-        title: "File Count by Tech Stack"
+      sum_file_count_by_tech_stack_pie:
+        title: "Total File Count"
         func:
           type: "sum"
           analyzer_id: "file_count"
-          category: "size"
+          tag_filters:
+            category: "size"
         group_by: ["tech_stack"]
+        include_children: false
         chart_type: "pie"
 
       top_file_size:
-        title: "Top 10 Largest Files"
+        title: "Top 10 File Size"
+        tech_stacks: ["All", "Rust", "Python", "Web"]
+        change_type_mode: "switchable"
         func:
           type: "top_n"
           analyzer_id: "char_count"
           limit: 10
           order: "desc"
 
-      total_char_count:
-        title: "Total Character Count"
+      sum_file_count_by_tech_stack_table:
+        title: "Total File Count by Tech Stack"
+        change_type_mode: "switchable"
+        func:
+          type: "sum"
+          analyzer_id: "file_count"
+          tag_filters:
+            category: "size"
+        group_by: ["tech_stack"]
+        include_children: false
+        chart_type: "table"
+
+      sum_char_count:
+        title: "Total Char Count"
+        tech_stacks: ["Rust"]
         func:
           type: "sum"
           analyzer_id: "char_count"
         chart_type: "gauge"
 
-      file_count_table:
-        title: "File Count Detail"
-        change_type_mode: "switchable"
+      avg_file_size:
+        title: "Average File Size"
         func:
-          type: "sum"
-          analyzer_id: "file_count"
-          category: "size"
+          type: "avg"
+          analyzer_id: "char_count"
         group_by: ["tech_stack"]
-        chart_type: "table"
+        chart_type: "bar_col"
 
       file_size_distribution:
         title: "File Size Distribution"
@@ -503,16 +626,36 @@ project_templates:
           buckets: [1000, 3000, 5000, 10000, 50000]
         chart_type: "bar_col"
 
-  # ── Add more templates below ──
-  # another-project:
-  #   name: "another-project"
-  #   global_excludes: ["**/.git/**"]
-  #   tech_stacks:
-  #     - name: "Java"
-  #       extensions: ["java", "xml"]
-  #       analyzers: ["file_count"]
-  #   aggregation_views:
-  #     ...
+      log_stat_count:
+        title: "Log Stat Count"
+        tech_stacks: ["Rust", "Python", "Web"]
+        func:
+          type: "sum"
+          tag_filters:
+            category: "logging"
+        group_by: ["metric_key"]
+        chart_type: "table"
+
+      top_complexity:
+        title: "Top 10 Complexity"
+        tech_stacks: ["Rust", "Python", "Web"]
+        func:
+          type: "top_n"
+          tag_filters:
+            metric: "complexity"
+            category: "maintainability"
+          limit: 10
+          order: "desc"
+
+      complexity_radar:
+        title: "Complexity Overview (Radar)"
+        tech_stacks: ["Rust", "Python", "Web"]
+        func:
+          type: "top_n"
+          tag_filters:
+            metric: "complexity"
+          limit: 6
+        chart_type: "radar"
 "#
         .to_string()
     }

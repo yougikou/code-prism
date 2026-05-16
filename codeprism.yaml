@@ -34,15 +34,25 @@ projects:
         pattern: "\\b(?:trace!|console\\.trace\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.trace\\b)"
         metric_key: "log_trace"
         category: "logging"
-      log_debug_finder: 
+      log_debug_finder:
         pattern: "\\b(?:debug!|console\\.debug\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.debug\\b)"
         metric_key: "log_debug"
         category: "logging"
+      # Example with scan mode / change type restrictions:
+      # diff_only_finder:
+      #   pattern: "some-pattern"
+      #   metric_key: "diff_metric"
+      #   scan_mode: "diff"      # "all", "snapshot", or "diff" (default: "all")
+      #   change_type: "M"       # "all", "A", "M", or "D" (default: "all")
 
     custom_impl_analyzers:
       java_complexity:
-        metric_key: "complexity"
-        category: "maintainability"
+        tags:
+          metric: "complexity"
+          category: "maintainability"
+        # Optional scan mode / change type restrictions:
+        # scan_mode: "diff"
+        # change_type: "A"
 
     tech_stacks:
       - name: "Rust"
@@ -64,7 +74,8 @@ projects:
         func:
           type: "sum"
           analyzer_id: "file_count"
-          category: "size"
+          tag_filters:
+            category: "size"
         group_by: ["tech_stack"]
         include_children: false
         chart_type: "pie"
@@ -85,7 +96,8 @@ projects:
         func:
           type: "sum"
           analyzer_id: "file_count"
-          category: "size"
+          tag_filters:
+            category: "size"
         group_by: ["tech_stack"]
         include_children: false
         chart_type: "table" # table, bar_row, bar_col, pie, line, stacked_bar, heatmap, radar, gauge
@@ -119,7 +131,8 @@ projects:
         tech_stacks: ["Rust", "Python", "Web"]
         func:
           type: "sum"
-          category: "logging"
+          tag_filters:
+            category: "logging"
         group_by: ["metric_key"]
         chart_type: "table"
       
@@ -128,8 +141,9 @@ projects:
         tech_stacks: ["Rust", "Python", "Web"]
         func:
           type: "top_n"
-          metric_key: "complexity"
-          category: "maintainability"
+          tag_filters:
+            metric: "complexity"
+            category: "maintainability"
           limit: 10
           order: "desc"
 
@@ -140,6 +154,7 @@ projects:
         tech_stacks: ["Rust", "Python", "Web"]
         func:
           type: "top_n"
-          metric_key: "complexity"
+          tag_filters:
+            metric: "complexity"
           limit: 6
         chart_type: "radar"

@@ -33,10 +33,12 @@ CodePrism 是一个使用 Rust 构建的**高性能代码分析工具**。它可
 
 - 🚀 **高性能** - 使用 Rust 构建，速度极快
 - 📊 **丰富的分析** - 多种聚合类型和图表可视化
-- 🔄 **Git 集成** - 支持快照和差异扫描模式
-- 🎨 **服务端驱动 UI** - 通过 YAML 配置仪表板
-- 📦 **多项目支持** - 在一个配置文件中管理多个项目
+- 🔄 **Git 集成** - 支持快照和差异扫描模式，后台任务追踪
+- 🎨 **服务端驱动 UI** - 通过 YAML 配置仪表板，灵活网格布局
+- 📦 **多项目支持** - 在一个配置文件中管理多个项目，支持可复用模板
 - 🔌 **可扩展分析器** - 内置、正则、Python 和 WASM 分析器
+- 🌐 **国际化 (i18n)** - 内置多语言 UI（英文、中文、日文）
+- 📋 **扫描任务追踪** - 后台扫描执行，实时状态监控
 
 ### 架构
 
@@ -54,19 +56,50 @@ CodePrism 是一个使用 Rust 构建的**高性能代码分析工具**。它可
 - `serve` - 启动带有仪表板的 Web 服务器
 - `init-config` - 生成默认配置文件
 - `check-config` - 验证配置文件
-- `test-analyzers` - 测试自定义分析器
+- `test-analyzers` - 运行 `custom_analyzers/` 中所有 Python 分析器的自测试
 
 ### 分析器
 
 - **内置**: 文件计数、字符计数
 - **正则**: 通过 YAML 配置的模式匹配
-- **脚本**: `custom_analyzers/` 目录中的 Python 脚本
-- **WASM**: 用于高级分析的 WebAssembly 模块
+- **Python 脚本**: `custom_analyzers/` 目录中的持久进程分析器
+- **WASM**: 通过 wasmtime 运行时执行 WebAssembly 模块
+
+#### Python 脚本分析器
+
+Python 分析器采用**持久循环模式**运行，通过 stdin/stdout 高效通信：
+
+- **输入**: 每个脚本通过 stdin 接收每行一个 JSON 对象：
+  ```json
+  {"file_path": "src/main.rs", "content": "fn main() { ... }"}
+  ```
+- **输出**: 脚本通过 stdout 输出 JSON 数组：
+  ```json
+  [{"value": 5.0, "tags": {"metric": "complexity", "category": "complexity"}}]
+  ```
+- **生命周期**: 脚本启动后常驻内存，在多次分析请求间复用，避免解释器启动开销。
+
+每个 Python 分析器可以包含 `test()` 函数，通过以下方式调用：
+```bash
+python custom_analyzers/my_analyzer.py test
+```
+
+一键运行所有分析器的自测试：
+```bash
+codeprism test-analyzers
+```
+该命令自动发现 `custom_analyzers/` 中的所有 `.py` 文件并执行它们的测试入口点。
+
+**示例分析器**（`custom_analyzers/`）：
+- [`gosu_complexity.py`](custom_analyzers/gosu_complexity.py) — Gosu 语言的圈复杂度计算
+- [`java_complexity.py`](custom_analyzers/java_complexity.py) — Java 的圈复杂度计算
 
 ### 扫描模式
 
 - **快照模式**: 在特定提交时分析整个仓库
-- **差异模式**: 分析两个提交或分支之间的变更
+- **差异模式**: 分析两个提交或分支之间的变更（追踪新增/修改/删除类型）
+
+扫描以后台任务方式运行，可通过 API 和 Web 仪表板查看执行状态。
 
 ## 📥 安装
 
@@ -285,6 +318,7 @@ aggregation_views:
 | `analyzer_id` | string | 否 | 按分析器 ID 筛选 |
 | `limit` | integer | `top_n` 需要 | 返回的结果数量 |
 | `buckets` | float[] | `distribution` 需要 | 分布统计的桶边界 |
+| `width` | integer | 否 | 网格宽度：`1`（半宽）或 `2`（全宽）。默认为 `1`。 |
 
 **支持的分组键：**
 
@@ -368,6 +402,25 @@ projects:
     aggregation_views: {}
 ```
 
+项目可以通过 **Web 仪表板 UI** 进行管理 — 直接添加、重命名和删除项目，无需手动编辑 YAML 文件。
+
+### 项目模板
+
+可复用的项目配置定义在 `project_templates` 下：
+
+```yaml
+project_templates:
+  java_service:
+    tech_stacks:
+      - name: "Java"
+        extensions: ["java", "xml"]
+        analyzers: ["char_count"]
+    global_excludes:
+      - "**/target/**"
+```
+
+可以通过 Web 仪表板从模板创建新项目。
+
 ## 📊 聚合与图表类型
 
 ### 聚合类型
@@ -404,9 +457,8 @@ flowchart TD
 
 ## 📚 文档
 
-- [项目蓝图](./PROJECT_BLUEPRINT.md)
-- [模块结构](./STRUCTURE_AND_MODULES.md)
 - [API 文档](http://localhost:3000/swagger-ui)（需要服务器运行中）
+- OpenAPI 规范：`/api-docs/openapi.json`
 
 ## 🤝 贡献
 

@@ -5,8 +5,11 @@ export interface AggregationResult {
   tech_stack?: string;
   category?: string;
   change_type?: string;
+  metric_key?: string;
+  analyzer_id?: string;
   children?: AggregationResult[];
   group_key?: string;
+  tags?: Record<string, string>;
 }
 
 
@@ -20,7 +23,6 @@ export interface ViewConfig {
   id: string;
   title: string;
   tech_stacks: string[];
-  category?: string;
   include_children?: boolean;
   group_by?: string[];
   chart_type?: string;
@@ -28,8 +30,8 @@ export interface ViewConfig {
   width?: number;
   type: 'top_n' | 'sum' | 'avg' | 'min' | 'max' | 'distribution';
   source?: {
-    analyzer_id: string;
-    metric_key: string;
+    analyzer_id: string[];
+    tag_filters?: Record<string, string>;
   };
   params?: {
     limit: number;
@@ -176,18 +178,23 @@ export interface CustomAnalyzerDef {
   pattern: string;
   metric_key: string;
   category?: string;
+  tags?: Record<string, string>;
+  scan_mode?: 'all' | 'snapshot' | 'diff';
+  change_type?: 'all' | 'A' | 'M' | 'D';
 }
 
 export interface ImplAnalyzerConfig {
   metric_key?: string;
   category?: string;
+  tags?: Record<string, string>;
+  scan_mode?: 'all' | 'snapshot' | 'diff';
+  change_type?: 'all' | 'A' | 'M' | 'D';
 }
 
 export interface AggregationFunc {
   type: 'top_n' | 'sum' | 'avg' | 'min' | 'max' | 'distribution';
-  analyzer_id?: string;
-  metric_key?: string;
-  category?: string;
+  analyzer_id?: string[];
+  tag_filters?: Record<string, string>;
   limit?: number;
   order?: string;
   buckets?: number[];

@@ -179,6 +179,22 @@
             "category": {
               "type": "string",
               "description": "Category for grouping results"
+            },
+            "tags": {
+              "type": "object",
+              "description": "Arbitrary key-value tags attached to analyzer results",
+              "additionalProperties": { "type": "string" },
+              "default": {}
+            },
+            "scan_mode": {
+              "type": "string",
+              "description": "Restrict to scan mode: \"all\" (default), \"snapshot\", or \"diff\"",
+              "enum": ["all", "snapshot", "diff"]
+            },
+            "change_type": {
+              "type": "string",
+              "description": "Restrict to change type: \"all\" (default), \"A\" (added), \"M\" (modified), \"D\" (deleted)",
+              "enum": ["all", "A", "M", "D"]
             }
           },
           "required": ["pattern"]
@@ -195,6 +211,22 @@
         "category": {
           "type": "string",
           "description": "Override category"
+        },
+        "tags": {
+          "type": "object",
+          "description": "Override or add tags for analyzer results (merged on top of script output)",
+          "additionalProperties": { "type": "string" },
+          "default": {}
+        },
+        "scan_mode": {
+          "type": "string",
+          "description": "Restrict to scan mode: \"all\" (default), \"snapshot\", or \"diff\"",
+          "enum": ["all", "snapshot", "diff"]
+        },
+        "change_type": {
+          "type": "string",
+          "description": "Restrict to change type: \"all\" (default), \"A\" (added), \"M\" (modified), \"D\" (deleted)",
+          "enum": ["all", "A", "M", "D"]
         }
       }
     },
@@ -244,6 +276,12 @@
             "analyzer_id": { "type": "string" },
             "metric_key": { "type": "string" },
             "category": { "type": "string" },
+            "tag_filters": {
+              "type": "object",
+              "description": "Tag key-value filters for filtering aggregation results",
+              "additionalProperties": { "type": "string" },
+              "default": {}
+            },
             "limit": { "type": "integer", "minimum": 1 },
             "order": { "type": "string", "enum": ["asc", "desc"], "default": "desc" }
           },
@@ -254,7 +292,13 @@
             "type": { "enum": ["sum", "avg", "min", "max"] },
             "analyzer_id": { "type": "string" },
             "metric_key": { "type": "string" },
-            "category": { "type": "string" }
+            "category": { "type": "string" },
+            "tag_filters": {
+              "type": "object",
+              "description": "Tag key-value filters for filtering aggregation results",
+              "additionalProperties": { "type": "string" },
+              "default": {}
+            }
           },
           "required": ["type"]
         },
@@ -264,6 +308,12 @@
             "analyzer_id": { "type": "string" },
             "metric_key": { "type": "string" },
             "category": { "type": "string" },
+            "tag_filters": {
+              "type": "object",
+              "description": "Tag key-value filters for filtering aggregation results",
+              "additionalProperties": { "type": "string" },
+              "default": {}
+            },
             "buckets": {
               "type": "array",
               "description": "Bucket boundaries for distribution",

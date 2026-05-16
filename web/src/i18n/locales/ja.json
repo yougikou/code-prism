@@ -33,12 +33,15 @@
     "loadErrors": "ロードエラー",
     "executionErrors": "実行エラー",
     "noSummary": "このスキャンのサマリーデータはありません",
+    "viewRawResults": "生データを表示",
+    "items": "件",
     "analyzerId": "アナライザー",
     "filesAnalyzed": "分析ファイル数"
   },
   "table": {
     "label": "ラベル",
-    "value": "値"
+    "value": "値",
+    "group": "グループ"
   },
   "chart": {
     "unknown": "不明"
@@ -119,7 +122,13 @@
     "scanProgress": "進捗",
     "projectAlias": "プロジェクトエイリアス",
     "projectAliasExists": "このプロジェクト名は既に存在します。一意の名前を使用してください。",
-    "continueToStep2": "ステップ 2 に進む"
+    "continueToStep2": "ステップ 2 に進む",
+    "cloneTab": "リモートをクローン",
+    "localRepoTab": "ローカルリポジトリ",
+    "localPathPlaceholder": "C:\\projects\\myapp または /home/user/project",
+    "addLocalRepo": "ローカルリポジトリを追加",
+    "adding": "追加中...",
+    "localRepoAdded": "ローカルリポジトリが追加されました。"
   },
   "config": {
     "title": "設定",
@@ -164,7 +173,8 @@
       "addRegex": "正規表現を追加",
       "addImpl": "実装を追加",
       "addExternal": "外部を追加",
-      "delete": "削除"
+      "delete": "削除",
+      "nameDuplicate": "同じ名前のアナライザーが既に存在します"
     },
     "views": {
       "title": "ビュー：{{id}}",
