@@ -18,6 +18,9 @@ pub trait Analyzer: Send + Sync {
     fn change_type(&self) -> Option<&str> {
         None
     }
+    /// Set per-file context (change_type, scan_mode) before analyze().
+    /// Default is no-op — override in analyzers that need per-file context.
+    fn set_file_context(&self, _change_type: &str, _scan_mode: &str) {}
 }
 
 mod wasm;

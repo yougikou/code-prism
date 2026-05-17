@@ -911,6 +911,10 @@ impl Scanner {
                 // (e.g. Wasm runtime crash, Script process deadlock) does not
                 // crash the entire scan. Failed results are discarded and the
                 // error is logged; remaining analyzers continue unaffected.
+
+                // Set per-file context before analysis
+                analyzer.set_file_context(change_type, scan_mode);
+
                 let metrics_result = std::panic::catch_unwind(
                     std::panic::AssertUnwindSafe(|| analyzer.analyze(file_path, content)),
                 );

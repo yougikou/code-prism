@@ -12,6 +12,7 @@ use wasmtime_wasi::WasiCtxBuilder;
 struct WasmInput {
     file_path: String,
     content: String,
+    change_type: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -49,6 +50,7 @@ pub struct WasmAnalyzer {
     engine: Engine,
     module: Module,
     matches_cache: Arc<Mutex<Vec<MatchDetail>>>,
+    current_change_type: Arc<Mutex<String>>,
 }
 
 impl WasmAnalyzer {
@@ -62,6 +64,7 @@ impl WasmAnalyzer {
             engine,
             module,
             matches_cache: Arc::new(Mutex::new(Vec::new())),
+            current_change_type: Arc::new(Mutex::new(String::new())),
         })
     }
 }
@@ -76,9 +79,11 @@ impl Analyzer for WasmAnalyzer {
         self.matches_cache.lock().unwrap().clear();
 
         // Prepare Input JSON
+        let change_type = self.current_change_type.lock().unwrap().clone();
         let input = WasmInput {
             file_path: file_path.to_string(),
             content: content.to_string(),
+            change_type,
         };
         let json_bytes = match serde_json::to_vec(&input) {
             Ok(b) => b,
@@ -174,5 +179,9 @@ impl Analyzer for WasmAnalyzer {
 
     fn extract_matches(&self, _path: &str, _content: &str) -> Vec<MatchDetail> {
         self.matches_cache.lock().unwrap().clone()
+    }
+
+    fn set_file_context(&self, change_type: &str, _scan_mode: &str) {
+        *self.current_change_type.lock().unwrap() = change_type.to_string();
     }
 }
