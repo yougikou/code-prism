@@ -1,9 +1,9 @@
 use crate::Analyzer;
-use codeprism_core::MetricEntry;
+use codeprism_core::{MatchDetail, MetricEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use wasi_common::pipe::{ReadPipe, WritePipe};
 use wasmtime::*;
 use wasmtime_wasi::WasiCtxBuilder;
@@ -26,6 +26,9 @@ struct WasmOutput {
     /// Old category field (deprecated, merged into tags)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     category: Option<String>,
+    /// Optional per-match details
+    #[serde(default)]
+    matches: Option<Vec<MatchDetail>>,
 }
 
 impl WasmOutput {
@@ -45,6 +48,7 @@ pub struct WasmAnalyzer {
     id: String,
     engine: Engine,
     module: Module,
+    matches_cache: Arc<Mutex<Vec<MatchDetail>>>,
 }
 
 impl WasmAnalyzer {
@@ -57,6 +61,7 @@ impl WasmAnalyzer {
             id: id.to_string(),
             engine,
             module,
+            matches_cache: Arc::new(Mutex::new(Vec::new())),
         })
     }
 }
@@ -67,6 +72,9 @@ impl Analyzer for WasmAnalyzer {
     }
 
     fn analyze(&self, file_path: &str, content: &str) -> Vec<MetricEntry> {
+        // Reset matches cache for this file
+        self.matches_cache.lock().unwrap().clear();
+
         // Prepare Input JSON
         let input = WasmInput {
             file_path: file_path.to_string(),
@@ -80,7 +88,7 @@ impl Analyzer for WasmAnalyzer {
         // Output Buffer (Shared with Pipe)
         let stdout_buf = Arc::new(RwLock::new(Vec::new()));
 
-        // Pipes (wasi-common 18.x)
+        // Pipes
         let stdin = ReadPipe::from(json_bytes);
         let stdout = WritePipe::from_shared(stdout_buf.clone());
 
@@ -95,7 +103,6 @@ impl Analyzer for WasmAnalyzer {
         let mut store = Store::new(&self.engine, wasi);
         let mut linker = Linker::new(&self.engine);
 
-        // Add WASI (Preview 1) support - sync
         if let Err(e) = wasmtime_wasi::add_to_linker(&mut linker, |s| s) {
             eprintln!("Failed to link WASI: {}", e);
             return vec![];
@@ -109,7 +116,6 @@ impl Analyzer for WasmAnalyzer {
             }
         };
 
-        // Call _start
         let start_func = instance.get_typed_func::<(), ()>(&mut store, "_start");
 
         if let Ok(func) = start_func {
@@ -136,10 +142,23 @@ impl Analyzer for WasmAnalyzer {
             Ok(o) => o,
             Err(e) => {
                 eprintln!("Failed to parse Wasm output JSON: {}", e);
-                // if let Ok(s) = std::str::from_utf8(&result_bytes) { eprintln!("Raw: {}", s); }
                 return vec![];
             }
         };
+
+        // Collect all matches from all output entries into cache
+        let mut all_matches = Vec::new();
+        for o in &raw_outputs {
+            if let Some(ref matches) = o.matches {
+                for m in matches {
+                    let mut detail = m.clone();
+                    detail.analyzer_id = self.id.clone();
+                    detail.file_path = file_path.to_string();
+                    all_matches.push(detail);
+                }
+            }
+        }
+        *self.matches_cache.lock().unwrap() = all_matches;
 
         raw_outputs
             .into_iter()
@@ -151,5 +170,9 @@ impl Analyzer for WasmAnalyzer {
                 tech_stack: None,
             })
             .collect()
+    }
+
+    fn extract_matches(&self, _path: &str, _content: &str) -> Vec<MatchDetail> {
+        self.matches_cache.lock().unwrap().clone()
     }
 }

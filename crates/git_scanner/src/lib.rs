@@ -18,6 +18,7 @@ pub struct Scanner {
     db: Db,
     analyzers: HashMap<String, Box<dyn Analyzer>>,
     config: Arc<CodePrismConfig>,
+    scan_job_id: Option<i64>,
     // Scan summary tracking (accumulated during scan lifecycle)
     analyzer_load_errors: Vec<String>,
     analyzer_exec_count: HashMap<String, u64>,
@@ -176,10 +177,29 @@ impl Scanner {
             db,
             analyzers,
             config: Arc::new(config),
+            scan_job_id: None,
             analyzer_load_errors: load_errors,
             analyzer_exec_count: HashMap::new(),
             analyzer_error_details: HashMap::new(),
             seen_tag_keys: Mutex::new(HashSet::new()),
+        }
+    }
+
+    pub fn set_scan_job_id(&mut self, job_id: i64) {
+        self.scan_job_id = Some(job_id);
+    }
+
+    async fn update_progress(&self, progress: u8, message: &str) {
+        if let Some(job_id) = self.scan_job_id {
+            sqlx::query(
+                "UPDATE scan_jobs SET progress = ?, progress_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            )
+            .bind(progress as i32)
+            .bind(message)
+            .bind(job_id)
+            .execute(self.db.pool())
+            .await
+            .ok();
         }
     }
 
@@ -205,12 +225,16 @@ impl Scanner {
             project_name, commit_hash, branch_name
         );
 
+        self.update_progress(2, "Resolving commit info").await;
+
         let project_id = self
             .get_or_create_project(&project_name, &repo_path)
             .await?;
         let scan_id = self
             .create_scan_record(project_id, &commit_hash, &branch_name, "SNAPSHOT", None)
             .await?;
+
+        self.update_progress(5, "Creating scan records").await;
 
         // Resolve Project Config
         let project_config =
@@ -224,6 +248,7 @@ impl Scanner {
             }));
 
         // 2. Spawn Blocking Git Walker
+        self.update_progress(8, "Walking repository tree").await;
         let (tx, mut rx) = mpsc::channel(100);
         let repo_path_clone = repo_path.clone();
         let commit_hash_clone = commit_hash.clone();
@@ -257,6 +282,8 @@ impl Scanner {
         pb.set_message("Initializing scan...");
 
         let mut processed_count = 0;
+        let mut last_reported_progress = 0u8;
+        let mut last_progress_update = std::time::Instant::now();
 
         while let Some(event) = rx.recv().await {
             match event {
@@ -276,8 +303,24 @@ impl Scanner {
                     pb.set_message(format!("Scanned {} files: {}", processed_count, path));
                     pb.tick();
 
+                    // Report progress using asymptotic formula (unknown total files)
+                    let pct = 8u8.saturating_add(
+                        (82.0 * (processed_count as f64 / (processed_count as f64 + 500.0))) as u8,
+                    );
+                    if pct != last_reported_progress
+                        && last_progress_update.elapsed() >= std::time::Duration::from_millis(500)
+                    {
+                        self.update_progress(
+                            pct.min(90),
+                            &format!("Processing file {}: {}", processed_count, path),
+                        )
+                        .await;
+                        last_reported_progress = pct;
+                        last_progress_update = std::time::Instant::now();
+                    }
+
                     // Run analyzers if content is available
-                    let file_metrics = if let Some(c) = content {
+                    let (file_metrics, file_matches) = if let Some(c) = content {
                         self.analyze_file_content(
                             &path,
                             &c,
@@ -287,7 +330,7 @@ impl Scanner {
                             &project_config,
                         )
                     } else {
-                        Vec::<codeprism_core::MetricEntry>::new()
+                        (Vec::<codeprism_core::MetricEntry>::new(), Vec::<codeprism_core::MatchDetail>::new())
                     };
 
                     self.save_metrics(
@@ -300,6 +343,8 @@ impl Scanner {
                         Vec::new(),
                     )
                     .await?;
+
+                    self.save_matches(scan_id, file_matches).await?;
                 }
             }
         }
@@ -309,14 +354,17 @@ impl Scanner {
             processed_count
         ));
 
+        self.update_progress(92, "Auto-creating indexes").await;
         // Auto-create expression indexes for newly seen tag keys
         self.ensure_tag_indexes().await;
 
+        self.update_progress(95, "Saving scan summary").await;
         // Save scan summary
         if let Err(e) = self.save_scan_summary(scan_id, processed_count).await {
             eprintln!("Failed to save scan summary: {}", e);
         }
 
+        self.update_progress(100, "Scan complete").await;
         println!("Snapshot Scan Complete. Scan ID: {}", scan_id);
         Ok(scan_id)
     }
@@ -345,6 +393,8 @@ impl Scanner {
             project_name, base_hash, target_hash
         );
 
+        self.update_progress(2, "Resolving commit info").await;
+
         let project_id = self
             .get_or_create_project(&project_name, &repo_path)
             .await?;
@@ -358,6 +408,8 @@ impl Scanner {
             )
             .await?;
 
+        self.update_progress(5, "Creating scan records").await;
+
         // Resolve Project Config
         let project_config =
             Arc::new(self.config.get_project(&project_name).unwrap_or_else(|| {
@@ -369,6 +421,7 @@ impl Scanner {
             }));
 
         // Spawn Blocking Git Diff
+        self.update_progress(8, "Computing diff").await;
         let (tx, mut rx) = mpsc::channel(100);
         let repo_path_clone = repo_path.clone();
         let project_config_clone = project_config.clone();
@@ -411,12 +464,17 @@ impl Scanner {
         pb.set_message("Calculating diff...");
 
         let mut processed_count = 0u64;
+        let mut total_deltas = 0usize;
+        let mut last_reported_progress = 0u8;
+        let mut last_progress_update = std::time::Instant::now();
 
         while let Some(event) = rx.recv().await {
             match event {
                 ScanEvent::Start { total: Some(t) } => {
+                    total_deltas = t;
                     pb.set_length(t as u64);
                     pb.set_message("Processing changes...");
+                    self.update_progress(10, &format!("Processing {} changes", t)).await;
                 }
                 ScanEvent::Start { total: None } => {
                     // Should not happen in diff mode usually
@@ -436,10 +494,31 @@ impl Scanner {
                     pb.inc(1);
                     processed_count += 1;
 
+                    if total_deltas > 0 {
+                        let pct = 10u8.saturating_add(
+                            (80 * processed_count as usize / total_deltas) as u8,
+                        );
+                        if pct != last_reported_progress
+                            && last_progress_update.elapsed() >= std::time::Duration::from_millis(500)
+                        {
+                            self.update_progress(
+                                pct.min(90),
+                                &format!(
+                                    "Processing change {}/{}: {}",
+                                    processed_count, total_deltas, path
+                                ),
+                            )
+                            .await;
+                            last_reported_progress = pct;
+                            last_progress_update = std::time::Instant::now();
+                        }
+                    }
+
                     // Diff Mode: Analyze both if available
-                    let old_metrics = if let Some(c) = old_content {
+                    let old_path_ref = old_path.as_deref().unwrap_or(&path);
+                    let (old_metrics, old_matches) = if let Some(c) = old_content {
                         self.analyze_file_content(
-                            old_path.as_deref().unwrap_or(&path),
+                            old_path_ref,
                             &c,
                             "DIFF",
                             &change_type,
@@ -447,10 +526,10 @@ impl Scanner {
                             &project_config,
                         )
                     } else {
-                        Vec::<codeprism_core::MetricEntry>::new()
+                        (Vec::<codeprism_core::MetricEntry>::new(), Vec::<codeprism_core::MatchDetail>::new())
                     };
 
-                    let new_metrics = if let Some(c) = content {
+                    let (new_metrics, new_matches) = if let Some(c) = content {
                         self.analyze_file_content(
                             &path,
                             &c,
@@ -460,7 +539,7 @@ impl Scanner {
                             &project_config,
                         )
                     } else {
-                        Vec::<codeprism_core::MetricEntry>::new()
+                        (Vec::<codeprism_core::MetricEntry>::new(), Vec::<codeprism_core::MatchDetail>::new())
                     };
 
                     self.save_metrics(
@@ -473,19 +552,26 @@ impl Scanner {
                         old_metrics,
                     )
                     .await?;
+
+                    // Save matches for both old and new content
+                    self.save_matches(scan_id, old_matches).await?;
+                    self.save_matches(scan_id, new_matches).await?;
                 }
             }
         }
         pb.finish_with_message("Diff Scan Complete");
 
+        self.update_progress(92, "Auto-creating indexes").await;
         // Auto-create expression indexes for newly seen tag keys
         self.ensure_tag_indexes().await;
 
+        self.update_progress(95, "Saving scan summary").await;
         // Save scan summary
         if let Err(e) = self.save_scan_summary(scan_id, processed_count).await {
             eprintln!("Failed to save scan summary: {}", e);
         }
 
+        self.update_progress(100, "Diff scan complete").await;
         println!("Diff Scan Complete. Scan ID: {}", scan_id);
         Ok(scan_id)
     }
@@ -787,8 +873,9 @@ impl Scanner {
         change_type: &str,
         tech_stack_name: Option<&str>,
         project_config: &codeprism_core::ProjectConfig,
-    ) -> Vec<codeprism_core::MetricEntry> {
+    ) -> (Vec<codeprism_core::MetricEntry>, Vec<codeprism_core::MatchDetail>) {
         let mut results: Vec<codeprism_core::MetricEntry> = Vec::new();
+        let mut all_matches: Vec<codeprism_core::MatchDetail> = Vec::new();
         let mut analyzers_to_run: Vec<String> = vec!["file_count".to_string()];
 
         if let Some(ts_name) = tech_stack_name {
@@ -824,11 +911,11 @@ impl Scanner {
                 // (e.g. Wasm runtime crash, Script process deadlock) does not
                 // crash the entire scan. Failed results are discarded and the
                 // error is logged; remaining analyzers continue unaffected.
-                let result = std::panic::catch_unwind(
+                let metrics_result = std::panic::catch_unwind(
                     std::panic::AssertUnwindSafe(|| analyzer.analyze(file_path, content)),
                 );
 
-                match result {
+                match metrics_result {
                     Ok(metrics) => {
                         *self.analyzer_exec_count.entry(analyzer_id.clone()).or_insert(0) += 1;
                         results.extend(metrics);
@@ -848,11 +935,35 @@ impl Scanner {
                             .entry(analyzer_id.clone())
                             .or_default()
                             .push(format!("{}: {}", file_path, msg));
+                        // Skip match extraction if analyze panicked
+                        continue;
+                    }
+                }
+
+                // Extract matches (separate catch_unwind to isolate from analyze panics)
+                let matches_result = std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(|| analyzer.extract_matches(file_path, content)),
+                );
+
+                match matches_result {
+                    Ok(matches) => {
+                        all_matches.extend(matches);
+                    }
+                    Err(panic_info) => {
+                        let msg = panic_info
+                            .downcast_ref::<&str>()
+                            .map(|s| s.to_string())
+                            .or_else(|| panic_info.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "unknown panic".to_string());
+                        eprintln!(
+                            "Analyzer '{}' extract_matches panicked for '{}': {}",
+                            analyzer_id, file_path, msg,
+                        );
                     }
                 }
             }
         }
-        results
+        (results, all_matches)
     }
 
     async fn save_metrics(
@@ -912,6 +1023,12 @@ impl Scanner {
         }
 
         for (key, (val_before, val_after)) in merged_data {
+            // Skip entries where both values are zero or NULL — redundant data
+            let before_zero = val_before.map(|v| v == 0.0).unwrap_or(true);
+            let after_zero = val_after.map(|v| v == 0.0).unwrap_or(true);
+            if before_zero && after_zero {
+                continue;
+            }
             sqlx::query(
                 "INSERT INTO metrics (scan_id, file_path, change_type, old_file_path, tech_stack, analyzer_id, tags, value_before, value_after, scope)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -926,6 +1043,31 @@ impl Scanner {
             .bind(val_before)
             .bind(val_after)
             .bind(&key.scope)
+            .execute(self.db.pool())
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn save_matches(
+        &self,
+        scan_id: i64,
+        matches: Vec<codeprism_core::MatchDetail>,
+    ) -> Result<()> {
+        for m in matches {
+            sqlx::query(
+                "INSERT INTO matches (scan_id, file_path, analyzer_id, line_number, column_start, column_end, matched_text, context_before, context_after)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(scan_id)
+            .bind(&m.file_path)
+            .bind(&m.analyzer_id)
+            .bind(m.line_number as i64)
+            .bind(m.column_start.map(|v| v as i64))
+            .bind(m.column_end.map(|v| v as i64))
+            .bind(&m.matched_text)
+            .bind(&m.context_before)
+            .bind(&m.context_after)
             .execute(self.db.pool())
             .await?;
         }

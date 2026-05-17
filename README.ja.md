@@ -33,6 +33,7 @@ CodePrism は Rust で構築された**高性能コード分析ツール**です
 
 - 🚀 **高性能** - Rust で構築された最高速度
 - 📊 **豊富な分析** - 複数の集計タイプとチャート可視化
+- 🔍 **マッチレベルの詳細** - 集計メトリクスから個々の正規表現/Python/WASM マッチ位置（行番号とコードコンテキスト）までドリルダウン
 - 🔄 **Git 統合** - スナップショットと差分スキャンモード、バックグラウンドジョブ追跡
 - 🎨 **サーバー駆動 UI** - YAML で設定可能なダッシュボード、フレキシブルグリッドレイアウト
 - 📦 **マルチプロジェクト対応** - 1つの設定で複数プロジェクトを管理、再利用可能なテンプレート
@@ -77,6 +78,17 @@ Python アナライザーは **永続ループモード** で動作し、stdin/s
   ```json
   [{"value": 5.0, "tags": {"metric": "complexity", "category": "complexity"}}]
   ```
+- **マッチ詳細（オプション）**: アナライザーはオプションの `matches` フィールドで個々のマッチ位置情報を返せます：
+  ```json
+  [{
+    "value": 3.0,
+    "tags": {"metric": "todo_count", "category": "quality"},
+    "matches": [
+      {"file_path": "src/main.rs", "line_number": 42, "column_start": 9, "column_end": 21, "matched_text": "TODO: refactor", "context_before": "// FIXME: optimize", "context_after": "fn main() {"}
+    ]
+  }]
+  ```
+  マッチ詳細はスキャンごとに保存され、Web ダッシュボードの子リストモーダルでファイルパスをクリックすると表示できます。
 - **ライフサイクル**: スクリプトは一度起動され、複数の分析リクエスト間で再利用されます。
 
 各 Python アナライザーには `test()` 関数を含めることができ、以下のように実行します：
@@ -93,6 +105,24 @@ codeprism test-analyzers
 **アナライザー例**（`custom_analyzers/`）：
 - [`gosu_complexity.py`](custom_analyzers/gosu_complexity.py) — Gosu 言語の循環的複雑度
 - [`java_complexity.py`](custom_analyzers/java_complexity.py) — Java の循環的複雑度
+
+### マッチ詳細表示
+
+正規表現、Python、WASM アナライザーがマッチレベルのデータを生成する場合、集計されたチャート値から個々のマッチ位置にドリルダウンできます：
+
+1. **ファイルリストモーダル**: チャートカードの **FileText** アイコンをクリックして、全ファイルとそのメトリクス値を表示
+2. **マッチ詳細モーダル**: ファイルパスをクリックして、そのファイル内の全マッチ位置を表示：
+   - **行番号とカラム** — 各マッチの正確な位置
+   - **マッチしたテキスト** — コード書式でハイライト表示
+   - **コンテキスト行** — 前後 1 行のコンテキストで可読性向上
+
+これにより、集計メトリクスから生の分析結果までの完全なトレーサビリティを提供します。
+
+**API エンドポイント：**
+
+```
+GET /api/v1/projects/:project_name/scans/:scan_id/matches?file_path=<パス>[&analyzer_id=<ID>&page=1&page_size=100]
+```
 
 ### スキャンモード
 

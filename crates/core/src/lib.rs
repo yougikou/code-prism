@@ -5,6 +5,20 @@ use std::collections::HashMap;
 pub const TAG_METRIC: &str = "metric";
 pub const TAG_CATEGORY: &str = "category";
 
+/// A single match detail record produced by an analyzer (e.g., a regex match location).
+/// Does not carry tags — tag info is available via the analyzer config referenced by `analyzer_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatchDetail {
+    pub file_path: String,
+    pub line_number: u32,
+    pub column_start: Option<u32>,
+    pub column_end: Option<u32>,
+    pub matched_text: String,
+    pub context_before: Option<String>,
+    pub context_after: Option<String>,
+    pub analyzer_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricEntry {
     pub analyzer_id: String,

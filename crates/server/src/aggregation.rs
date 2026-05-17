@@ -69,7 +69,7 @@ impl TopNAggregator {
         let mut query = String::from(
             "SELECT file_path, value_after, tech_stack, tags, change_type, analyzer_id
              FROM metrics
-             WHERE scan_id = ?",
+             WHERE scan_id = ? AND value_after IS NOT NULL AND value_after > 0",
         );
 
         // Source tag filters (sorted for deterministic bind order)
@@ -220,6 +220,11 @@ impl TopNAggregator {
                     .analyzer_id
                     .clone()
                     .unwrap_or_else(|| "Unknown".to_string()),
+                "extension" => std::path::Path::new(&item.label)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_string())
+                    .unwrap_or_default(),
                 key if key.starts_with("tag:") => item
                     .tags
                     .as_ref()
@@ -272,6 +277,7 @@ impl TopNAggregator {
                 "change_type" => node.change_type = Some(group_val.clone()),
                 "metric_key" => node.metric_key = Some(group_val.clone()),
                 "analyzer_id" => node.analyzer_id = Some(group_val.clone()),
+                "extension" => { /* value is already in label */ }
                 _ => {}
             }
 
@@ -314,7 +320,7 @@ impl SumAggregator {
         let mut query = String::from(
             "SELECT file_path, value_after, tech_stack, tags, change_type, analyzer_id
              FROM metrics
-             WHERE scan_id = ?",
+             WHERE scan_id = ? AND value_after IS NOT NULL AND value_after > 0",
         );
 
         // Source tag filters (sorted for deterministic bind order)
@@ -544,10 +550,30 @@ impl StatAggregator {
             const ALLOWED_GROUP_KEYS: &[&str] = &[
                 "tech_stack", "category", "change_type", "metric_key", "analyzer_id",
             ];
-            let keys: Vec<&str> = group_by_str
+            let all_keys: Vec<&str> = group_by_str
                 .split(',')
                 .map(|s| s.trim())
-                .filter(|s| !s.is_empty() && ALLOWED_GROUP_KEYS.contains(s))
+                .filter(|s| !s.is_empty())
+                .collect();
+            let has_extension = all_keys.iter().any(|k| *k == "extension");
+
+            if has_extension {
+                return Self::execute_rust_grouping(
+                    pool,
+                    scan_id,
+                    &source_tag_filters,
+                    &source.analyzer_id,
+                    filters,
+                    &all_keys,
+                    stat_type,
+                )
+                .await;
+            }
+
+            let keys: Vec<&str> = all_keys
+                .iter()
+                .filter(|k| ALLOWED_GROUP_KEYS.contains(k))
+                .copied()
                 .collect();
             if !keys.is_empty() {
                 // Build GROUP BY with json_extract for tag-based keys
@@ -619,6 +645,160 @@ impl StatAggregator {
                 .with_tags(&tags_json)
             })
             .collect();
+
+        Ok(results)
+    }
+
+    /// Rust-based grouping path used when "extension" is among group_by keys,
+    /// since SQLite lacks a convenient built-in for file extension extraction.
+    async fn execute_rust_grouping(
+        pool: &SqlitePool,
+        scan_id: i64,
+        source_tag_filters: &[(String, String)],
+        source_analyzer_ids: &[String],
+        filters: &ViewFilters,
+        group_keys: &[&str],
+        stat_type: StatType,
+    ) -> Result<Vec<AggregationResult>> {
+        let mut query = String::from(
+            "SELECT value_after, file_path, tech_stack, tags, change_type, analyzer_id
+             FROM metrics
+             WHERE scan_id = ?",
+        );
+
+        // Source tag filters
+        for (key, _val) in source_tag_filters {
+            if key == codeprism_core::TAG_METRIC {
+                query.push_str(" AND json_extract(tags, '$.metric') = ?");
+            } else if key == codeprism_core::TAG_CATEGORY {
+                query.push_str(" AND json_extract(tags, '$.category') = ?");
+            } else {
+                query.push_str(&format!(" AND json_extract(tags, '$.\"{}\"') = ?", key));
+            }
+        }
+        if !source_analyzer_ids.is_empty() {
+            let placeholders: Vec<String> =
+                source_analyzer_ids.iter().map(|_| "?".to_string()).collect();
+            query.push_str(&format!(" AND analyzer_id IN ({})", placeholders.join(", ")));
+        }
+
+        // Dynamic filters
+        if filters.tech_stack.is_some() {
+            query.push_str(" AND tech_stack = ?");
+        }
+        if filters.category.is_some() {
+            query.push_str(" AND json_extract(tags, '$.category') = ?");
+        }
+        if filters.metric_key.is_some() {
+            query.push_str(" AND json_extract(tags, '$.metric') = ?");
+        }
+        if filters.change_type.is_some() {
+            query.push_str(" AND change_type = ?");
+        }
+
+        let mut sql_query = sqlx::query(&query).bind(scan_id);
+
+        for (_key, val) in source_tag_filters {
+            sql_query = sql_query.bind(val);
+        }
+        for id in source_analyzer_ids {
+            sql_query = sql_query.bind(id);
+        }
+
+        if let Some(ts) = &filters.tech_stack {
+            sql_query = sql_query.bind(ts);
+        }
+        if let Some(cat) = &filters.category {
+            sql_query = sql_query.bind(cat);
+        }
+        if let Some(mk) = &filters.metric_key {
+            sql_query = sql_query.bind(mk);
+        }
+        if let Some(ct) = &filters.change_type {
+            sql_query = sql_query.bind(ct);
+        }
+
+        let rows = sql_query.fetch_all(pool).await?;
+
+        // Group in Rust: composite key -> list of values
+        let mut groups: HashMap<Vec<String>, Vec<f64>> = HashMap::new();
+
+        for row in &rows {
+            let file_path: String = row.try_get("file_path").unwrap_or_default();
+            let value: f64 = row.try_get("value_after").unwrap_or_default();
+            let tags_json: String = row.try_get("tags").unwrap_or_default();
+            let tags_map: HashMap<String, String> =
+                serde_json::from_str(&tags_json).unwrap_or_default();
+            let tech_stack: Option<String> = row.try_get("tech_stack").unwrap_or_default();
+            let change_type: Option<String> = row.try_get("change_type").unwrap_or_default();
+            let analyzer_id: Option<String> = row.try_get("analyzer_id").unwrap_or_default();
+
+            let mut key_parts = Vec::with_capacity(group_keys.len());
+            for key in group_keys {
+                let val = match *key {
+                    "tech_stack" => tech_stack.clone().unwrap_or_default(),
+                    "category" => tags_map
+                        .get(codeprism_core::TAG_CATEGORY)
+                        .cloned()
+                        .unwrap_or_default(),
+                    "change_type" => change_type.clone().unwrap_or_default(),
+                    "metric_key" => tags_map
+                        .get(codeprism_core::TAG_METRIC)
+                        .cloned()
+                        .unwrap_or_default(),
+                    "analyzer_id" => analyzer_id.clone().unwrap_or_default(),
+                    "extension" => std::path::Path::new(&file_path)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.to_string())
+                        .unwrap_or_default(),
+                    k if k.starts_with("tag:") => tags_map
+                        .get(&k[4..])
+                        .cloned()
+                        .unwrap_or_default(),
+                    _ => "Other".to_string(),
+                };
+                key_parts.push(val);
+            }
+            groups.entry(key_parts).or_default().push(value);
+        }
+
+        // Compute stat and build results
+        let mut results: Vec<AggregationResult> = groups
+            .into_iter()
+            .map(|(key_parts, values)| {
+                let stat_value = match stat_type {
+                    StatType::Avg => values.iter().sum::<f64>() / values.len() as f64,
+                    StatType::Min => {
+                        values.iter().cloned().fold(f64::INFINITY, f64::min)
+                    }
+                    StatType::Max => values
+                        .iter()
+                        .cloned()
+                        .fold(f64::NEG_INFINITY, f64::max),
+                };
+
+                AggregationResult {
+                    label: key_parts.first().cloned().unwrap_or_default(),
+                    value: stat_value,
+                    tech_stack: None,
+                    category: None,
+                    change_type: None,
+                    metric_key: None,
+                    analyzer_id: None,
+                    children: None,
+                    group_key: Some(group_keys[0].to_string()),
+                    tags: None,
+                }
+            })
+            .collect();
+
+        // Sort by value descending
+        results.sort_by(|a, b| {
+            b.value
+                .partial_cmp(&a.value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         Ok(results)
     }

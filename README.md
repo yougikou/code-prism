@@ -33,6 +33,7 @@ CodePrism is a **high-performance code analysis tool** built with Rust. It scans
 
 - 🚀 **High Performance** - Built with Rust for maximum speed
 - 📊 **Rich Analytics** - Multiple aggregation types and chart visualizations
+- 🔍 **Match-Level Detail** - Drill down from aggregated metrics to individual regex/Script/WASM match locations with line numbers and code context
 - 🔄 **Git Integration** - Snapshot and Diff scanning modes with background job tracking
 - 🎨 **Server-Driven UI** - Configurable dashboard via YAML with flexible grid layout
 - 📦 **Multi-Project Support** - Manage multiple projects in one config with reusable templates
@@ -77,6 +78,17 @@ Python analyzers operate in a **persistent loop mode** over stdin/stdout for eff
   ```json
   [{"value": 5.0, "tags": {"metric": "complexity", "category": "complexity"}}]
   ```
+- **Match Details (Optional)**: Analyzers can return individual match locations via an optional `matches` field:
+  ```json
+  [{
+    "value": 3.0,
+    "tags": {"metric": "todo_count", "category": "quality"},
+    "matches": [
+      {"file_path": "src/main.rs", "line_number": 42, "column_start": 9, "column_end": 21, "matched_text": "TODO: refactor", "context_before": "// FIXME: optimize", "context_after": "fn main() {"}
+    ]
+  }]
+  ```
+  Match details are stored per-scan and viewable through the web dashboard by clicking a file path in the children viewer modal.
 - **Lifecycle**: Scripts are spawned once and kept alive across analysis requests, avoiding interpreter startup overhead.
 
 Each Python analyzer can include a `test()` function invoked via:
@@ -93,6 +105,24 @@ This auto-discovers all `.py` files in `custom_analyzers/` and runs their test e
 **Example analyzers** (`custom_analyzers/`):
 - [`gosu_complexity.py`](custom_analyzers/gosu_complexity.py) — Cyclomatic complexity for Gosu language
 - [`java_complexity.py`](custom_analyzers/java_complexity.py) — Cyclomatic complexity for Java
+
+### Match Detail Viewing
+
+When a regex, Python, or WASM analyzer produces match-level data, you can drill down from aggregated chart values to individual match locations:
+
+1. **File List Modal**: Click the **FileText** icon on any chart card to see all files and their metric values
+2. **Match Detail Modal**: Click a file path to view every match location within that file, including:
+   - **Line number and column** — exact position of each match
+   - **Matched text** — highlighted in the UI with code formatting
+   - **Context lines** — one line of context before and after for readability
+
+This provides full traceability from aggregated metrics down to the raw analysis results.
+
+**API Endpoint:**
+
+```
+GET /api/v1/projects/:project_name/scans/:scan_id/matches?file_path=<path>[&analyzer_id=<id>&page=1&page_size=100]
+```
 
 ### Scanning Modes
 

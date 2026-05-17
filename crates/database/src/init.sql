@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
     scan_mode TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued',
     progress INTEGER NOT NULL DEFAULT 0,
+    progress_message TEXT,
     error_message TEXT,
     scan_id INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -72,3 +73,23 @@ CREATE INDEX IF NOT EXISTS idx_metrics_file_prop ON metrics(tech_stack, change_t
 CREATE INDEX IF NOT EXISTS idx_scan_jobs_status ON scan_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_scan_jobs_project ON scan_jobs(project_name);
 CREATE INDEX IF NOT EXISTS idx_scan_summaries_scan ON scan_summaries(scan_id);
+
+-- Match details (per-match locations like regex matches)
+-- No tags column: tag info is available via analyzer_id referencing the analyzer config.
+CREATE TABLE IF NOT EXISTS matches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id INTEGER NOT NULL,
+    file_path TEXT NOT NULL,
+    analyzer_id TEXT NOT NULL,
+    line_number INTEGER NOT NULL,
+    column_start INTEGER,
+    column_end INTEGER,
+    matched_text TEXT NOT NULL,
+    context_before TEXT,
+    context_after TEXT,
+    FOREIGN KEY(scan_id) REFERENCES scans(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_matches_scan ON matches(scan_id);
+CREATE INDEX IF NOT EXISTS idx_matches_scan_file ON matches(scan_id, file_path);
+CREATE INDEX IF NOT EXISTS idx_matches_analyzer ON matches(scan_id, analyzer_id);

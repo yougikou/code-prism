@@ -20,6 +20,10 @@ impl Db {
     pub async fn migrate(&self) -> Result<()> {
         let schema = include_str!("init.sql");
         sqlx::raw_sql(schema).execute(&self.pool).await?;
+        // Migration: add progress_message column for existing databases
+        let _ = sqlx::raw_sql("ALTER TABLE scan_jobs ADD COLUMN progress_message TEXT")
+            .execute(&self.pool)
+            .await;
         Ok(())
     }
 

@@ -1,5 +1,5 @@
 use crate::Analyzer;
-use codeprism_core::{MetricEntry, TAG_CATEGORY, TAG_METRIC};
+use codeprism_core::{MatchDetail, MetricEntry, TAG_CATEGORY, TAG_METRIC};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -24,6 +24,9 @@ struct ScriptOutput {
     /// Old category field (deprecated, merged into tags)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     category: Option<String>,
+    /// Optional per-match details
+    #[serde(default)]
+    matches: Option<Vec<MatchDetail>>,
 }
 
 impl ScriptOutput {
@@ -53,6 +56,7 @@ pub struct ScriptAnalyzer {
     tag_overrides: HashMap<String, String>,
     scan_mode: Option<String>,
     change_type: Option<String>,
+    matches_cache: Arc<Mutex<Vec<MatchDetail>>>,
 }
 
 impl ScriptAnalyzer {
@@ -71,6 +75,7 @@ impl ScriptAnalyzer {
             tag_overrides,
             scan_mode,
             change_type,
+            matches_cache: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -156,6 +161,9 @@ impl Analyzer for ScriptAnalyzer {
             return vec![];
         }
 
+        // Reset matches cache for this file
+        self.matches_cache.lock().unwrap().clear();
+
         // Lock the process for the duration of this analysis interaction
         let mut guard = self.process.lock().unwrap();
         if let Some(handle) = guard.as_mut() {
@@ -176,7 +184,6 @@ impl Analyzer for ScriptAnalyzer {
             // Write Input
             if let Err(e) = handle.stdin.write_all(json_input.as_bytes()) {
                 eprintln!("Failed to write to analyzer script: {}", e);
-                // If broken pipe, maybe restart? For now just fail.
                 return vec![];
             }
             if let Err(e) = handle.stdin.flush() {
@@ -188,7 +195,6 @@ impl Analyzer for ScriptAnalyzer {
             let mut line = String::new();
             match handle.stdout_reader.read_line(&mut line) {
                 Ok(0) => {
-                    // EOF
                     eprintln!("Analyzer script process ended unexpectedly (EOF).");
                     return vec![];
                 }
@@ -202,11 +208,24 @@ impl Analyzer for ScriptAnalyzer {
                         }
                     };
 
+                    // Collect all matches from all output entries into cache
+                    let mut all_matches = Vec::new();
+                    for o in &raw_outputs {
+                        if let Some(ref matches) = o.matches {
+                            for m in matches {
+                                let mut detail = m.clone();
+                                detail.analyzer_id = self.id.clone();
+                                detail.file_path = file_path.to_string();
+                                all_matches.push(detail);
+                            }
+                        }
+                    }
+                    *self.matches_cache.lock().unwrap() = all_matches;
+
                     return raw_outputs
                         .into_iter()
                         .map(|o| {
                             let mut tags = o.resolve_tags();
-                            // Apply tag_overrides on top (they take precedence)
                             for (k, v) in &self.tag_overrides {
                                 tags.insert(k.clone(), v.clone());
                             }
@@ -228,5 +247,9 @@ impl Analyzer for ScriptAnalyzer {
         }
 
         vec![]
+    }
+
+    fn extract_matches(&self, _path: &str, _content: &str) -> Vec<MatchDetail> {
+        self.matches_cache.lock().unwrap().clone()
     }
 }

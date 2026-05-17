@@ -9,7 +9,8 @@ import { MetricCard } from './widgets/MetricCard';
 
 import ChartRenderer from './ChartRenderer';
 import { ChildrenViewer } from './dashboard/ChildrenViewer';
-import { fetchView, fetchScanSummary, type AggregationResult, type AppConfig, type ScanSummary, getDefaultProject } from '@/services/data';
+import { MatchDetailView } from './dashboard/MatchDetailView';
+import { fetchView, fetchScanSummary, fetchMatches, type AggregationResult, type AppConfig, type ScanSummary, type MatchDetail, getDefaultProject } from '@/services/data';
 import { FileText } from 'lucide-react';
 
 
@@ -50,6 +51,16 @@ const Dashboard = () => {
     title: string;
     items: LeafItem[];
   }>({ open: false, title: '', items: [] });
+
+  // Match detail modal state
+  const [matchDetailView, setMatchDetailView] = useState<{
+    open: boolean;
+    title: string;
+    filePath: string;
+    matches: MatchDetail[];
+    total: number;
+    loading: boolean;
+  }>({ open: false, title: '', filePath: '', matches: [], total: 0, loading: false });
 
   // Sidebar State
   const [sidebarWidth, setSidebarWidth] = useState(280);
@@ -632,6 +643,10 @@ const Dashboard = () => {
       case 'metric_key': return item.metric_key;
       case 'analyzer_id': return item.analyzer_id;
       case 'change_type': return item.change_type;
+      case 'extension': {
+        const dotIdx = item.label.lastIndexOf('.');
+        return dotIdx > 0 ? item.label.substring(dotIdx + 1) : '';
+      }
       default: return undefined;
     }
   };
@@ -679,6 +694,26 @@ const Dashboard = () => {
     if (items.length > 0) {
       setChildrenView({ open: true, title: viewTitle, items });
     }
+  };
+
+  const handleFileClick = async (filePath: string, viewTitle: string) => {
+    if (!selectedRunId) return;
+    setMatchDetailView({ open: true, title: viewTitle, filePath, matches: [], total: 0, loading: true });
+    try {
+      const res = await fetchMatches(currentProject, selectedRunId, { file_path: filePath });
+      setMatchDetailView(prev => ({ ...prev, matches: res.matches, total: res.total, loading: false }));
+    } catch (err) {
+      console.error('Failed to fetch matches:', err);
+      setMatchDetailView(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const closeMatchDetail = () => {
+    setMatchDetailView(prev => ({ ...prev, open: false }));
+  };
+
+  const backToFileList = () => {
+    setMatchDetailView(prev => ({ ...prev, open: false }));
   };
 
 
@@ -771,6 +806,31 @@ const Dashboard = () => {
                     return result;
                   };
                   data = flattenByDepth(data);
+                } else if (view.group_by && view.group_by.length > 1 && data.length > 0 && data[0].children) {
+                  // Multi-level grouping without "all" mode (e.g., tech_stack -> extension):
+                  // flatten intermediate group levels so all grouping layers are visible in the chart.
+                  const groupDepth = view.group_by.length;
+                  const flattenMultiLevel = (items: AggregationResult[], prefix = '', depth = 0): AggregationResult[] => {
+                    const result: AggregationResult[] = [];
+                    for (const item of items) {
+                      if (item.children && item.children.length > 0 && depth < groupDepth - 1) {
+                        const newPrefix = prefix ? `${prefix}/${item.label}` : item.label;
+                        result.push(...flattenMultiLevel(item.children, newPrefix, depth + 1));
+                      } else {
+                        const totalValue = item.children
+                          ? item.children.reduce((sum, c) => sum + (c.value || 0), 0)
+                          : (item.value || 0);
+                        result.push({
+                          ...item,
+                          label: prefix ? `${prefix}/${item.label}` : item.label,
+                          value: totalValue,
+                          children: undefined,
+                        });
+                      }
+                    }
+                    return result;
+                  };
+                  data = flattenMultiLevel(data);
                 }
 
                 // Determine Chart Type
@@ -1019,6 +1079,19 @@ const Dashboard = () => {
         title={childrenView.title}
         items={childrenView.items}
         onClose={() => setChildrenView({ open: false, title: '', items: [] })}
+        onFileClick={(filePath) => handleFileClick(filePath, childrenView.title)}
+      />
+
+      {/* ─── Match Detail Modal ──────────────────────────────────── */}
+      <MatchDetailView
+        open={matchDetailView.open}
+        title={matchDetailView.title}
+        filePath={matchDetailView.filePath}
+        matches={matchDetailView.matches}
+        total={matchDetailView.total}
+        loading={matchDetailView.loading}
+        onClose={closeMatchDetail}
+        onBack={backToFileList}
       />
 
     </div>

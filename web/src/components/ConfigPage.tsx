@@ -588,7 +588,7 @@ const CHANGE_TYPE_MODES = [
   { value: 'switchable', label: 'Switchable (A/M/D)' },
 ]
 
-const GROUP_BY_OPTIONS = ['tech_stack', 'category', 'metric_key', 'analyzer_id']
+const GROUP_BY_OPTIONS = ['tech_stack', 'category', 'metric_key', 'analyzer_id', 'extension']
 
 const FUNC_TYPES = [
   { value: 'top_n', label: 'Top N' },

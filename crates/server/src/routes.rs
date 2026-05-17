@@ -10,7 +10,7 @@ use codeprism_database::Db;
 use serde::{Serialize, Deserialize};
 use serde_json;
 use std::sync::{Arc, RwLock};
-use codeprism_core::CodePrismConfig;
+use codeprism_core::{CodePrismConfig, MatchDetail};
 use codeprism_scanner::Scanner;
 // Route macro ViewFilters usage might need IntoParams available?
 // Actually ViewFilters derives IntoParams.
@@ -260,6 +260,8 @@ pub async fn delete_project(
     for pid in &project_ids {
         sqlx::query("DELETE FROM scan_summaries WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
             .bind(pid).execute(pool).await.ok();
+        sqlx::query("DELETE FROM matches WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
+            .bind(pid).execute(pool).await.ok();
         sqlx::query("DELETE FROM metrics WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
             .bind(pid).execute(pool).await.ok();
         sqlx::query("DELETE FROM file_changes WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
@@ -434,6 +436,7 @@ pub struct ScanJobResponse {
     pub scan_mode: String,
     pub status: String,
     pub progress: u8,
+    pub progress_message: Option<String>,
     pub error_message: Option<String>,
     pub scan_id: Option<i64>,
     pub created_at: String,
@@ -469,6 +472,10 @@ pub struct ScanJobHandle {
 impl ScanJobHandle {
     pub fn new(db: Db, job_id: i64) -> Self {
         Self { db, job_id }
+    }
+
+    pub fn job_id(&self) -> i64 {
+        self.job_id
     }
 
     pub async fn set_running(&self) {
@@ -528,20 +535,21 @@ pub async fn get_scan_job(
     State(state): State<AppState>,
     Path(job_id): Path<i64>,
 ) -> impl IntoResponse {
-    match sqlx::query_as::<_, (i64, String, String, String, i32, Option<String>, Option<i64>, String, String)>(
-        "SELECT id, project_name, scan_mode, status, progress, error_message, scan_id, created_at, updated_at FROM scan_jobs WHERE id = ?"
+    match sqlx::query_as::<_, (i64, String, String, String, i32, Option<String>, Option<String>, Option<i64>, String, String)>(
+        "SELECT id, project_name, scan_mode, status, progress, progress_message, error_message, scan_id, created_at, updated_at FROM scan_jobs WHERE id = ?"
     )
     .bind(job_id)
     .fetch_optional(state.db.pool())
     .await
     {
-        Ok(Some((id, pn, sm, st, pr, em, si, ca, ua))) => {
+        Ok(Some((id, pn, sm, st, pr, pm, em, si, ca, ua))) => {
             Json(ScanJobResponse {
                 job_id: id,
                 project_name: pn,
                 scan_mode: sm,
                 status: st,
                 progress: pr as u8,
+                progress_message: pm,
                 error_message: em,
                 scan_id: si,
                 created_at: ca,
@@ -597,6 +605,100 @@ pub async fn get_scan_summary(
             (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
         }
     }
+}
+
+#[derive(Serialize)]
+pub struct MatchesResponse {
+    pub scan_id: i64,
+    pub total: i64,
+    pub page: u32,
+    pub page_size: u32,
+    pub matches: Vec<MatchDetail>,
+}
+
+#[derive(Deserialize)]
+pub struct MatchesQuery {
+    pub file_path: String,
+    pub analyzer_id: Option<String>,
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
+}
+
+/// GET /api/v1/projects/:project_name/scans/:scan_id/matches
+pub async fn get_matches(
+    State(state): State<AppState>,
+    Path((_project_name, scan_id)): Path<(String, i64)>,
+    Query(params): Query<MatchesQuery>,
+) -> impl IntoResponse {
+    let page = params.page.unwrap_or(1).max(1);
+    let page_size = params.page_size.unwrap_or(100).min(500);
+    let offset = (page - 1) * page_size;
+
+    // Count total matching rows
+    let count_sql = if params.analyzer_id.is_some() {
+        "SELECT COUNT(*) FROM matches WHERE scan_id = ? AND file_path = ? AND analyzer_id = ?"
+    } else {
+        "SELECT COUNT(*) FROM matches WHERE scan_id = ? AND file_path = ?"
+    };
+
+    let total: i64 = match sqlx::query_scalar(count_sql)
+        .bind(scan_id)
+        .bind(&params.file_path)
+        .bind(params.analyzer_id.as_deref())
+        .fetch_optional(state.db.pool())
+        .await
+    {
+        Ok(Some(c)) => c,
+        _ => 0,
+    };
+
+    // Fetch page of matches
+    let rows_sql = if params.analyzer_id.is_some() {
+        "SELECT file_path, line_number, column_start, column_end, matched_text, context_before, context_after, analyzer_id
+         FROM matches WHERE scan_id = ? AND file_path = ? AND analyzer_id = ?
+         ORDER BY line_number ASC LIMIT ? OFFSET ?"
+    } else {
+        "SELECT file_path, line_number, column_start, column_end, matched_text, context_before, context_after, analyzer_id
+         FROM matches WHERE scan_id = ? AND file_path = ?
+         ORDER BY line_number ASC LIMIT ? OFFSET ?"
+    };
+
+    let mut query = sqlx::query_as::<_, (String, i32, Option<i32>, Option<i32>, String, Option<String>, Option<String>, String)>(rows_sql)
+        .bind(scan_id)
+        .bind(&params.file_path);
+    if let Some(ref aid) = params.analyzer_id {
+        query = query.bind(aid);
+    }
+    query = query.bind(page_size as i64).bind(offset as i64);
+
+    let matches: Vec<MatchDetail> = match query.fetch_all(state.db.pool()).await {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|(fp, ln, cs, ce, mt, cb, ca, aid)| MatchDetail {
+                file_path: fp,
+                line_number: ln as u32,
+                column_start: cs.map(|v| v as u32),
+                column_end: ce.map(|v| v as u32),
+                matched_text: mt,
+                context_before: cb,
+                context_after: ca,
+                analyzer_id: aid,
+            })
+            .collect(),
+        Err(e) => {
+            eprintln!("DB error fetching matches: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+        }
+    };
+
+    Json(MatchesResponse {
+        scan_id,
+        total,
+        page,
+        page_size,
+        matches,
+    })
+    .into_response()
 }
 
 /// Helper to find a view config by ID across all projects
@@ -1241,6 +1343,7 @@ pub async fn execute_scan(
         tokio::spawn(async move {
             job.set_running().await;
             let mut scanner = Scanner::with_config(db, core_config);
+            scanner.set_scan_job_id(job.job_id());
 
             let result = if scan_mode == "snapshot" {
                 scanner
@@ -1336,6 +1439,7 @@ pub async fn execute_scan(
             tokio::spawn(async move {
                 job.set_running().await;
                 let mut scanner = Scanner::with_config(db, core_config);
+                scanner.set_scan_job_id(job.job_id());
 
                 let result = if scan_mode == "snapshot" {
                     let commit_ref = commit.as_deref();

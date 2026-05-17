@@ -71,6 +71,43 @@ export function getDefaultProject(config: AppConfig): ProjectConfig | undefined 
   return config.projects[0];
 }
 
+// ─── Match Detail Types ────────────────────────────────────────────────
+
+export interface MatchDetail {
+  file_path: string;
+  line_number: number;
+  column_start?: number;
+  column_end?: number;
+  matched_text: string;
+  context_before?: string;
+  context_after?: string;
+  analyzer_id: string;
+}
+
+export interface MatchesResponse {
+  scan_id: number;
+  total: number;
+  page: number;
+  page_size: number;
+  matches: MatchDetail[];
+}
+
+export async function fetchMatches(
+  projectName: string,
+  scanId: number | string,
+  params: { file_path: string; analyzer_id?: string; page?: number; page_size?: number }
+): Promise<MatchesResponse> {
+  const query = new URLSearchParams();
+  query.set('file_path', params.file_path);
+  if (params.analyzer_id) query.set('analyzer_id', params.analyzer_id);
+  if (params.page) query.set('page', String(params.page));
+  if (params.page_size) query.set('page_size', String(params.page_size));
+
+  const res = await fetch(`/api/v1/projects/${encodeURIComponent(projectName)}/scans/${scanId}/matches?${query}`);
+  if (!res.ok) throw new Error('Failed to fetch matches');
+  return await res.json();
+}
+
 export interface FetchViewOptions {
   techStack?: string;
   changeType?: string;
@@ -448,6 +485,7 @@ export interface ScanJobResponse {
   scan_mode: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
   progress: number;
+  progress_message: string | null;
   error_message: string | null;
   scan_id: number | null;
   created_at: string;

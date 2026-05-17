@@ -120,6 +120,7 @@
     "scanCompleted": "Scan completed successfully",
     "scanningProgress": "Scanning... {{progress}}%",
     "scanProgress": "Progress",
+    "eta": "ETA: {{time}} remaining",
     "projectAlias": "Project Alias",
     "projectAliasExists": "This project name already exists. Please use a unique name.",
     "continueToStep2": "Continue to Step 2",

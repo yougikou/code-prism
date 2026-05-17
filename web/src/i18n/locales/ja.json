@@ -120,6 +120,7 @@
     "scanCompleted": "スキャンが完了しました",
     "scanningProgress": "スキャン中... {{progress}}%",
     "scanProgress": "進捗",
+    "eta": "残り時間：{{time}}",
     "projectAlias": "プロジェクトエイリアス",
     "projectAliasExists": "このプロジェクト名は既に存在します。一意の名前を使用してください。",
     "continueToStep2": "ステップ 2 に進む",

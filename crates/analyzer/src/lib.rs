@@ -1,10 +1,15 @@
-use codeprism_core::{MetricEntry, TAG_CATEGORY, TAG_METRIC};
+use codeprism_core::{MetricEntry, MatchDetail, TAG_CATEGORY, TAG_METRIC};
 use regex::Regex;
 use std::collections::HashMap;
 
 pub trait Analyzer: Send + Sync {
     fn id(&self) -> &str;
     fn analyze(&self, path: &str, content: &str) -> Vec<MetricEntry>;
+    /// Extract individual match details (line numbers, matched text, context).
+    /// Default returns empty — override in analyzers that support per-match extraction.
+    fn extract_matches(&self, _path: &str, _content: &str) -> Vec<MatchDetail> {
+        Vec::new()
+    }
     /// Restrict to specific scan mode: "snapshot" or "diff". None = all modes.
     fn scan_mode(&self) -> Option<&str> {
         None
@@ -120,6 +125,46 @@ impl Analyzer for RegexAnalyzer {
             scope: None,
             tech_stack: None,
         }]
+    }
+
+    fn extract_matches(&self, file_path: &str, content: &str) -> Vec<MatchDetail> {
+        let lines: Vec<&str> = content.lines().collect();
+        self.regex
+            .find_iter(content)
+            .map(|m| {
+                // 1-based line number: count newlines before match start
+                let line_number = content[..m.start()].matches('\n').count() as u32 + 1;
+
+                // Column: position within the line (1-based)
+                let line_start = content[..m.start()].rfind('\n').map(|i| i + 1).unwrap_or(0);
+                let column_start = (m.start() - line_start + 1) as u32;
+                let column_end = column_start + m.len() as u32;
+
+                // Context: previous and next line (index as 0-based)
+                let line_idx = (line_number - 1) as usize;
+                let context_before = if line_idx > 0 {
+                    Some(lines[line_idx - 1].trim().to_string())
+                } else {
+                    None
+                };
+                let context_after = if line_idx + 1 < lines.len() {
+                    Some(lines[line_idx + 1].trim().to_string())
+                } else {
+                    None
+                };
+
+                MatchDetail {
+                    file_path: file_path.to_string(),
+                    line_number,
+                    column_start: Some(column_start),
+                    column_end: Some(column_end),
+                    matched_text: m.as_str().to_string(),
+                    context_before,
+                    context_after,
+                    analyzer_id: self.id.clone(),
+                }
+            })
+            .collect()
     }
 
     fn scan_mode(&self) -> Option<&str> {
