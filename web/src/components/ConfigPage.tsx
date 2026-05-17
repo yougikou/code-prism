@@ -15,6 +15,7 @@ import {
   type AppConfig,
   type FullProjectConfig,
   type FullTechStack,
+  type AggregationFunc,
   type UnifiedProjectInfo,
 } from '@/services/data'
 import { Settings, BookTemplate, Trash2, Database, GitBranch, ChevronDown, ChevronRight } from 'lucide-react'
@@ -589,6 +590,43 @@ const CHANGE_TYPE_MODES = [
 
 const GROUP_BY_OPTIONS = ['tech_stack', 'category', 'metric_key', 'analyzer_id']
 
+const FUNC_TYPES = [
+  { value: 'top_n', label: 'Top N' },
+  { value: 'sum', label: 'Sum' },
+  { value: 'avg', label: 'Avg' },
+  { value: 'min', label: 'Min' },
+  { value: 'max', label: 'Max' },
+  { value: 'distribution', label: 'Distribution' },
+]
+
+// Recommended aggregation function types per chart type
+const CHART_RECOMMENDED_FUNCS: Record<string, string[]> = {
+  '': ['top_n', 'sum', 'avg', 'min', 'max', 'distribution'],
+  card: ['sum', 'avg', 'min', 'max'],
+  gauge: ['sum', 'avg', 'min', 'max'],
+  table: ['top_n', 'sum', 'avg', 'min', 'max', 'distribution'],
+  bar_row: ['top_n', 'sum', 'avg', 'min', 'max', 'distribution'],
+  bar_horizontal: ['top_n', 'sum', 'avg', 'min', 'max', 'distribution'],
+  bar_col: ['top_n', 'sum', 'avg', 'min', 'max', 'distribution'],
+  bar_vertical: ['top_n', 'sum', 'avg', 'min', 'max', 'distribution'],
+  pie: ['sum', 'avg', 'min', 'max', 'distribution'],
+  line: ['top_n', 'sum', 'avg', 'min', 'max', 'distribution'],
+  stacked_bar: ['top_n', 'sum', 'avg', 'min', 'max'],
+  heatmap: ['sum', 'avg'],
+  radar: ['sum', 'avg'],
+}
+
+// Default TopN limit per chart type (only for types compatible with top_n)
+const CHART_DEFAULT_LIMITS: Record<string, number> = {
+  '': 10,
+  table: 10,
+  bar_row: 10,
+  bar_col: 10,
+  line: 10,
+  stacked_bar: 8,
+  radar: 6,
+}
+
 function ViewsEditor({ config, onChange }: {
   config: FullProjectConfig;
   onChange: (c: FullProjectConfig) => void;
@@ -633,6 +671,53 @@ function ViewsEditor({ config, onChange }: {
     onChange({ ...config, aggregation_views: views })
   }
 
+  const handleChartTypeChange = (id: string, chartType: string) => {
+    const view = config.aggregation_views[id]
+    const recommended = CHART_RECOMMENDED_FUNCS[chartType || ''] || CHART_RECOMMENDED_FUNCS['']
+    const views = { ...config.aggregation_views }
+
+    // Auto-switch func.type if current type is not recommended for this chart
+    if (chartType && !recommended.includes(view.func.type)) {
+      const newType = recommended[0]
+      const defaultLimit = CHART_DEFAULT_LIMITS[chartType] || 10
+      views[id] = {
+        ...views[id],
+        chart_type: chartType,
+        func: {
+          type: newType,
+          analyzer_id: view.func.analyzer_id,
+          tag_filters: view.func.tag_filters,
+          ...(newType === 'top_n' ? { limit: defaultLimit } : {}),
+          ...(newType === 'distribution' ? { buckets: [] as number[] } : {}),
+        } as AggregationFunc,
+      }
+    } else {
+      views[id] = { ...views[id], chart_type: chartType || undefined }
+    }
+
+    onChange({ ...config, aggregation_views: views })
+  }
+
+  const handleFuncTypeChange = (id: string, newType: string) => {
+    const view = config.aggregation_views[id]
+    const chartType = view.chart_type || ''
+    const defaultLimit = CHART_DEFAULT_LIMITS[chartType] || 10
+    const views = { ...config.aggregation_views }
+
+    views[id] = {
+      ...views[id],
+      func: {
+        type: newType,
+        analyzer_id: view.func.analyzer_id,
+        tag_filters: view.func.tag_filters,
+        ...(newType === 'top_n' ? { limit: defaultLimit } : {}),
+        ...(newType === 'distribution' ? { buckets: [] as number[] } : {}),
+      } as AggregationFunc,
+    }
+
+    onChange({ ...config, aggregation_views: views })
+  }
+
   const addView = () => {
     const key = `new_view_${Date.now()}`
     onChange({
@@ -673,7 +758,7 @@ function ViewsEditor({ config, onChange }: {
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <span className="flex items-center gap-2 min-w-0">
                 {expandedViews.has(id) ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-400" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-400" />}
-                <CardTitle className="text-base truncate">{t('config.views.title', { id })}</CardTitle>
+                <CardTitle className="text-base truncate">{id}{view.title ? <><span className="text-slate-400 dark:text-slate-500 mx-1.5">—</span>{view.title}</> : ''}</CardTitle>
               </span>
               <span className="shrink-0">
                 <button
@@ -695,52 +780,57 @@ function ViewsEditor({ config, onChange }: {
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.chartType')}</label>
-                <SelectInput value={view.chart_type || ''} onChange={v => updateView(id, 'chart_type', v || undefined)} options={CHART_TYPES} />
+                <SelectInput value={view.chart_type || ''} onChange={v => handleChartTypeChange(id, v)} options={CHART_TYPES} />
               </div>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.techStacks')}</label>
               <TagInput tags={view.tech_stacks || []} onChange={v => updateView(id, 'tech_stacks', v)} placeholder="Leave empty for Summary" suggestions={config.tech_stacks.map(s => s.name)} allowCustom={false} />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.changeTypeMode')}</label>
-              <SelectInput value={view.change_type_mode || ''} onChange={v => updateView(id, 'change_type_mode', v || undefined)} options={CHANGE_TYPE_MODES} />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.groupBy')}</label>
-              <TagInput tags={view.group_by || []} onChange={v => updateView(id, 'group_by', v)} suggestions={GROUP_BY_OPTIONS} allowCustom={false} placeholder="e.g. tech_stack, category" maxTags={2} />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.changeTypeMode')}</label>
+                <SelectInput value={view.change_type_mode || ''} onChange={v => updateView(id, 'change_type_mode', v || undefined)} options={CHANGE_TYPE_MODES} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.groupBy')}</label>
+                <TagInput tags={view.group_by || []} onChange={v => updateView(id, 'group_by', v)} suggestions={GROUP_BY_OPTIONS} allowCustom={false} placeholder="e.g. tech_stack, category" maxTags={2} />
+              </div>
             </div>
             <div className="border-t dark:border-slate-700 pt-3">
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">{t('config.views.funcType')}: {view.func.type}</label>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.funcType')}</label>
+                  <SelectInput value={view.func.type} onChange={v => handleFuncTypeChange(id, v)} options={FUNC_TYPES} />
+                </div>
+                {view.func.type === 'top_n' && (
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">{t('config.views.limit')}</label>
+                    <input type="number" value={view.func.limit || 10} onChange={e => updateFunc(id, 'limit', parseInt(e.target.value) || 10)}
+                      className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+                  </div>
+                )}
+                {view.func.type === 'distribution' && (
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">{t('config.views.buckets')}</label>
+                    <input type="text" value={(view.func.buckets || []).join(',')} onChange={e => updateFunc(id, 'buckets', e.target.value.split(',').map(Number).filter(n => !isNaN(n)))}
+                      placeholder="e.g. 0,10,50,100"
+                      className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+                  </div>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">{t('config.views.analyzerId')}</label>
                   <TagInput tags={view.func.analyzer_id || []} onChange={v => updateFunc(id, 'analyzer_id', v.length > 0 ? v : undefined)} suggestions={validAnalyzerIds} allowCustom={false} placeholder="Select analyzer IDs..." />
                 </div>
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.includeChildren')}</label>
-                    <label className="relative inline-flex items-center cursor-pointer mt-2">
-                      <input type="checkbox" checked={view.include_children !== false} onChange={e => updateView(id, 'include_children', e.target.checked)}
-                        className="sr-only peer" />
-                      <div className="w-9 h-5 bg-slate-300 dark:bg-slate-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-sky-500 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
-                    </label>
-                  </div>
-                  {view.func.type === 'top_n' && (
-                    <div>
-                      <label className="block text-xs text-slate-400 mb-1">{t('config.views.limit')}</label>
-                      <input type="number" value={view.func.limit || 10} onChange={e => updateFunc(id, 'limit', parseInt(e.target.value) || 10)}
-                        className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-                    </div>
-                  )}
-                  {view.func.type === 'distribution' && (
-                    <div>
-                      <label className="block text-xs text-slate-400 mb-1">{t('config.views.buckets')}</label>
-                      <input type="text" value={(view.func.buckets || []).join(',')} onChange={e => updateFunc(id, 'buckets', e.target.value.split(',').map(Number).filter(n => !isNaN(n)))}
-                        placeholder="e.g. 0,10,50,100"
-                        className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-                    </div>
-                  )}
+                <div>
+                  <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.includeChildren')}</label>
+                  <label className="relative inline-flex items-center cursor-pointer mt-2">
+                    <input type="checkbox" checked={view.include_children !== false} onChange={e => updateView(id, 'include_children', e.target.checked)}
+                      className="sr-only peer" />
+                    <div className="w-9 h-5 bg-slate-300 dark:bg-slate-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-sky-500 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
+                  </label>
                 </div>
               </div>
             </div>
