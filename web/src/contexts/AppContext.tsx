@@ -23,8 +23,6 @@ interface AppContextType extends AppState {
   navigateTo: (page: Page) => void;
   theme: 'light' | 'dark';
   toggleTheme: () => void;
-  navVisible: boolean;
-  toggleNav: () => void;
   configVersion: number;
   triggerConfigRefresh: () => void;
   projectList: UnifiedProjectInfo[];
@@ -49,7 +47,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return 'dark';
   });
 
-  const [navVisible, setNavVisible] = useState(false);
   const [configVersion, setConfigVersion] = useState(0);
   const [projectList, setProjectList] = useState<UnifiedProjectInfo[]>([]);
 
@@ -64,7 +61,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  const toggleNav = () => setNavVisible(prev => !prev);
   const triggerConfigRefresh = () => setConfigVersion(v => v + 1);
 
   const loadUnifiedProjects = useCallback(async () => {
@@ -105,8 +101,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         navigateTo: setCurrentPage,
         theme,
         toggleTheme,
-        navVisible,
-        toggleNav,
         configVersion,
         triggerConfigRefresh,
         projectList,

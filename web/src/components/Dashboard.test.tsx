@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
 import Dashboard from './Dashboard';
+import { AppProvider } from '@/contexts/AppContext';
 import * as dataService from '@/services/data';
 
 // Mock the data service
@@ -8,10 +9,17 @@ vi.mock('@/services/data', () => ({
   fetchConfig: vi.fn(),
   fetchRuns: vi.fn(),
   fetchView: vi.fn(),
+  fetchUnifiedProjects: vi.fn().mockResolvedValue([]),
+  fetchScanSummary: vi.fn(),
+  fetchMatches: vi.fn(),
   isMultiProject: vi.fn(),
   getDefaultProject: vi.fn(),
   getProjectNames: vi.fn(),
 }));
+
+function renderWithProviders(ui: React.ReactElement) {
+  return render(<AppProvider>{ui}</AppProvider>);
+}
 
 describe('Dashboard', () => {
   beforeEach(() => {
@@ -25,7 +33,7 @@ describe('Dashboard', () => {
     vi.mocked(dataService.getDefaultProject).mockReturnValue(undefined);
     vi.mocked(dataService.getProjectNames).mockReturnValue([]);
 
-    render(<Dashboard />);
+    renderWithProviders(<Dashboard />);
 
     // Should show some loading or empty state
     await waitFor(() => {
@@ -40,7 +48,7 @@ describe('Dashboard', () => {
     vi.mocked(dataService.getDefaultProject).mockReturnValue(undefined);
     vi.mocked(dataService.getProjectNames).mockReturnValue([]);
 
-    render(<Dashboard />);
+    renderWithProviders(<Dashboard />);
 
     await waitFor(() => {
       // Dashboard should handle empty state gracefully
@@ -64,8 +72,9 @@ describe('Dashboard', () => {
     });
     vi.mocked(dataService.getProjectNames).mockReturnValue(['test_project']);
     vi.mocked(dataService.fetchRuns).mockResolvedValue([]);
+    vi.mocked(dataService.fetchUnifiedProjects).mockResolvedValue([]);
 
-    render(<Dashboard />);
+    renderWithProviders(<Dashboard />);
 
     await waitFor(() => {
       expect(dataService.fetchConfig).toHaveBeenCalled();

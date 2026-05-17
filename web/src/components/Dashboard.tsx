@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '@/contexts/AppContext';
-import { Header } from './layout/Header';
 import { Sidebar } from './layout/Sidebar';
 import { TechStackTabs } from './dashboard/TechStackTabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,7 +18,7 @@ const Dashboard = () => {
   const { t } = useTranslation();
   const {
     currentProject, setProject,
-    viewMode, setViewMode,
+    viewMode,
     selectedTechStack, setSelectedTechStack,
     selectedRunId, setSelectedRunId,
     availableTechStacks, setAvailableTechStacks,
@@ -28,8 +27,7 @@ const Dashboard = () => {
   } = useApp();
 
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
-  // Use unified project list from context; derive all names for the dropdown
-  const mergedProjectNames = projectList.map(p => p.name);
+  // Derive all project names from the unified project list
 
   const [viewsConfig, setViewsConfig] = useState<any[]>([]);
   const [activeViews, setActiveViews] = useState<any[]>([]);
@@ -718,19 +716,7 @@ const Dashboard = () => {
 
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 transition-colors">
-      <Header
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
-        projects={mergedProjectNames}
-        selectedProject={currentProject}
-        onProjectChange={(project) => {
-          setProject(project);
-          setSelectedRunId(null);
-          setViewDataMap({});
-        }}
-      />
-
+    <div className="flex h-full overflow-hidden bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 transition-colors">
       <div className="flex flex-1 overflow-hidden">
         <Sidebar
           runs={runs}
@@ -975,8 +961,8 @@ const Dashboard = () => {
               })}
             </div>
 
-            {/* Scan Execution Summary */}
-            {selectedRunId && (
+            {/* Scan Execution Summary — only show on Summary tab */}
+            {selectedRunId && selectedTechStack === 'Summary' && (
               <Card className="border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 backdrop-blur shadow-sm dark:shadow-xl transition-colors duration-200">
                 <CardHeader className="border-b border-slate-100 dark:border-slate-700/50">
                   <CardTitle className="text-lg font-semibold text-slate-800 dark:text-slate-200">

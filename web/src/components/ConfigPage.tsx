@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import { useApp } from '@/contexts/AppContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
-  fetchConfig,
   fetchFullProjectConfig,
   updateProjectConfig,
   fetchTemplates,
@@ -12,13 +11,12 @@ import {
   reloadConfig,
   createProject,
   deleteProject as deleteProjectApi,
-  type AppConfig,
   type FullProjectConfig,
   type FullTechStack,
   type AggregationFunc,
   type UnifiedProjectInfo,
 } from '@/services/data'
-import { Settings, BookTemplate, Trash2, Database, GitBranch, ChevronDown, ChevronRight } from 'lucide-react'
+import { Settings, BookTemplate, Trash2, Database, GitBranch, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 
 // ─── Tag Input ──────────────────────────────────────────────────────────────
 
@@ -785,7 +783,7 @@ function ViewsEditor({ config, onChange }: {
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.techStacks')}</label>
-              <TagInput tags={view.tech_stacks || []} onChange={v => updateView(id, 'tech_stacks', v)} placeholder="Leave empty for Summary" suggestions={config.tech_stacks.map(s => s.name)} allowCustom={false} />
+              <TagInput tags={view.tech_stacks || []} onChange={v => updateView(id, 'tech_stacks', v)} placeholder="Leave empty for Summary" suggestions={['All', ...config.tech_stacks.map(s => s.name)]} allowCustom={false} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -865,7 +863,6 @@ export default function ConfigPage() {
   const { t } = useTranslation()
   const { currentProject, setProject, triggerConfigRefresh, configVersion, projectList } = useApp()
 
-  const [appConfig, setAppConfig] = useState<AppConfig | null>(null)
   const [config, setConfig] = useState<FullProjectConfig | null>(null)
   const [originalConfig, setOriginalConfig] = useState<string>('')
   const [activeTab, setActiveTab] = useState<ConfigTab>('tech_stacks')
@@ -878,11 +875,6 @@ export default function ConfigPage() {
   // Modal states
   const [showProjectManager, setShowProjectManager] = useState(false)
   const [showTemplateManager, setShowTemplateManager] = useState(false)
-
-  // Load project list (re-fetch when configVersion changes)
-  useEffect(() => {
-    fetchConfig().then(setAppConfig).catch(() => {})
-  }, [configVersion])
 
   // Load full project config (re-fetch when configVersion changes)
   useEffect(() => {
@@ -976,50 +968,25 @@ export default function ConfigPage() {
     }
   }
 
-  const projects = projectList.length > 0 ? projectList : (appConfig?.projects || []).map(p => ({ name: p.name, has_config: true } as UnifiedProjectInfo))
-
   return (
-    <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-900">
-      {/* Header */}
-      <div className="sticky top-0 z-10 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-4 sm:px-6 py-3">
-        <div className="flex items-center justify-between max-w-7xl mx-auto">
-          <div className="flex items-center gap-4">
-            <h1 className="text-lg font-semibold text-slate-800 dark:text-slate-100">{t('config.title')}</h1>
-            {projects.length > 1 ? (
-              <select
-                value={currentProject}
-                onChange={e => setProject(e.target.value)}
-                className="px-3 py-1.5 text-sm border rounded-lg bg-white dark:bg-slate-700 border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 outline-none focus:ring-2 focus:ring-sky-500"
+    <div className="h-full overflow-y-auto bg-slate-50 dark:bg-slate-900">
+      {/* Tabs + Actions */}
+      <div className="border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50">
+        <div className="flex items-center justify-between max-w-7xl mx-auto px-4 sm:px-6">
+          <div className="flex">
+            {TABS.map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                  activeTab === tab.key
+                    ? 'border-sky-500 text-sky-600 dark:text-sky-400'
+                    : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+                }`}
               >
-                {projects.map((p: UnifiedProjectInfo) => (
-                  <option key={p.name} value={p.name}>
-                    {p.name}{p.has_config ? '' : ' (no config)'}
-                  </option>
-                ))}
-              </select>
-            ) : projects.length === 1 ? (
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-300 px-2">
-                {projects[0].name}
-              </span>
-            ) : null}
-            {/* Project Management button */}
-            <button
-              onClick={() => setShowProjectManager(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-              title={t('config.manageProjects') || 'Manage Projects'}
-            >
-              <Settings className="w-4 h-4" />
-              <span className="hidden sm:inline">{t('config.manageProjects') || 'Projects'}</span>
-            </button>
-            {/* Templates button */}
-            <button
-              onClick={() => setShowTemplateManager(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-              title={t('templates.title') || 'Templates'}
-            >
-              <BookTemplate className="w-4 h-4" />
-              <span className="hidden sm:inline">{t('templates.title') || 'Templates'}</span>
-            </button>
+                {t(tab.labelKey)}
+              </button>
+            ))}
           </div>
           <div className="flex items-center gap-2">
             {message && (
@@ -1031,6 +998,13 @@ export default function ConfigPage() {
                 {message.text}
               </span>
             )}
+            <button
+              onClick={handleSave}
+              disabled={!hasChanges || saving || loading}
+              className="px-4 py-1.5 text-sm rounded-lg bg-sky-500 text-white hover:bg-sky-600 disabled:opacity-40 transition-colors"
+            >
+              {saving ? t('config.saving') : t('config.save')}
+            </button>
             {config && (
               <button
                 onClick={() => setShowSaveAsTemplate(true)}
@@ -1041,6 +1015,14 @@ export default function ConfigPage() {
               </button>
             )}
             <button
+              onClick={handleReset}
+              disabled={!hasChanges || loading}
+              className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 transition-colors"
+            >
+              {t('config.reset')}
+            </button>
+            <div className="w-px h-5 bg-slate-300 dark:bg-slate-600" />
+            <button
               onClick={async () => {
                 try {
                   await reloadConfig()
@@ -1050,51 +1032,34 @@ export default function ConfigPage() {
                   setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to reload config' })
                 }
               }}
-              className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
               title="Reload config from YAML file"
             >
-              Reload
+              <RefreshCw className="w-4 h-4" />
+              {t('config.reload')}
             </button>
             <button
-              onClick={handleReset}
-              disabled={!hasChanges || loading}
-              className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 transition-colors"
+              onClick={() => setShowProjectManager(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+              title={t('config.manageProjects') || 'Manage Projects'}
             >
-              {t('config.reset')}
+              <Settings className="w-4 h-4" />
+              <span className="hidden sm:inline">{t('config.manageProjects') || 'Manage'}</span>
             </button>
             <button
-              onClick={handleSave}
-              disabled={!hasChanges || saving || loading}
-              className="px-4 py-1.5 text-sm rounded-lg bg-sky-500 text-white hover:bg-sky-600 disabled:opacity-40 transition-colors"
+              onClick={() => setShowTemplateManager(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+              title={t('templates.title') || 'Templates'}
             >
-              {saving ? t('config.saving') : t('config.save')}
+              <BookTemplate className="w-4 h-4" />
+              <span className="hidden sm:inline">{t('templates.title') || 'Templates'}</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50">
-        <div className="flex max-w-7xl mx-auto px-4 sm:px-6">
-          {TABS.map(tab => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                activeTab === tab.key
-                  ? 'border-sky-500 text-sky-600 dark:text-sky-400'
-                  : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
-              }`}
-            >
-              {t(tab.labelKey)}
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
           {loading ? (
             <div className="flex items-center justify-center py-20">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
@@ -1122,7 +1087,6 @@ export default function ConfigPage() {
             </div>
           )}
         </div>
-      </div>
 
       {/* Save as Template Modal */}
       {showSaveAsTemplate && (

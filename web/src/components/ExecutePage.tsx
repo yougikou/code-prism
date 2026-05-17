@@ -679,7 +679,7 @@ export default function ExecutePage() {
   // ================================================================
 
   return (
-    <div className="min-h-screen bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 transition-colors">
+    <div className="h-full overflow-y-auto">
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
 
         {/* ──────────── Repo Selection ──────────── */}
