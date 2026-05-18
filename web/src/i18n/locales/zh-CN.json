@@ -129,7 +129,12 @@
     "localPathPlaceholder": "C:\\projects\\myapp 或 /home/user/project",
     "addLocalRepo": "添加本地仓库",
     "adding": "添加中...",
-    "localRepoAdded": "本地仓库添加成功。"
+    "localRepoAdded": "本地仓库添加成功。",
+    "deleteTitle": "删除仓库",
+    "deleteWarning": "移除此缓存的仓库？项目配置和扫描数据将保留。",
+    "deleteRemoveFiles": "从磁盘删除文件",
+    "deleteRemoveFilesHint": "删除克隆的仓库目录。该操作不可逆。",
+    "deleteConfirm": "删除"
   },
   "config": {
     "title": "配置管理",
@@ -141,6 +146,10 @@
     "savedSuccess": "配置保存成功！",
     "saveError": "保存配置失败",
     "manageProjects": "管理",
+    "copyTo": "复制至",
+    "copySuccess": "配置已复制到",
+    "copyWillOverwrite": "(将覆盖)",
+    "noOtherProjects": "没有其他可用项目",
     "projectSettings": "项目设置",
     "selectProject": "选择一个项目...",
     "tabs": {

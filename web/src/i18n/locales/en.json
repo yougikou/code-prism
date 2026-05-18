@@ -129,7 +129,12 @@
     "localPathPlaceholder": "C:\\projects\\myapp or /home/user/project",
     "addLocalRepo": "Add Local Repo",
     "adding": "Adding...",
-    "localRepoAdded": "Local repository added successfully."
+    "localRepoAdded": "Local repository added successfully.",
+    "deleteTitle": "Delete Repository",
+    "deleteWarning": "Remove this cached repository? The project config and scan data will be kept.",
+    "deleteRemoveFiles": "Delete files from disk",
+    "deleteRemoveFilesHint": "Removes the cloned repository directory. Irreversible.",
+    "deleteConfirm": "Delete"
   },
   "config": {
     "title": "Configuration",
@@ -141,6 +146,10 @@
     "savedSuccess": "Configuration saved successfully!",
     "saveError": "Failed to save configuration",
     "manageProjects": "Projects",
+    "copyTo": "Copy to",
+    "copySuccess": "Config copied to",
+    "copyWillOverwrite": "(will overwrite)",
+    "noOtherProjects": "No other projects available",
     "projectSettings": "Project Settings",
     "selectProject": "Select a project...",
     "tabs": {

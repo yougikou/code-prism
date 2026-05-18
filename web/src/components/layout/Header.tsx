@@ -86,27 +86,27 @@ export const Header: React.FC = () => {
           <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-lg border border-slate-200 dark:border-slate-700">
             <button
               onClick={() => setViewMode('snapshot')}
+              title={t('header.snapshot')}
               className={`
-                px-5 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2
+                p-1.5 rounded-md text-sm font-medium transition-all
                 ${viewMode === 'snapshot'
                   ? 'bg-white dark:bg-sky-500 text-sky-600 dark:text-slate-900 shadow-sm dark:shadow-lg dark:shadow-sky-500/20'
                   : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/50 dark:hover:bg-slate-700/50'}
               `}
             >
               <Layers className="w-4 h-4" />
-              {t('header.snapshot')}
             </button>
             <button
               onClick={() => setViewMode('diff')}
+              title={t('header.diff')}
               className={`
-                px-5 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-2
+                p-1.5 rounded-md text-sm font-medium transition-all
                 ${viewMode === 'diff'
                   ? 'bg-white dark:bg-sky-500 text-sky-600 dark:text-slate-900 shadow-sm dark:shadow-lg dark:shadow-sky-500/20'
                   : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/50 dark:hover:bg-slate-700/50'}
               `}
             >
               <GitGraph className="w-4 h-4" />
-              {t('header.diff')}
             </button>
           </div>
         )}

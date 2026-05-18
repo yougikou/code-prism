@@ -219,6 +219,10 @@ export default function ExecutePage() {
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null)
   const [checkoutConfirm, setCheckoutConfirm] = useState<{ branch: string; is_remote: boolean } | null>(null)
 
+  // ── Delete repo confirmation state ──
+  const [deleteConfirmRepoId, setDeleteConfirmRepoId] = useState<string | null>(null)
+  const [deleteRemoveFiles, setDeleteRemoveFiles] = useState(false)
+
   const commitSearchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   // ── Determine scan mode ──
@@ -494,13 +498,12 @@ export default function ExecutePage() {
   }
 
   // ── Delete repo ──
-  const handleDeleteRepo = async (id: string) => {
-    if (!confirm(t('execute.deleteRepoConfirm') || 'Remove this cached repository? The project config and scan data will be kept.')) return
+  const handleDeleteRepo = async (id: string, removeFiles: boolean) => {
     setDeletingRepoId(id)
     const prevList = reposList
     setReposList(prev => prev.filter(r => r.repo_id !== id))
     try {
-      await deleteRepo(id)
+      await deleteRepo(id, removeFiles)
       triggerConfigRefresh()
     } catch (err) {
       setReposList(prevList)
@@ -735,7 +738,7 @@ export default function ExecutePage() {
                           {t('execute.select')}
                         </button>
                         <button
-                          onClick={() => handleDeleteRepo(repo.repo_id)}
+                          onClick={() => setDeleteConfirmRepoId(repo.repo_id)}
                           disabled={deletingRepoId === repo.repo_id}
                           className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-900/20 rounded-md transition-colors disabled:opacity-50"
                           title={t('execute.deleteRepo')}
@@ -1391,6 +1394,61 @@ export default function ExecutePage() {
           </>
         )}
       </div>
+
+      {/* ──────────── Delete Repo Confirmation Modal ──────────── */}
+      {deleteConfirmRepoId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+            <div className="p-5">
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center shrink-0">
+                  <Trash2Icon className="w-5 h-5 text-red-400" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100 mb-1">
+                    {t('execute.deleteTitle')}
+                  </h3>
+                  <p className="text-sm text-slate-400 mb-3">
+                    {t('execute.deleteWarning')}
+                  </p>
+                  <label className="flex items-start gap-3 p-3 bg-slate-100 dark:bg-slate-700/50 rounded-lg cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={deleteRemoveFiles}
+                      onChange={e => setDeleteRemoveFiles(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 rounded border-slate-400 text-red-500 focus:ring-red-500"
+                    />
+                    <div className="text-xs space-y-0.5">
+                      <span className="font-medium text-slate-700 dark:text-slate-300">{t('execute.deleteRemoveFiles')}</span>
+                      <p className="text-slate-400">{t('execute.deleteRemoveFilesHint')}</p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-3 bg-slate-850 border-t border-slate-200 dark:border-slate-700">
+              <button
+                onClick={() => { setDeleteConfirmRepoId(null); setDeleteRemoveFiles(false) }}
+                className="px-4 py-2 text-sm text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+              >
+                {t('execute.cancel')}
+              </button>
+              <button
+                onClick={() => {
+                  const id = deleteConfirmRepoId
+                  const removeFiles = deleteRemoveFiles
+                  setDeleteConfirmRepoId(null)
+                  setDeleteRemoveFiles(false)
+                  handleDeleteRepo(id, removeFiles)
+                }}
+                className="px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+              >
+                {t('execute.deleteConfirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ──────────── Checkout Confirmation Modal ──────────── */}
       {checkoutConfirm && (

@@ -1,12 +1,22 @@
+# CodePrism Configuration
+# 数据库连接地址（SQLite 路径）
 database_url: sqlite:codeprism.db
+
+# 多项目配置列表
 projects:
+  # 项目名称，用于识别和关联扫描结果
 - name: code-prism
-  repo_path: E:\develop\code-prism\cloned_repos\0bed853f-d6b9-45d9-83d7-2ce0289eb0c8
+  # 项目仓库路径（留空则使用当前目录）
+  # repo_path: /path/to/repo
+
+  # 技术栈定义：按文件扩展名分类，不同栈可配置不同分析器
   tech_stacks:
   - name: Rust
+    # 关联的文件扩展名
     extensions:
     - rs
     - toml
+    # 应用于该技术栈的分析器 ID（引用 custom_regex_analyzers / custom_impl_analyzers / 内置分析器）
     analyzers:
     - char_count
     - log_info_finder
@@ -14,7 +24,9 @@ projects:
     - log_error_finder
     - log_trace_finder
     - log_debug_finder
+    # 额外路径匹配模式（glob 语法，为空则不限制路径）
     paths: []
+    # 排除路径模式（glob 语法）
     excludes: []
   - name: Web
     extensions:
@@ -45,36 +57,32 @@ projects:
     - log_debug_finder
     paths: []
     excludes: []
+  # 全局排除路径模式（glob 语法），对所有技术栈生效
   global_excludes:
   - '*'
   - '**/.git/**'
   - '**/node_modules/**'
   - '**/target/**'
+  # 自定义正则分析器：通过正则表达式匹配文件内容，生成指标
+  # 内置分析器：file_count（文件数）、char_count（字符数）
   custom_regex_analyzers:
+    # 正则分析器通过模式匹配结果，每个匹配计为 1
     log_trace_finder:
+      # 正则表达式（无需转义 YAML 特殊字符）
       pattern: \b(?:trace!|console\.trace\b|(?:\w*[Ll]og(?:ger|ging)?)\.trace\b)
+      # 指标键名，用于在视图中筛选
       metric_key: log_trace
+      # 分类标签，便于分组聚合
       category: logging
+      # 自定义标签（键值对，扩展分类维度）
       tags: {}
+      # 扫描模式过滤：null=全部, "snapshot"=仅快照, "diff"=仅差异
       scan_mode: null
+      # 变更类型过滤：null=全部, "A"=新增, "M"=修改, "D"=删除
       change_type: null
     log_warn_finder:
       pattern: \b(?:warn!|console\.warn\b|(?:\w*[Ll]og(?:ger|ging)?)\.(?:warn|warning)\b)
       metric_key: log_warn
-      category: logging
-      tags: {}
-      scan_mode: null
-      change_type: null
-    log_info_finder:
-      pattern: \b(?:(?:info|print(?:ln)?)!|print(?:ln)?\b|console\.(?:log|info)\b|(?:\w*[Ll]og(?:ger|ging)?)\.info\b)
-      metric_key: log_info
-      category: logging
-      tags: {}
-      scan_mode: null
-      change_type: null
-    log_debug_finder:
-      pattern: \b(?:debug!|console\.debug\b|(?:\w*[Ll]og(?:ger|ging)?)\.debug\b)
-      metric_key: log_debug
       category: logging
       tags: {}
       scan_mode: null
@@ -86,30 +94,62 @@ projects:
       tags: {}
       scan_mode: null
       change_type: null
+    log_debug_finder:
+      pattern: \b(?:debug!|console\.debug\b|(?:\w*[Ll]og(?:ger|ging)?)\.debug\b)
+      metric_key: log_debug
+      category: logging
+      tags: {}
+      scan_mode: null
+      change_type: null
+    log_info_finder:
+      pattern: \b(?:(?:info|print(?:ln)?)!|print(?:ln)?\b|console\.(?:log|info)\b|(?:\w*[Ll]og(?:ger|ging)?)\.info\b)
+      metric_key: log_info
+      category: logging
+      tags: {}
+      scan_mode: null
+      change_type: null
+  # 自定义实现分析器：通过外部脚本（Python）或代码实现的复杂分析逻辑
   custom_impl_analyzers:
     java_complexity:
+      # 指标键名（null 表示由分析器脚本自行决定）
       metric_key: null
+      # 分类（null 表示由脚本标签决定）
       category: null
+      # 自定义标签，会与脚本输出标签合并
       tags:
         metric: complexity
         category: maintainability
       scan_mode: null
       change_type: null
+  # 外部 WASM 分析器：键为分析器 ID，值为 WASM 模块路径
   external_analyzers: {}
+  # 聚合视图定义：将分析器输出的指标聚合为图表或表格
+  # view ID（唯一标识，供前端引用）
   aggregation_views:
     sum_file_count_by_tech_stack_pie:
+      # 图表显示标题
       title: Total File Count
+      # 关联的技术栈（[]=Summary 选项卡, "All"=全部, 或指定具体栈名）
       tech_stacks: []
-      include_children: true
+      # 是否包含子技术栈的数据
+      include_children: false
+      # 分组字段：tech_stack（按技术栈）、metric_key（按指标键）、category（按分类）
       group_by:
       - tech_stack
+      # 图表类型：pie（饼图）、bar_col（柱状图）、table（表格）、gauge（仪表盘）、radar（雷达图）
       chart_type: pie
+      # 变更类型展示模式：null=不展示, "all"=堆叠显示 A/M/D, "switchable"=可切换 A/M/D
       change_type_mode: null
-      width: 1
+      # 宽度占比：1=半栏, 2=全栏
+      width: 2
+      # 聚合函数定义
       func:
+        # 聚合类型：sum（求和）、avg（均值）、min（最小值）、max（最大值）、top_n（TopN）、distribution（分布）
         type: sum
+        # 分析器 ID 列表（空列表表示匹配所有分析器）
         analyzer_id:
         - file_count
+        # 标签过滤器：仅包含标签匹配的指标
         tag_filters:
           category: size
     top_file_size:
@@ -129,7 +169,9 @@ projects:
         analyzer_id:
         - char_count
         tag_filters: {}
+        # TopN 排序取前 N 条
         limit: 10
+        # 排序方向：desc（降序）、asc（升序）
         order: desc
     sum_file_count_by_tech_stack_table:
       title: Total File Count by Tech Stack
@@ -187,6 +229,7 @@ projects:
         analyzer_id:
         - char_count
         tag_filters: {}
+        # 分布区间边界值（文件大小 <=1000, 1000-3000, ..., >50000）
         buckets:
         - 1000.0
         - 3000.0
@@ -207,6 +250,7 @@ projects:
       width: 1
       func:
         type: sum
+        # 空列表 = 匹配所有分析器中 category=logging 的指标
         analyzer_id: []
         tag_filters:
           category: logging
@@ -223,10 +267,11 @@ projects:
       width: 1
       func:
         type: top_n
+        # 空列表 = 匹配所有满足 tag_filters 的指标
         analyzer_id: []
         tag_filters:
-          metric: complexity
           category: maintainability
+          metric: complexity
         limit: 10
         order: desc
     complexity_radar:
@@ -247,7 +292,9 @@ projects:
           metric: complexity
         limit: 6
         order: desc
+  # 第二个项目示例（按需添加更多项目）
 - name: custgmap
+  # 项目仓库路径（Windows UNC 路径格式）
   repo_path: \\?\E:\develop\custgmap
   tech_stacks: []
   global_excludes: []
@@ -255,6 +302,8 @@ projects:
   custom_impl_analyzers: {}
   external_analyzers: {}
   aggregation_views: {}
+
+# 项目模板：用于快速创建新项目配置，在 projects 中引用
 project_templates:
   Rust:
     name: Rust
@@ -307,23 +356,9 @@ project_templates:
     - '**/node_modules/**'
     - '**/target/**'
     custom_regex_analyzers:
-      log_error_finder:
-        pattern: \b(?:(?:error|eprint(?:ln)?)!|eprint(?:ln)?\b|console\.error\b|(?:\w*[Ll]og(?:ger|ging)?)\.(?:error|fatal|exception)\b)
-        metric_key: log_error
-        category: logging
-        tags: {}
-        scan_mode: null
-        change_type: null
       log_warn_finder:
         pattern: \b(?:warn!|console\.warn\b|(?:\w*[Ll]og(?:ger|ging)?)\.(?:warn|warning)\b)
         metric_key: log_warn
-        category: logging
-        tags: {}
-        scan_mode: null
-        change_type: null
-      log_debug_finder:
-        pattern: \b(?:debug!|console\.debug\b|(?:\w*[Ll]og(?:ger|ging)?)\.debug\b)
-        metric_key: log_debug
         category: logging
         tags: {}
         scan_mode: null
@@ -335,9 +370,23 @@ project_templates:
         tags: {}
         scan_mode: null
         change_type: null
+      log_debug_finder:
+        pattern: \b(?:debug!|console\.debug\b|(?:\w*[Ll]og(?:ger|ging)?)\.debug\b)
+        metric_key: log_debug
+        category: logging
+        tags: {}
+        scan_mode: null
+        change_type: null
       log_trace_finder:
         pattern: \b(?:trace!|console\.trace\b|(?:\w*[Ll]og(?:ger|ging)?)\.trace\b)
         metric_key: log_trace
+        category: logging
+        tags: {}
+        scan_mode: null
+        change_type: null
+      log_error_finder:
+        pattern: \b(?:(?:error|eprint(?:ln)?)!|eprint(?:ln)?\b|console\.error\b|(?:\w*[Ll]og(?:ger|ging)?)\.(?:error|fatal|exception)\b)
+        metric_key: log_error
         category: logging
         tags: {}
         scan_mode: null
@@ -347,8 +396,8 @@ project_templates:
         metric_key: null
         category: null
         tags:
-          category: maintainability
           metric: complexity
+          category: maintainability
         scan_mode: null
         change_type: null
     external_analyzers: {}
@@ -503,3 +552,7 @@ project_templates:
             metric: complexity
           limit: 6
           order: desc
+  # 使用模板创建项目的示例（在 projects 列表中引用）：
+  # - name: my-project
+  #   template: Rust
+  #   repo_path: /path/to/repo

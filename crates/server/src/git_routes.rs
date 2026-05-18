@@ -347,10 +347,21 @@ pub async fn list_repos(
     (StatusCode::OK, Json(serde_json::json!({ "repos": items }))).into_response()
 }
 
-/// DELETE /api/v1/git/{repo_id} — remove a cached repo and its directory (does NOT touch project config or scan data)
+#[derive(Deserialize)]
+pub struct DeleteRepoParams {
+    #[serde(default)]
+    pub remove_files: bool,
+}
+
+/// DELETE /api/v1/git/{repo_id}?remove_files=true — remove a cached repo
+///
+/// By default only removes the cache entry and keeps files on disk.
+/// Pass `remove_files=true` to also physically delete the cloned directory.
+/// Does NOT touch project config or scan data.
 pub async fn delete_repo(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
+    Query(params): Query<DeleteRepoParams>,
 ) -> Response {
     let repo_info = match state.git_cache.get(&repo_id) {
         Some(info) => info,
@@ -359,10 +370,12 @@ pub async fn delete_repo(
 
     state.git_cache.remove(&repo_id);
 
-    let path = repo_info.path.clone();
-    tokio::spawn(async move {
-        let _ = tokio::fs::remove_dir_all(&path).await;
-    });
+    if params.remove_files {
+        let path = repo_info.path.clone();
+        tokio::spawn(async move {
+            let _ = tokio::fs::remove_dir_all(&path).await;
+        });
+    }
 
     (StatusCode::OK, Json(serde_json::json!({ "message": "Repository removed" }))).into_response()
 }

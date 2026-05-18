@@ -558,8 +558,8 @@ export async function listRepos(): Promise<RepoInfo[]> {
   return data.repos;
 }
 
-export async function deleteRepo(repoId: string): Promise<void> {
-  const res = await fetch(`/api/v1/git/${repoId}`, {
+export async function deleteRepo(repoId: string, removeFiles = false): Promise<void> {
+  const res = await fetch(`/api/v1/git/${repoId}?remove_files=${removeFiles}`, {
     method: 'DELETE',
   });
   if (!res.ok) {

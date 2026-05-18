@@ -129,7 +129,12 @@
     "localPathPlaceholder": "C:\\projects\\myapp または /home/user/project",
     "addLocalRepo": "ローカルリポジトリを追加",
     "adding": "追加中...",
-    "localRepoAdded": "ローカルリポジトリが追加されました。"
+    "localRepoAdded": "ローカルリポジトリが追加されました。",
+    "deleteTitle": "リポジトリを削除",
+    "deleteWarning": "キャッシュされたリポジトリを削除しますか？プロジェクト設定とスキャンデータは保持されます。",
+    "deleteRemoveFiles": "ディスクからファイルを削除",
+    "deleteRemoveFilesHint": "クローンされたリポジトリディレクトリを削除します。元に戻せません。",
+    "deleteConfirm": "削除"
   },
   "config": {
     "title": "設定",
@@ -141,6 +146,10 @@
     "savedSuccess": "設定が保存されました！",
     "saveError": "設定の保存に失敗しました",
     "manageProjects": "プロジェクト",
+    "copyTo": "コピー先",
+    "copySuccess": "設定をコピーしました",
+    "copyWillOverwrite": "(上書きされます)",
+    "noOtherProjects": "他のプロジェクトがありません",
     "projectSettings": "プロジェクト設定",
     "selectProject": "プロジェクトを選択...",
     "tabs": {
