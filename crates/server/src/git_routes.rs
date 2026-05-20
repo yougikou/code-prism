@@ -298,13 +298,14 @@ pub async fn clone_repo(
                     let mut project_app_configs = Vec::new();
                     for project in &projects_config {
                         let views = crate::convert_project_views(project);
-                        let mut tech_stacks: Vec<String> =
-                            project.tech_stacks.iter().map(|ts| ts.name.clone()).collect();
-                        tech_stacks.sort();
+                        let mut tech_stacks: Vec<crate::config::TechStackInfo> =
+                            project.tech_stacks.iter().map(|ts| crate::config::TechStackInfo { name: ts.name.clone(), category: ts.category.clone() }).collect();
+                        tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
                         project_app_configs.push(crate::config::ProjectAppConfig {
                             name: project.name.clone(),
                             views,
                             tech_stacks,
+                            columns: project.columns,
                         });
                     }
                     *state.config.write().unwrap() =

@@ -1,13 +1,22 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use codeprism_core::SortOrder;
 use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TechStackInfo {
+    pub name: String,
+    #[serde(default)]
+    pub category: Option<String>,
+}
 
 /// Project-specific configuration for the UI
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
 pub struct ProjectAppConfig {
     pub name: String,
     pub views: Vec<ViewConfig>,
-    pub tech_stacks: Vec<String>,
+    pub tech_stacks: Vec<TechStackInfo>,
+    #[serde(default = "default_columns")]
+    pub columns: u32,
 }
 
 /// Root application config
@@ -58,6 +67,10 @@ pub struct ViewConfig {
     pub width: u32,
     #[serde(flatten)]
     pub kind: ViewKind,
+}
+
+fn default_columns() -> u32 {
+    4
 }
 
 fn default_width() -> u32 {
@@ -136,7 +149,7 @@ projects:
         type: "top_n"
         source: { analyzer_id: "char_count" }
         params: { limit: 10 }
-    tech_stacks: ["Gosu"]
+    tech_stacks: [{ name: "Gosu" }]
 "#;
         let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.projects.len(), 1);

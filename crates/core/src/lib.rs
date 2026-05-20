@@ -51,10 +51,12 @@ pub struct TechStack {
     pub paths: Vec<String>,
     #[serde(default)]
     pub excludes: Vec<String>,
+    #[serde(default)]
+    pub category: Option<String>,
 }
 
 /// Project-specific configuration (all settings except database_url)
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub name: String,
     #[serde(default)]
@@ -70,8 +72,26 @@ pub struct ProjectConfig {
     pub custom_impl_analyzers: HashMap<String, ImplAnalyzerConfig>,
     #[serde(default)]
     pub external_analyzers: HashMap<String, String>,
+    #[serde(default = "default_columns")]
+    pub columns: u32,
     #[serde(default)]
     pub aggregation_views: indexmap::IndexMap<String, AggregationView>,
+}
+
+impl Default for ProjectConfig {
+    fn default() -> Self {
+        Self {
+            name: String::default(),
+            repo_path: None,
+            tech_stacks: Vec::default(),
+            global_excludes: Vec::default(),
+            custom_regex_analyzers: HashMap::default(),
+            custom_impl_analyzers: HashMap::default(),
+            external_analyzers: HashMap::default(),
+            columns: default_columns(),
+            aggregation_views: indexmap::IndexMap::default(),
+        }
+    }
 }
 
 /// Root configuration supporting both single-project (legacy) and multi-project formats
@@ -121,6 +141,7 @@ impl CodePrismConfig {
                 custom_regex_analyzers: self.custom_regex_analyzers.clone(),
                 custom_impl_analyzers: self.custom_impl_analyzers.clone(),
                 external_analyzers: self.external_analyzers.clone(),
+                columns: 2,
                 aggregation_views: self.aggregation_views.clone(),
             }]
         }
@@ -351,6 +372,10 @@ fn default_true() -> bool {
 
 fn default_width() -> u32 {
     1
+}
+
+fn default_columns() -> u32 {
+    2
 }
 
 fn default_metric_key() -> String {

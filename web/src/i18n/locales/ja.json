@@ -36,7 +36,8 @@
     "viewRawResults": "生データを表示",
     "items": "件",
     "analyzerId": "アナライザー",
-    "filesAnalyzed": "分析ファイル数"
+    "filesAnalyzed": "分析ファイル数",
+    "otherCategory": "その他"
   },
   "table": {
     "label": "ラベル",
@@ -166,6 +167,7 @@
       "analyzers": "分析器",
       "paths": "含めるパス",
       "excludes": "除外パス",
+      "category": "カテゴリ",
       "add": "スタックを追加",
       "delete": "削除"
     },
@@ -202,6 +204,7 @@
       "limit": "制限",
       "order": "順序",
       "buckets": "バケット",
+      "width": "幅（列数）",
       "add": "ビューを追加",
       "delete": "削除"
     },

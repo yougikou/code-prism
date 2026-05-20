@@ -10,7 +10,7 @@ import ChartRenderer from './ChartRenderer';
 import { ChildrenViewer } from './dashboard/ChildrenViewer';
 import { MatchDetailView } from './dashboard/MatchDetailView';
 import { fetchView, fetchScanSummary, fetchMatches, type AggregationResult, type AppConfig, type ScanSummary, type MatchDetail, getDefaultProject } from '@/services/data';
-import { FileText } from 'lucide-react';
+import { FileText, Maximize2, Minimize2 } from 'lucide-react';
 
 
 
@@ -60,6 +60,16 @@ const Dashboard = () => {
     loading: boolean;
   }>({ open: false, title: '', filePath: '', matches: [], total: 0, loading: false });
 
+  // Fullscreen chart modal state
+  const [fullscreenView, setFullscreenView] = useState<{
+    open: boolean;
+    title: string;
+    type: 'chart' | 'card' | 'table';
+    options?: any;
+    value?: string;
+    data?: AggregationResult[];
+  }>({ open: false, title: '', type: 'chart' });
+
   // Sidebar State
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -84,7 +94,8 @@ const Dashboard = () => {
         setAvailableTechStacks(projectConfig.tech_stacks);
 
         // Ensure "Summary" is selected if selection invalid
-        if (!['Summary', ...projectConfig.tech_stacks].includes(selectedTechStack)) {
+        const stackNames = projectConfig.tech_stacks.map(s => s.name);
+        if (!['Summary', ...stackNames].includes(selectedTechStack)) {
           setSelectedTechStack('Summary');
         }
       } else if (projectList.length > 0) {
@@ -714,6 +725,16 @@ const Dashboard = () => {
     setMatchDetailView(prev => ({ ...prev, open: false }));
   };
 
+  // Close fullscreen on Escape key
+  useEffect(() => {
+    if (!fullscreenView.open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFullscreenView({ open: false, title: '', type: 'chart' });
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [fullscreenView.open]);
+
 
   return (
     <div className="flex h-full overflow-hidden bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 transition-colors">
@@ -734,15 +755,15 @@ const Dashboard = () => {
 
           <div className="container mx-auto p-8 space-y-8 min-h-full">
             <TechStackTabs
-              stacks={['Summary', ...availableTechStacks]}
+              techStacks={availableTechStacks}
               selectedStack={selectedTechStack}
               onSelect={setSelectedTechStack}
             />
 
             {/* Dynamic Widgets Grid */}
-            <div key={`${selectedTechStack}-${theme}`} className="grid gap-6 md:grid-cols-2 lg:grid-cols-2">
+            <div key={`${selectedTechStack}-${theme}`} className="grid gap-6" style={{ gridTemplateColumns: `repeat(${4}, minmax(0, 1fr))` }}>
               {activeViews.length === 0 ? (
-                <div className="col-span-full flex flex-col items-center justify-center py-16 text-slate-400">
+                <div style={{ gridColumn: '1 / -1' }} className="flex flex-col items-center justify-center py-16 text-slate-400">
                   <div className="text-6xl mb-4 opacity-30">📊</div>
                   <p className="text-lg font-medium text-slate-500 dark:text-slate-400 mb-2">
                     {t('dashboard.noViewsTitle')}
@@ -823,6 +844,60 @@ const Dashboard = () => {
                 let content;
                 const chartType = view.chart_type || (view.type === 'top_n' ? 'bar_row' : 'card');
 
+                // Special handling for legacy Sum fallback logic (grouped Sum -> Pie)
+                let actualChartType = chartType;
+                if (view.type === 'sum' && !view.chart_type) {
+                  if (view.group_by && view.group_by.length > 0) {
+                    actualChartType = 'pie';
+                  } else {
+                    actualChartType = 'card';
+                  }
+                }
+
+                // Setup expand handler for fullscreen
+                const expandView = () => {
+                  if (actualChartType === 'card') {
+                    const totalValue = data.reduce((acc, curr) => acc + curr.value, 0);
+                    setFullscreenView({ open: true, title, type: 'card', value: totalValue.toLocaleString() });
+                  } else if (actualChartType === 'table') {
+                    setFullscreenView({ open: true, title, type: 'table', data });
+                  } else {
+                    const baseColor = view.id.includes('complexity') ? '#ef4444' : '#38bdf8';
+                    let opt;
+                    switch (actualChartType) {
+                      case 'bar_row':
+                      case 'bar_horizontal':
+                        opt = getBarRowOption(title, data, baseColor);
+                        break;
+                      case 'bar_col':
+                      case 'bar_vertical':
+                        opt = getBarColOption(title, data, baseColor);
+                        break;
+                      case 'pie':
+                        opt = getPieOption(title, data);
+                        break;
+                      case 'line':
+                        opt = getLineOption(title, data, baseColor);
+                        break;
+                      case 'stacked_bar':
+                        opt = getStackedBarOption(title, data);
+                        break;
+                      case 'heatmap':
+                        opt = getHeatmapOption(title, data);
+                        break;
+                      case 'radar':
+                        opt = getRadarOption(title, data);
+                        break;
+                      case 'gauge':
+                        opt = getGaugeOption(title, data);
+                        break;
+                      default:
+                        opt = getBarRowOption(title, data, baseColor);
+                    }
+                    setFullscreenView({ open: true, title, type: 'chart', options: opt });
+                  }
+                };
+
                 // Show empty state when data is empty and not loading
                 if (data.length === 0 && !loading) {
                   content = (
@@ -831,16 +906,6 @@ const Dashboard = () => {
                     </div>
                   );
                 } else {
-                  // Special handling for legacy Sum fallback logic (grouped Sum -> Pie)
-                  let actualChartType = chartType;
-                  if (view.type === 'sum' && !view.chart_type) {
-                    if (view.group_by && view.group_by.length > 0) {
-                      actualChartType = 'pie';
-                    } else {
-                      actualChartType = 'card';
-                    }
-                  }
-
                   if (actualChartType === 'card') {
                     // Metric Card
                     const totalValue = data.reduce((acc, curr) => acc + curr.value, 0);
@@ -917,7 +982,7 @@ const Dashboard = () => {
                 const currentFilter = changeTypeFilters[view.id] || 'A'; // Default to Add
 
                 return (
-                  <Card key={view.id} className={`col-span-1 ${view.width === 2 ? 'lg:col-span-2' : ''} border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 backdrop-blur shadow-sm dark:shadow-xl transition-colors duration-200`}>
+                  <Card key={view.id} className="border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 backdrop-blur shadow-sm dark:shadow-xl transition-colors duration-200" style={{ gridColumn: `span ${Math.min(view.width || 1, 4)}` }}>
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 border-b border-slate-100 dark:border-slate-700/50">
                       <CardTitle className="text-xl font-semibold text-slate-800 dark:text-slate-200">
                         {title}
@@ -949,6 +1014,15 @@ const Dashboard = () => {
                             title={t('dashboard.viewRawResults')}
                           >
                             <FileText className="h-5 w-5" />
+                          </button>
+                        )}
+                        {data.length > 0 && (
+                          <button
+                            onClick={expandView}
+                            className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-sky-500 transition-colors"
+                            title="Expand"
+                          >
+                            <Maximize2 className="h-5 w-5" />
                           </button>
                         )}
                       </div>
@@ -1079,6 +1153,64 @@ const Dashboard = () => {
         onClose={closeMatchDetail}
         onBack={backToFileList}
       />
+
+      {/* ─── Fullscreen Chart Modal ──────────────────────────────── */}
+      {fullscreenView.open && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-8"
+          onClick={() => setFullscreenView({ open: false, title: '', type: 'chart' })}
+        >
+          <div
+            className="w-full h-full max-w-[calc(100vw-4rem)] max-h-[calc(100vh-4rem)] flex flex-col border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 backdrop-blur shadow-sm dark:shadow-xl rounded-xl border overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex flex-row items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-700/50 shrink-0">
+              <h2 className="text-xl font-semibold text-slate-800 dark:text-slate-200">{fullscreenView.title}</h2>
+              <button
+                onClick={() => setFullscreenView({ open: false, title: '', type: 'chart' })}
+                className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-sky-500 transition-colors"
+              >
+                <Minimize2 className="h-5 w-5" />
+              </button>
+            </div>
+            {/* Content */}
+            <div className="flex-1 p-6 min-h-0">
+              {fullscreenView.type === 'chart' && fullscreenView.options && (
+                <ChartRenderer options={fullscreenView.options} theme={theme} height="100%" />
+              )}
+              {fullscreenView.type === 'card' && fullscreenView.value && (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <div className="text-7xl font-bold text-slate-800 dark:text-slate-200">{fullscreenView.value}</div>
+                    <div className="text-lg text-slate-500 dark:text-slate-400 mt-2">{fullscreenView.title}</div>
+                  </div>
+                </div>
+              )}
+              {fullscreenView.type === 'table' && fullscreenView.data && (
+                <div className="overflow-auto h-full">
+                  <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
+                    <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-2">Label</th>
+                        <th className="px-4 py-2 text-right">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fullscreenView.data.map((d, i) => (
+                        <tr key={i} className="border-b border-slate-200 dark:border-slate-700/50">
+                          <td className="px-4 py-2 font-medium">{d.label}</td>
+                          <td className="px-4 py-2 text-right">{Math.round(d.value).toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

@@ -1,19 +1,63 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-
-type TechStack = string;
+import type { TechStackInfo } from '@/services/data';
 
 interface TechStackTabsProps {
-  stacks: TechStack[];
-  selectedStack: TechStack;
-  onSelect: (stack: TechStack) => void;
+  techStacks: TechStackInfo[];
+  selectedStack: string;
+  onSelect: (stack: string) => void;
 }
 
-export const TechStackTabs: React.FC<TechStackTabsProps> = ({ stacks, selectedStack, onSelect }) => {
+export const TechStackTabs: React.FC<TechStackTabsProps> = ({ techStacks, selectedStack, onSelect }) => {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
+  const [openCategory, setOpenCategory] = useState<string | null>(null);
+  const categoryBtnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+
+  // Close dropdown on page scroll / resize to prevent stale positioning
+  useEffect(() => {
+    if (!openCategory) return;
+    const handleClose = () => setOpenCategory(null);
+    window.addEventListener('scroll', handleClose, { passive: true });
+    window.addEventListener('resize', handleClose);
+    return () => {
+      window.removeEventListener('scroll', handleClose);
+      window.removeEventListener('resize', handleClose);
+    };
+  }, [openCategory]);
+
+  // Group techStacks by category
+  const groups = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const ts of techStacks) {
+      const cat = ts.category && ts.category.trim() ? ts.category : '\0other';
+      if (!map.has(cat)) map.set(cat, []);
+      map.get(cat)!.push(ts.name);
+    }
+    // Sort categories: named categories alphabetically, "Other" always last
+    const entries = Array.from(map.entries());
+    entries.sort((a, b) => {
+      if (a[0] === '\0other') return 1;
+      if (b[0] === '\0other') return -1;
+      return a[0].localeCompare(b[0]);
+    });
+    // Sort stacks within each category
+    for (const [, stacks] of entries) {
+      stacks.sort();
+    }
+    return entries;
+  }, [techStacks]);
+
+  // Find which category the selected stack belongs to
+  const selectedCategory = useMemo(() => {
+    if (selectedStack === 'Summary') return null;
+    for (const [cat, stacks] of groups) {
+      if (stacks.includes(selectedStack)) return cat;
+    }
+    return null;
+  }, [selectedStack, groups]);
 
   const updateScrollState = useCallback(() => {
     const el = scrollRef.current;
@@ -37,7 +81,7 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ stacks, selectedSt
       observer.disconnect();
       el.removeEventListener('scroll', updateScrollState);
     };
-  }, [updateScrollState, stacks]);
+  }, [updateScrollState, techStacks]);
 
   const scroll = (direction: 'left' | 'right') => {
     const el = scrollRef.current;
@@ -52,6 +96,19 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ stacks, selectedSt
       el.scrollBy({ left: e.deltaY, behavior: 'auto' });
     }
   };
+
+  const handleCategorySelect = (stackName: string) => {
+    onSelect(stackName);
+    setOpenCategory(null);
+  };
+
+  const handleSummarySelect = () => {
+    onSelect('Summary');
+    setOpenCategory(null);
+  };
+
+  const isSelected = (stackName: string) => selectedStack === stackName;
+  const isCategoryActive = (category: string) => selectedCategory === category;
 
   return (
     <div className="mb-8 border-b border-slate-200 dark:border-slate-700">
@@ -78,21 +135,51 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ stacks, selectedSt
           onWheel={handleWheel}
           className="flex gap-8 overflow-x-auto flex-nowrap flex-1 tech-stack-scroll"
         >
-          {stacks.map((stack) => (
-            <button
-              key={stack}
-              onClick={() => onSelect(stack)}
-              className={`
-                pb-4 pt-4 text-sm font-medium transition-colors relative whitespace-nowrap shrink-0
-                ${selectedStack === stack ? 'text-sky-600 dark:text-sky-400' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}
-              `}
-            >
-              {stack === 'Summary' ? t('dashboard.summary') : stack}
-              {selectedStack === stack && (
-                <div className="absolute bottom-0 left-0 w-full h-0.5 bg-sky-600 dark:bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.5)]" />
-              )}
-            </button>
-          ))}
+          {/* Summary tab */}
+          <button
+            key="Summary"
+            onClick={handleSummarySelect}
+            className={`
+              pb-4 pt-4 text-sm font-medium transition-colors relative whitespace-nowrap shrink-0
+              ${isSelected('Summary') ? 'text-sky-600 dark:text-sky-400' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}
+            `}
+          >
+            {t('dashboard.summary')}
+            {isSelected('Summary') && (
+              <div className="absolute bottom-0 left-0 w-full h-0.5 bg-sky-600 dark:bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.5)]" />
+            )}
+          </button>
+
+          {/* Category buttons (dropdown rendered outside overflow container) */}
+          {groups.map(([category]) => {
+            const displayName = category === '\0other' ? t('dashboard.otherCategory') : category;
+            const isActive = isCategoryActive(category);
+            const isOpen = openCategory === category;
+
+            return (
+              <div key={category} className="relative shrink-0">
+                <button
+                  ref={(el) => {
+                    if (el) categoryBtnRefs.current.set(category, el);
+                    else categoryBtnRefs.current.delete(category);
+                  }}
+                  onClick={() => setOpenCategory(isOpen ? null : category)}
+                  className={`
+                    pb-4 pt-4 text-sm font-medium transition-colors relative whitespace-nowrap flex items-center gap-1
+                    ${isActive ? 'text-sky-600 dark:text-sky-400' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}
+                  `}
+                >
+                  {displayName}
+                  <svg className={`w-3.5 h-3.5 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                  {isActive && (
+                    <div className="absolute bottom-0 left-0 w-full h-0.5 bg-sky-600 dark:bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.5)]" />
+                  )}
+                </button>
+              </div>
+            );
+          })}
         </div>
 
         {canScrollRight && (
@@ -107,6 +194,47 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ stacks, selectedSt
           </button>
         )}
       </div>
+
+      {/* Dropdown rendered outside overflow-x-auto container to avoid CSS clipping */}
+      {openCategory && (() => {
+        const stacks = groups.find(([cat]) => cat === openCategory)?.[1];
+        const btn = categoryBtnRefs.current.get(openCategory);
+        if (!stacks || !btn) return null;
+
+        const rect = btn.getBoundingClientRect();
+
+        return (
+          <>
+            <div
+              className="fixed inset-0 z-40"
+              onClick={() => setOpenCategory(null)}
+            />
+            <div
+              className="fixed z-50 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 max-h-[60vh] overflow-y-auto"
+              style={{
+                top: rect.bottom + 4,
+                left: rect.left,
+                minWidth: Math.max(rect.width, 140),
+              }}
+            >
+              {stacks.map(stackName => (
+                <button
+                  key={stackName}
+                  onClick={() => handleCategorySelect(stackName)}
+                  className={`
+                    w-full text-left px-4 py-2 text-sm transition-colors whitespace-nowrap
+                    ${isSelected(stackName)
+                      ? 'text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-900/20 font-medium'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/50'}
+                  `}
+                >
+                  {stackName}
+                </button>
+              ))}
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 };

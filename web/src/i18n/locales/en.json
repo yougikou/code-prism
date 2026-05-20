@@ -36,7 +36,8 @@
     "viewRawResults": "View Raw Results",
     "items": "items",
     "analyzerId": "Analyzer",
-    "filesAnalyzed": "Files Analyzed"
+    "filesAnalyzed": "Files Analyzed",
+    "otherCategory": "Other"
   },
   "table": {
     "label": "Label",
@@ -166,6 +167,7 @@
       "analyzers": "Analyzers",
       "paths": "Include Paths",
       "excludes": "Excludes",
+      "category": "Category",
       "add": "Add Tech Stack",
       "delete": "Delete"
     },
@@ -202,6 +204,7 @@
       "limit": "Limit",
       "order": "Order",
       "buckets": "Buckets",
+      "width": "Width (Columns)",
       "add": "Add View",
       "delete": "Delete"
     },

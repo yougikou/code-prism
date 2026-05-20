@@ -61,14 +61,16 @@ describe('Dashboard', () => {
       projects: [{
         name: 'test_project',
         views: [],
-        tech_stacks: ['Rust']
+        tech_stacks: [{ name: 'Rust' }],
+        columns: 2,
       }]
     });
     vi.mocked(dataService.isMultiProject).mockReturnValue(false);
     vi.mocked(dataService.getDefaultProject).mockReturnValue({
       name: 'test_project',
       views: [],
-      tech_stacks: ['Rust']
+      tech_stacks: [{ name: 'Rust' }],
+      columns: 2,
     });
     vi.mocked(dataService.getProjectNames).mockReturnValue(['test_project']);
     vi.mocked(dataService.fetchRuns).mockResolvedValue([]);

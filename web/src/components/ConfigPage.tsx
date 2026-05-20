@@ -189,7 +189,7 @@ function TechStacksEditor({ config, onChange }: {
   const addStack = () => {
     onChange({
       ...config,
-      tech_stacks: [...config.tech_stacks, { name: '', extensions: [], analyzers: [], paths: [], excludes: [] }],
+      tech_stacks: [...config.tech_stacks, { name: '', extensions: [], analyzers: [], paths: [], excludes: [], category: '' }],
     })
   }
 
@@ -244,6 +244,16 @@ function TechStacksEditor({ config, onChange }: {
                 value={stack.name}
                 onChange={e => updateStack(i, 'name', e.target.value)}
                 className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.techStack.category')}</label>
+              <input
+                type="text"
+                value={stack.category || ''}
+                onChange={e => updateStack(i, 'category', e.target.value || undefined)}
+                className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                placeholder="e.g. Frontend"
               />
             </div>
             <div>
@@ -657,7 +667,7 @@ function ViewsEditor({ config, onChange }: {
     return Array.from(ids).sort()
   }, [config.custom_regex_analyzers, config.custom_impl_analyzers, config.external_analyzers])
 
-  const updateView = (id: string, field: string, value: string | boolean | string[] | undefined) => {
+  const updateView = (id: string, field: string, value: string | number | boolean | string[] | undefined) => {
     const views = { ...config.aggregation_views }
     views[id] = { ...views[id], [field]: value }
     onChange({ ...config, aggregation_views: views })
@@ -722,7 +732,7 @@ function ViewsEditor({ config, onChange }: {
       ...config,
       aggregation_views: {
         ...config.aggregation_views,
-        [key]: { title: 'New View', tech_stacks: [], func: { type: 'top_n', limit: 10 } },
+        [key]: { title: 'New View', tech_stacks: [], width: 2, func: { type: 'top_n', limit: 10 } },
       },
     })
   }
@@ -770,7 +780,7 @@ function ViewsEditor({ config, onChange }: {
           </button>
           <div className={`transition-all duration-200 ease-in-out ${expandedViews.has(id) ? 'max-h-[3000px] opacity-100 overflow-visible' : 'max-h-0 opacity-0 overflow-hidden'}`}>
           <CardContent className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.viewTitle')}</label>
                 <input type="text" value={view.title} onChange={e => updateView(id, 'title', e.target.value)}
@@ -779,6 +789,15 @@ function ViewsEditor({ config, onChange }: {
               <div>
                 <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.chartType')}</label>
                 <SelectInput value={view.chart_type || ''} onChange={v => handleChartTypeChange(id, v)} options={CHART_TYPES} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.width')}</label>
+                <SelectInput value={String(view.width ?? 2)} onChange={v => updateView(id, 'width', Number(v))} options={[
+                  { value: '1', label: '1' },
+                  { value: '2', label: '2' },
+                  { value: '3', label: '3' },
+                  { value: '4', label: '4' },
+                ]} />
               </div>
             </div>
             <div>

@@ -39,11 +39,17 @@ export interface ViewConfig {
   };
 }
 
+export interface TechStackInfo {
+  name: string;
+  category?: string | null;
+}
+
 // Project-specific configuration
 export interface ProjectConfig {
   name: string;
   views: ViewConfig[];
-  tech_stacks: string[];
+  tech_stacks: TechStackInfo[];
+  columns?: number;
 }
 
 // Root application config with multiple projects
@@ -209,6 +215,7 @@ export interface FullTechStack {
   analyzers: string[];
   paths: string[];
   excludes: string[];
+  category?: string;
 }
 
 export interface CustomAnalyzerDef {
@@ -244,6 +251,7 @@ export interface AggregationView {
   group_by?: string[];
   chart_type?: string;
   change_type_mode?: string;
+  width?: number;
   func: AggregationFunc;
 }
 

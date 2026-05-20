@@ -196,17 +196,21 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, config_path: Strin
     for project in &projects_config {
         let views = convert_project_views(project);
 
-        let mut tech_stacks: Vec<String> = project
+        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project
             .tech_stacks
             .iter()
-            .map(|ts| ts.name.clone())
+            .map(|ts| crate::config::TechStackInfo {
+                name: ts.name.clone(),
+                category: ts.category.clone(),
+            })
             .collect();
-        tech_stacks.sort();
+        tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
 
         project_app_configs.push(ProjectAppConfig {
             name: project.name.clone(),
             views,
             tech_stacks,
+            columns: project.columns,
         });
     }
 

@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
-import { fetchUnifiedProjects, type UnifiedProjectInfo } from '../services/data';
+import { fetchUnifiedProjects, type TechStackInfo, type UnifiedProjectInfo } from '../services/data';
 
 type ViewMode = 'snapshot' | 'diff';
-type TechStack = string; // Dynamic
+type TechStack = string; // Dynamic — the currently selected stack name
 type Page = 'dashboard' | 'execute' | 'config';
 
 interface AppState {
@@ -10,7 +10,7 @@ interface AppState {
   viewMode: ViewMode;
   selectedRunId: string | null;
   selectedTechStack: TechStack;
-  availableTechStacks: TechStack[];
+  availableTechStacks: TechStackInfo[];
   currentPage: Page;
 }
 
@@ -19,7 +19,7 @@ interface AppContextType extends AppState {
   setViewMode: (mode: ViewMode) => void;
   setSelectedRunId: (runId: string | null) => void;
   setSelectedTechStack: (stack: TechStack) => void;
-  setAvailableTechStacks: (stacks: TechStack[]) => void;
+  setAvailableTechStacks: (stacks: TechStackInfo[]) => void;
   navigateTo: (page: Page) => void;
   theme: 'light' | 'dark';
   toggleTheme: () => void;
@@ -36,7 +36,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [viewMode, setViewMode] = useState<ViewMode>('snapshot');
   const [selectedRunId, setSelectedRunId] = useState<string | null>('1'); // Default to first run
   const [selectedTechStack, setSelectedTechStack] = useState<TechStack>('Summary');
-  const [availableTechStacks, setAvailableTechStacks] = useState<TechStack[]>([]);
+  const [availableTechStacks, setAvailableTechStacks] = useState<TechStackInfo[]>([]);
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
 
   /* Theme Support */

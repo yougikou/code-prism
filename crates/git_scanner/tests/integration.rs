@@ -24,6 +24,7 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
             analyzers: vec!["file_count".to_string()],
             paths: vec!["**/*.txt".to_string()],
             excludes: vec![],
+            category: None,
         }],
         global_excludes: vec!["**/exclude_this/**".to_string()],
 

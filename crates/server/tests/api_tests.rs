@@ -3,7 +3,7 @@
 //! These tests verify the server endpoints work correctly.
 
 use codeprism_server::config::{
-    AppConfig, ProjectAppConfig, SourceConfig, TopNParams, ViewConfig, ViewKind,
+    AppConfig, ProjectAppConfig, SourceConfig, TechStackInfo, TopNParams, ViewConfig, ViewKind,
 };
 
 /// Test that AppConfig can be serialized to JSON correctly
@@ -29,7 +29,8 @@ fn test_app_config_serialization() {
                     params: TopNParams { limit: 10, order: Default::default() },
                 },
             }],
-            tech_stacks: vec!["Rust".to_string()],
+            tech_stacks: vec![TechStackInfo { name: "Rust".to_string(), category: None }],
+            columns: 4,
         }],
     };
 
@@ -50,12 +51,14 @@ fn test_app_config_helpers() {
             ProjectAppConfig {
                 name: "project_a".to_string(),
                 views: vec![],
-                tech_stacks: vec!["Rust".to_string()],
+                tech_stacks: vec![TechStackInfo { name: "Rust".to_string(), category: None }],
+                columns: 4,
             },
             ProjectAppConfig {
                 name: "project_b".to_string(),
                 views: vec![],
-                tech_stacks: vec!["Python".to_string()],
+                tech_stacks: vec![TechStackInfo { name: "Python".to_string(), category: None }],
+                columns: 4,
             },
         ],
     };
@@ -85,7 +88,8 @@ fn test_single_project_mode() {
         projects: vec![ProjectAppConfig {
             name: "only_project".to_string(),
             views: vec![],
-            tech_stacks: vec!["Rust".to_string()],
+            tech_stacks: vec![TechStackInfo { name: "Rust".to_string(), category: None }],
+            columns: 4,
         }],
     };
 

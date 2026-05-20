@@ -36,7 +36,8 @@
     "viewRawResults": "查看原始数据",
     "items": "条",
     "analyzerId": "分析器",
-    "filesAnalyzed": "分析文件数"
+    "filesAnalyzed": "分析文件数",
+    "otherCategory": "其他"
   },
   "table": {
     "label": "标签",
@@ -166,6 +167,7 @@
       "analyzers": "分析器",
       "paths": "包含路径",
       "excludes": "排除路径",
+      "category": "类别",
       "add": "添加技术栈",
       "delete": "删除"
     },
@@ -202,6 +204,7 @@
       "limit": "限制数量",
       "order": "排序",
       "buckets": "分桶",
+      "width": "宽度（列数）",
       "add": "添加视图",
       "delete": "删除"
     },

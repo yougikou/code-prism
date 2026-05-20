@@ -230,12 +230,13 @@ pub async fn create_project(
     let mut project_app_configs = Vec::new();
     for project in &projects_config {
         let views = crate::convert_project_views(project);
-        let mut tech_stacks: Vec<String> = project.tech_stacks.iter().map(|ts| ts.name.clone()).collect();
-        tech_stacks.sort();
+        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project.tech_stacks.iter().map(|ts| crate::config::TechStackInfo { name: ts.name.clone(), category: ts.category.clone() }).collect();
+        tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
             views,
             tech_stacks,
+            columns: project.columns,
         });
     }
     *state.config.write().unwrap() = crate::config::AppConfig { projects: project_app_configs };
@@ -318,12 +319,13 @@ pub async fn delete_project(
     let mut project_app_configs = Vec::new();
     for project in &projects_config {
         let views = crate::convert_project_views(project);
-        let mut tech_stacks: Vec<String> = project.tech_stacks.iter().map(|ts| ts.name.clone()).collect();
-        tech_stacks.sort();
+        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project.tech_stacks.iter().map(|ts| crate::config::TechStackInfo { name: ts.name.clone(), category: ts.category.clone() }).collect();
+        tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
             views,
             tech_stacks,
+            columns: project.columns,
         });
     }
     *state.config.write().unwrap() = crate::config::AppConfig { projects: project_app_configs };
@@ -1087,12 +1089,13 @@ pub async fn update_project_config(
     let mut project_app_configs = Vec::new();
     for project in &projects_config {
         let views = crate::convert_project_views(project);
-        let mut tech_stacks: Vec<String> = project.tech_stacks.iter().map(|ts| ts.name.clone()).collect();
-        tech_stacks.sort();
+        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project.tech_stacks.iter().map(|ts| crate::config::TechStackInfo { name: ts.name.clone(), category: ts.category.clone() }).collect();
+        tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
             views,
             tech_stacks,
+            columns: project.columns,
         });
     }
     let new_app_config = crate::config::AppConfig { projects: project_app_configs };
@@ -1203,12 +1206,13 @@ pub async fn add_local_project(
     let mut project_app_configs = Vec::new();
     for project in &projects_config {
         let views = crate::convert_project_views(project);
-        let mut tech_stacks: Vec<String> = project.tech_stacks.iter().map(|ts| ts.name.clone()).collect();
-        tech_stacks.sort();
+        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project.tech_stacks.iter().map(|ts| crate::config::TechStackInfo { name: ts.name.clone(), category: ts.category.clone() }).collect();
+        tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
             views,
             tech_stacks,
+            columns: project.columns,
         });
     }
     *state.config.write().unwrap() = crate::config::AppConfig { projects: project_app_configs };
@@ -1235,12 +1239,13 @@ pub async fn reload_config(
     let mut project_app_configs = Vec::new();
     for project in &projects_config {
         let views = crate::convert_project_views(project);
-        let mut tech_stacks: Vec<String> = project.tech_stacks.iter().map(|ts| ts.name.clone()).collect();
-        tech_stacks.sort();
+        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project.tech_stacks.iter().map(|ts| crate::config::TechStackInfo { name: ts.name.clone(), category: ts.category.clone() }).collect();
+        tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
             views,
             tech_stacks,
+            columns: project.columns,
         });
     }
     let new_app_config = crate::config::AppConfig { projects: project_app_configs };
