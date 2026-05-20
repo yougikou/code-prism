@@ -433,7 +433,9 @@ const Dashboard = () => {
             }
           },
           labelLine: { show: false },  // No label lines needed for inside labels
-          data: data.map(d => ({ value: Math.round(d.value), name: d.label }))
+          data: [...data]
+            .sort((a, b) => a.label.localeCompare(b.label))
+            .map(d => ({ value: Math.round(d.value), name: d.label }))
         }
       ]
     };
@@ -919,7 +921,8 @@ const Dashboard = () => {
                       />
                     );
                   } else if (actualChartType === 'table') {
-                    // Simple Table
+                    // Simple Table — sort by label alphabetically
+                    const sortedData = [...data].sort((a, b) => a.label.localeCompare(b.label));
                     content = (
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
@@ -930,7 +933,7 @@ const Dashboard = () => {
                             </tr>
                           </thead>
                           <tbody>
-                            {data.map((d, i) => (
+                            {sortedData.map((d, i) => (
                               <tr key={i} className="border-b border-slate-200 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/20">
                                 <td className="px-4 py-2 font-medium">{d.label}</td>
                                 <td className="px-4 py-2 text-right">{Math.round(d.value).toLocaleString()}</td>
@@ -1102,7 +1105,9 @@ const Dashboard = () => {
                               </tr>
                             </thead>
                             <tbody>
-                              {scanSummary.analyzer_stats.map((stat) => (
+                              {[...scanSummary.analyzer_stats]
+                                .sort((a, b) => a.analyzer_id.localeCompare(b.analyzer_id))
+                                .map((stat) => (
                                 <tr key={stat.analyzer_id} className="border-b border-slate-200 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/20">
                                   <td className="px-3 py-2 font-mono text-xs font-medium">{stat.analyzer_id}</td>
                                   <td className="px-3 py-2 text-right">{stat.files_analyzed.toLocaleString()}</td>
@@ -1197,7 +1202,9 @@ const Dashboard = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {fullscreenView.data.map((d, i) => (
+                      {[...fullscreenView.data]
+                        .sort((a, b) => a.label.localeCompare(b.label))
+                        .map((d, i) => (
                         <tr key={i} className="border-b border-slate-200 dark:border-slate-700/50">
                           <td className="px-4 py-2 font-medium">{d.label}</td>
                           <td className="px-4 py-2 text-right">{Math.round(d.value).toLocaleString()}</td>

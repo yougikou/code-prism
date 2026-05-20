@@ -160,7 +160,7 @@ export function ChildrenViewer({ open, title, items, onClose, onFileClick }: Chi
                 </tr>
               </thead>
               <tbody>
-                {filteredItems.map((item, i) => (
+                {[...filteredItems].sort((a, b) => a.label.localeCompare(b.label)).map((item, i) => (
                   <tr
                     key={i}
                     onClick={() => copyPath(item.label)}

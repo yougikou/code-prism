@@ -1281,7 +1281,7 @@ function ProjectManagementModal({ projectList, currentProject, onSelect, onCreat
               </tr>
             </thead>
             <tbody>
-              {projectList.map(p => (
+              {[...projectList].sort((a, b) => a.name.localeCompare(b.name)).map(p => (
                 <tr key={p.name} className={`border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/30 ${p.name === currentProject ? 'bg-sky-50 dark:bg-sky-900/20' : ''}`}>
                   <td className="py-2.5 px-2">
                     <button
