@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS matches (
     column_start INTEGER,
     column_end INTEGER,
     matched_text TEXT NOT NULL,
+    side INTEGER,
     context_before TEXT,
     context_after TEXT,
     FOREIGN KEY(scan_id) REFERENCES scans(id)

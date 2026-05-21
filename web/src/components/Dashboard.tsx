@@ -58,6 +58,7 @@ const Dashboard = () => {
     matches: MatchDetail[];
     total: number;
     loading: boolean;
+    side?: boolean;
   }>({ open: false, title: '', filePath: '', matches: [], total: 0, loading: false });
 
   // Fullscreen chart modal state
@@ -707,11 +708,13 @@ const Dashboard = () => {
     }
   };
 
-  const handleFileClick = async (filePath: string, viewTitle: string) => {
+  const handleFileClick = async (filePath: string, viewTitle: string, side?: boolean) => {
     if (!selectedRunId) return;
-    setMatchDetailView({ open: true, title: viewTitle, filePath, matches: [], total: 0, loading: true });
+    setMatchDetailView({ open: true, title: viewTitle, filePath, matches: [], total: 0, loading: true, side });
     try {
-      const res = await fetchMatches(currentProject, selectedRunId, { file_path: filePath });
+      const params: { file_path: string; side?: number } = { file_path: filePath };
+      if (side !== undefined) params.side = side ? 1 : 0;
+      const res = await fetchMatches(currentProject, selectedRunId, params);
       setMatchDetailView(prev => ({ ...prev, matches: res.matches, total: res.total, loading: false }));
     } catch (err) {
       console.error('Failed to fetch matches:', err);
@@ -1155,6 +1158,9 @@ const Dashboard = () => {
         matches={matchDetailView.matches}
         total={matchDetailView.total}
         loading={matchDetailView.loading}
+        scanMode={viewMode}
+        side={matchDetailView.side}
+        onSideFilter={(side) => handleFileClick(matchDetailView.filePath, matchDetailView.title, side)}
         onClose={closeMatchDetail}
         onBack={backToFileList}
       />

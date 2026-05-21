@@ -85,6 +85,7 @@ export interface MatchDetail {
   column_start?: number;
   column_end?: number;
   matched_text: string;
+  side?: boolean;
   context_before?: string;
   context_after?: string;
   analyzer_id: string;
@@ -101,11 +102,12 @@ export interface MatchesResponse {
 export async function fetchMatches(
   projectName: string,
   scanId: number | string,
-  params: { file_path: string; analyzer_id?: string; page?: number; page_size?: number }
+  params: { file_path: string; analyzer_id?: string; side?: number; page?: number; page_size?: number }
 ): Promise<MatchesResponse> {
   const query = new URLSearchParams();
   query.set('file_path', params.file_path);
   if (params.analyzer_id) query.set('analyzer_id', params.analyzer_id);
+  if (params.side !== undefined) query.set('side', String(params.side));
   if (params.page) query.set('page', String(params.page));
   if (params.page_size) query.set('page_size', String(params.page_size));
 

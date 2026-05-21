@@ -516,7 +516,7 @@ impl Scanner {
 
                     // Diff Mode: Analyze both if available
                     let old_path_ref = old_path.as_deref().unwrap_or(&path);
-                    let (old_metrics, old_matches) = if let Some(c) = old_content {
+                    let (old_metrics, mut old_matches) = if let Some(c) = old_content {
                         self.analyze_file_content(
                             old_path_ref,
                             &c,
@@ -529,7 +529,7 @@ impl Scanner {
                         (Vec::<codeprism_core::MetricEntry>::new(), Vec::<codeprism_core::MatchDetail>::new())
                     };
 
-                    let (new_metrics, new_matches) = if let Some(c) = content {
+                    let (new_metrics, mut new_matches) = if let Some(c) = content {
                         self.analyze_file_content(
                             &path,
                             &c,
@@ -541,6 +541,14 @@ impl Scanner {
                     } else {
                         (Vec::<codeprism_core::MetricEntry>::new(), Vec::<codeprism_core::MatchDetail>::new())
                     };
+
+                    // Tag matches with side: false=base(变更前), true=target(变更后)
+                    for m in &mut old_matches {
+                        m.side = Some(false);
+                    }
+                    for m in &mut new_matches {
+                        m.side = Some(true);
+                    }
 
                     self.save_metrics(
                         scan_id,
@@ -1060,8 +1068,8 @@ impl Scanner {
     ) -> Result<()> {
         for m in matches {
             sqlx::query(
-                "INSERT INTO matches (scan_id, file_path, analyzer_id, line_number, column_start, column_end, matched_text, context_before, context_after)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO matches (scan_id, file_path, analyzer_id, line_number, column_start, column_end, matched_text, side, context_before, context_after)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(scan_id)
             .bind(&m.file_path)
@@ -1070,6 +1078,7 @@ impl Scanner {
             .bind(m.column_start.map(|v| v as i64))
             .bind(m.column_end.map(|v| v as i64))
             .bind(&m.matched_text)
+            .bind(m.side.map(|v| v as i64))
             .bind(&m.context_before)
             .bind(&m.context_after)
             .execute(self.db.pool())

@@ -622,6 +622,7 @@ pub struct MatchesResponse {
 pub struct MatchesQuery {
     pub file_path: String,
     pub analyzer_id: Option<String>,
+    pub side: Option<i32>,
     pub page: Option<u32>,
     pub page_size: Option<u32>,
 }
@@ -636,52 +637,58 @@ pub async fn get_matches(
     let page_size = params.page_size.unwrap_or(100).min(500);
     let offset = (page - 1) * page_size;
 
-    // Count total matching rows
-    let count_sql = if params.analyzer_id.is_some() {
-        "SELECT COUNT(*) FROM matches WHERE scan_id = ? AND file_path = ? AND analyzer_id = ?"
-    } else {
-        "SELECT COUNT(*) FROM matches WHERE scan_id = ? AND file_path = ?"
-    };
+    // Build dynamic SQL based on which filters are present
+    let mut count_sql = "SELECT COUNT(*) FROM matches WHERE scan_id = ? AND file_path = ?".to_string();
+    let mut rows_sql = "SELECT file_path, line_number, column_start, column_end, matched_text, side, context_before, context_after, analyzer_id FROM matches WHERE scan_id = ? AND file_path = ?".to_string();
 
-    let total: i64 = match sqlx::query_scalar(count_sql)
-        .bind(scan_id)
-        .bind(&params.file_path)
-        .bind(params.analyzer_id.as_deref())
-        .fetch_optional(state.db.pool())
-        .await
-    {
-        Ok(Some(c)) => c,
-        _ => 0,
+    if params.analyzer_id.is_some() {
+        count_sql.push_str(" AND analyzer_id = ?");
+        rows_sql.push_str(" AND analyzer_id = ?");
+    }
+    if params.side.is_some() {
+        count_sql.push_str(" AND side = ?");
+        rows_sql.push_str(" AND side = ?");
+    }
+    rows_sql.push_str(" ORDER BY line_number ASC LIMIT ? OFFSET ?");
+
+    let total: i64 = {
+        let mut q = sqlx::query_scalar(&count_sql)
+            .bind(scan_id)
+            .bind(&params.file_path);
+        if let Some(ref aid) = params.analyzer_id {
+            q = q.bind(aid);
+        }
+        if let Some(s) = params.side {
+            q = q.bind(s as i64);
+        }
+        match q.fetch_optional(state.db.pool()).await {
+            Ok(Some(c)) => c,
+            _ => 0,
+        }
     };
 
     // Fetch page of matches
-    let rows_sql = if params.analyzer_id.is_some() {
-        "SELECT file_path, line_number, column_start, column_end, matched_text, context_before, context_after, analyzer_id
-         FROM matches WHERE scan_id = ? AND file_path = ? AND analyzer_id = ?
-         ORDER BY line_number ASC LIMIT ? OFFSET ?"
-    } else {
-        "SELECT file_path, line_number, column_start, column_end, matched_text, context_before, context_after, analyzer_id
-         FROM matches WHERE scan_id = ? AND file_path = ?
-         ORDER BY line_number ASC LIMIT ? OFFSET ?"
-    };
-
-    let mut query = sqlx::query_as::<_, (String, i32, Option<i32>, Option<i32>, String, Option<String>, Option<String>, String)>(rows_sql)
+    let mut query = sqlx::query_as::<_, (String, i32, Option<i32>, Option<i32>, String, Option<i32>, Option<String>, Option<String>, String)>(&rows_sql)
         .bind(scan_id)
         .bind(&params.file_path);
     if let Some(ref aid) = params.analyzer_id {
         query = query.bind(aid);
+    }
+    if let Some(s) = params.side {
+        query = query.bind(s as i64);
     }
     query = query.bind(page_size as i64).bind(offset as i64);
 
     let matches: Vec<MatchDetail> = match query.fetch_all(state.db.pool()).await {
         Ok(rows) => rows
             .into_iter()
-            .map(|(fp, ln, cs, ce, mt, cb, ca, aid)| MatchDetail {
+            .map(|(fp, ln, cs, ce, mt, sd, cb, ca, aid)| MatchDetail {
                 file_path: fp,
                 line_number: ln as u32,
                 column_start: cs.map(|v| v as u32),
                 column_end: ce.map(|v| v as u32),
                 matched_text: mt,
+                side: sd.map(|v| v != 0),
                 context_before: cb,
                 context_after: ca,
                 analyzer_id: aid,

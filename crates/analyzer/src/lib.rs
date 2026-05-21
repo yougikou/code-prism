@@ -1,5 +1,5 @@
 use codeprism_core::{MetricEntry, MatchDetail, TAG_CATEGORY, TAG_METRIC};
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
 
 pub trait Analyzer: Send + Sync {
@@ -103,7 +103,9 @@ impl RegexAnalyzer {
         scan_mode: Option<String>,
         change_type: Option<String>,
     ) -> Result<Self, regex::Error> {
-        let regex = Regex::new(pattern)?;
+        let regex = RegexBuilder::new(pattern)
+            .dot_matches_new_line(true)
+            .build()?;
         Ok(Self {
             id: id.to_string(),
             regex,
@@ -162,6 +164,7 @@ impl Analyzer for RegexAnalyzer {
                     column_start: Some(column_start),
                     column_end: Some(column_end),
                     matched_text: m.as_str().to_string(),
+                    side: None,
                     context_before,
                     context_after,
                     analyzer_id: self.id.clone(),

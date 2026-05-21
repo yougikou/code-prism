@@ -9,6 +9,9 @@ interface MatchDetailViewProps {
   matches: MatchDetail[];
   total: number;
   loading: boolean;
+  scanMode: string;
+  side?: boolean;
+  onSideFilter: (side?: boolean) => void;
   onClose: () => void;
   onBack: () => void;
 }
@@ -20,12 +23,17 @@ export function MatchDetailView({
   matches,
   total,
   loading,
+  scanMode,
+  side,
+  onSideFilter,
   onClose,
   onBack,
 }: MatchDetailViewProps) {
   const { t } = useTranslation();
 
   if (!open) return null;
+
+  const isDiff = scanMode === 'diff';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
@@ -52,12 +60,48 @@ export function MatchDetailView({
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors shrink-0"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {isDiff && (
+              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-700 rounded-lg p-0.5">
+                <button
+                  onClick={() => onSideFilter(undefined)}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                    side === undefined
+                      ? 'bg-white dark:bg-slate-600 shadow-sm text-slate-800 dark:text-slate-200'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                  }`}
+                >
+                  {t('match.all', 'All')}
+                </button>
+                <button
+                  onClick={() => onSideFilter(false)}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                    side === false
+                      ? 'bg-white dark:bg-slate-600 shadow-sm text-slate-800 dark:text-slate-200'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                  }`}
+                >
+                  {t('match.base', 'Base')}
+                </button>
+                <button
+                  onClick={() => onSideFilter(true)}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                    side === true
+                      ? 'bg-white dark:bg-slate-600 shadow-sm text-slate-800 dark:text-slate-200'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                  }`}
+                >
+                  {t('match.target', 'Target')}
+                </button>
+              </div>
+            )}
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors shrink-0"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
         {/* Body */}
@@ -77,13 +121,22 @@ export function MatchDetailView({
                   key={i}
                   className="border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden"
                 >
-                  {/* Match header: line number */}
+                  {/* Match header: line number + side badge */}
                   <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 dark:bg-slate-700/30 border-b border-slate-200 dark:border-slate-700 text-xs text-slate-500 dark:text-slate-400">
                     <Code className="h-3.5 w-3.5" />
                     <span className="font-mono font-medium">
                       L{match.line_number}
                       {match.column_start != null && `:${match.column_start}`}
                     </span>
+                    {match.side !== undefined && isDiff && (
+                      <span className={`ml-1 px-1.5 py-0.5 rounded text-xs font-medium ${
+                        match.side === false
+                          ? 'bg-orange-100 text-orange-600 dark:bg-orange-900/20 dark:text-orange-400'
+                          : 'bg-green-100 text-green-600 dark:bg-green-900/20 dark:text-green-400'
+                      }`}>
+                        {match.side === false ? 'base' : 'target'}
+                      </span>
+                    )}
                     {match.analyzer_id && (
                       <span className="ml-auto font-mono text-slate-400 dark:text-slate-500">
                         {match.analyzer_id}
@@ -118,7 +171,7 @@ export function MatchDetailView({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-700 text-xs text-slate-400 dark:text-slate-500">
+        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-700 text-xs text-slate-500 dark:text-slate-500">
           <span>
             {loading ? '...' : `${matches.length} / ${total} ${t('dashboard.items')}`}
           </span>

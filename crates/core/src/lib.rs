@@ -14,6 +14,7 @@ pub struct MatchDetail {
     pub column_start: Option<u32>,
     pub column_end: Option<u32>,
     pub matched_text: String,
+    pub side: Option<bool>,
     pub context_before: Option<String>,
     pub context_after: Option<String>,
     pub analyzer_id: String,

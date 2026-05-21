@@ -24,3 +24,4 @@ codeprism.db-wal
 tmp/
 artifacts/
 cloned_repos/git_repos_cache.json
+.codeprism.db
