@@ -43,6 +43,7 @@ const Dashboard = () => {
     label: string;
     value: number;
     group?: string;
+    analyzerId?: string;
   }
   const [childrenView, setChildrenView] = useState<{
     open: boolean;
@@ -55,6 +56,7 @@ const Dashboard = () => {
     open: boolean;
     title: string;
     filePath: string;
+    analyzerId?: string;
     matches: MatchDetail[];
     total: number;
     loading: boolean;
@@ -687,7 +689,7 @@ const Dashboard = () => {
             ? `(${changeType})`
             : groupLabel || undefined;
 
-        result.push({ label: item.label, value: Math.round(item.value), group });
+        result.push({ label: item.label, value: Math.round(item.value), group, analyzerId: item.analyzer_id });
       }
     }
     return result;
@@ -708,11 +710,12 @@ const Dashboard = () => {
     }
   };
 
-  const handleFileClick = async (filePath: string, viewTitle: string, side?: boolean) => {
+  const handleFileClick = async (filePath: string, viewTitle: string, analyzerId?: string, side?: boolean) => {
     if (!selectedRunId) return;
-    setMatchDetailView({ open: true, title: viewTitle, filePath, matches: [], total: 0, loading: true, side });
+    setMatchDetailView({ open: true, title: viewTitle, filePath, analyzerId, matches: [], total: 0, loading: true, side });
     try {
-      const params: { file_path: string; side?: number } = { file_path: filePath };
+      const params: { file_path: string; analyzer_id?: string; side?: number } = { file_path: filePath };
+      if (analyzerId) params.analyzer_id = analyzerId;
       if (side !== undefined) params.side = side ? 1 : 0;
       const res = await fetchMatches(currentProject, selectedRunId, params);
       setMatchDetailView(prev => ({ ...prev, matches: res.matches, total: res.total, loading: false }));
@@ -1147,7 +1150,7 @@ const Dashboard = () => {
         title={childrenView.title}
         items={childrenView.items}
         onClose={() => setChildrenView({ open: false, title: '', items: [] })}
-        onFileClick={(filePath) => handleFileClick(filePath, childrenView.title)}
+        onFileClick={(filePath, analyzerId) => handleFileClick(filePath, childrenView.title, analyzerId)}
       />
 
       {/* ─── Match Detail Modal ──────────────────────────────────── */}
@@ -1160,7 +1163,7 @@ const Dashboard = () => {
         loading={matchDetailView.loading}
         scanMode={viewMode}
         side={matchDetailView.side}
-        onSideFilter={(side) => handleFileClick(matchDetailView.filePath, matchDetailView.title, side)}
+        onSideFilter={(side) => handleFileClick(matchDetailView.filePath, matchDetailView.title, matchDetailView.analyzerId, side)}
         onClose={closeMatchDetail}
         onBack={backToFileList}
       />
