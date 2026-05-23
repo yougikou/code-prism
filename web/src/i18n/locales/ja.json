@@ -34,10 +34,13 @@
     "executionErrors": "実行エラー",
     "noSummary": "このスキャンのサマリーデータはありません",
     "viewRawResults": "生データを表示",
+    "expand": "展開",
     "items": "件",
     "analyzerId": "アナライザー",
     "filesAnalyzed": "分析ファイル数",
-    "otherCategory": "その他"
+    "otherCategory": "その他",
+    "showTop": "表示数",
+    "unlimited": "無制限"
   },
   "table": {
     "label": "ラベル",
@@ -77,8 +80,8 @@
     "loadingCommits": "コミットを読み込み中...",
     "loadMore": "さらにコミットを読み込む",
     "step4Title": "スキャン設定",
-    "ref1": "参照 1",
-    "ref2": "参照 2",
+    "ref1": "ターゲット",
+    "ref2": "ベース",
     "target": "ターゲット",
     "base": "ベース",
     "clear": "クリア",
@@ -105,8 +108,8 @@
     "checkoutConfirm": "続行してもよろしいですか？",
     "cancel": "キャンセル",
     "confirmCheckout": "チェックアウトを確認",
-    "diffBase": "ベース（参照 2）",
-    "diffTarget": "ターゲット（参照 1）",
+    "diffBase": "ベース",
+    "diffTarget": "ターゲット",
     "diffReversed": "逆順",
     "diffChanges": "変更",
     "diffOrderWarningTitle": "異常な差分順序が検出されました",
@@ -206,7 +209,10 @@
       "buckets": "バケット",
       "width": "幅（列数）",
       "add": "ビューを追加",
-      "delete": "削除"
+      "delete": "削除",
+      "showTrend": "トレンドを表示",
+      "trendLimit": "トレンドデータ数",
+      "trendMode": "トレンドスキャンモード"
     },
     "expandAll": "すべて展開",
     "collapseAll": "すべて折りたたむ"
@@ -229,5 +235,41 @@
     "regexAnalyzers": "正規表現分析器",
     "views": "ビュー",
     "deleteConfirm": "テンプレート '{{name}}' を削除しますか？"
+  },
+  "common": {
+    "loading": "読み込み中...",
+    "cancel": "キャンセル",
+    "searchPlaceholder": "パスを検索...",
+    "caseSensitiveOn": "大文字小文字を区別: ON",
+    "caseSensitiveOff": "大文字小文字を区別: OFF",
+    "regexOn": "正規表現: ON",
+    "regexOff": "正規表現: OFF",
+    "downloadCSV": "CSVをダウンロード",
+    "copyCSV": "CSVをコピー",
+    "copied": "コピーしました！",
+    "back": "戻る"
+  },
+  "match": {
+    "all": "すべて",
+    "base": "ベース",
+    "target": "ターゲット"
+  },
+  "trend": {
+    "selectScans": "トレンド用スキャンを選択",
+    "all": "すべて",
+    "snapshots": "スナップショット",
+    "diffs": "差分",
+    "snapshot": "スナップショット",
+    "diff": "差分",
+    "selectAll": "すべて選択",
+    "clearSelection": "クリア",
+    "selectedCount": "{{count}} 件選択中",
+    "noScans": "利用可能なスキャンがありません",
+    "showTrend": "トレンドを表示（{{count}} スキャン）",
+    "baseCommit": "ベース",
+    "viewTrend": "トレンド表示",
+    "viewCurrent": "今回を表示",
+    "adjustScans": "範囲を調整",
+    "trendView": "トレンド"
   }
 }

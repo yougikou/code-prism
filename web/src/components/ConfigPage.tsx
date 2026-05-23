@@ -181,6 +181,24 @@ function TechStacksEditor({ config, onChange }: {
   }, [config.custom_regex_analyzers, config.custom_impl_analyzers, config.external_analyzers])
 
   const updateStack = <K extends keyof FullTechStack>(index: number, field: K, value: FullTechStack[K]) => {
+    if (field === 'name') {
+      const oldName = config.tech_stacks[index].name
+      const newName = value as string
+      // Cascade: update tech_stack references in aggregation views
+      const views = Object.fromEntries(
+        Object.entries(config.aggregation_views).map(([id, view]) => [
+          id,
+          {
+            ...view,
+            tech_stacks: view.tech_stacks?.map(ts => ts === oldName ? newName : ts),
+          },
+        ])
+      )
+      const stacks = [...config.tech_stacks]
+      stacks[index] = { ...stacks[index], name: newName }
+      onChange({ ...config, tech_stacks: stacks, aggregation_views: views })
+      return
+    }
     const stacks = [...config.tech_stacks]
     stacks[index] = { ...stacks[index], [field]: value }
     onChange({ ...config, tech_stacks: stacks })
@@ -357,7 +375,25 @@ function AnalyzersEditor({ config, onChange }: {
     const analyzers = { ...config.custom_regex_analyzers }
     analyzers[newName] = analyzers[oldName]
     delete analyzers[oldName]
-    onChange({ ...config, custom_regex_analyzers: analyzers })
+
+    // Cascade: update analyzer references in tech stacks and aggregation views
+    const stacks = config.tech_stacks.map(stack => ({
+      ...stack,
+      analyzers: stack.analyzers.map(a => a === oldName ? newName : a),
+    }))
+    const views = Object.fromEntries(
+      Object.entries(config.aggregation_views).map(([id, view]) => [
+        id,
+        {
+          ...view,
+          func: {
+            ...view.func,
+            analyzer_id: view.func.analyzer_id?.map(a => a === oldName ? newName : a),
+          },
+        },
+      ])
+    )
+    onChange({ ...config, custom_regex_analyzers: analyzers, tech_stacks: stacks, aggregation_views: views })
   }
 
   // ── Impl Analyzers ──
@@ -392,7 +428,25 @@ function AnalyzersEditor({ config, onChange }: {
     const analyzers = { ...config.custom_impl_analyzers }
     analyzers[newName] = analyzers[oldName]
     delete analyzers[oldName]
-    onChange({ ...config, custom_impl_analyzers: analyzers })
+
+    // Cascade: update analyzer references in tech stacks and aggregation views
+    const stacks = config.tech_stacks.map(stack => ({
+      ...stack,
+      analyzers: stack.analyzers.map(a => a === oldName ? newName : a),
+    }))
+    const views = Object.fromEntries(
+      Object.entries(config.aggregation_views).map(([id, view]) => [
+        id,
+        {
+          ...view,
+          func: {
+            ...view.func,
+            analyzer_id: view.func.analyzer_id?.map(a => a === oldName ? newName : a),
+          },
+        },
+      ])
+    )
+    onChange({ ...config, custom_impl_analyzers: analyzers, tech_stacks: stacks, aggregation_views: views })
   }
 
   // ── External Analyzers ──
@@ -424,7 +478,25 @@ function AnalyzersEditor({ config, onChange }: {
     const analyzers = { ...config.external_analyzers }
     analyzers[newName] = analyzers[oldName]
     delete analyzers[oldName]
-    onChange({ ...config, external_analyzers: analyzers })
+
+    // Cascade: update analyzer references in tech stacks and aggregation views
+    const stacks = config.tech_stacks.map(stack => ({
+      ...stack,
+      analyzers: stack.analyzers.map(a => a === oldName ? newName : a),
+    }))
+    const views = Object.fromEntries(
+      Object.entries(config.aggregation_views).map(([id, view]) => [
+        id,
+        {
+          ...view,
+          func: {
+            ...view.func,
+            analyzer_id: view.func.analyzer_id?.map(a => a === oldName ? newName : a),
+          },
+        },
+      ])
+    )
+    onChange({ ...config, external_analyzers: analyzers, tech_stacks: stacks, aggregation_views: views })
   }
 
   return (
@@ -624,16 +696,6 @@ const CHART_RECOMMENDED_FUNCS: Record<string, string[]> = {
   radar: ['sum', 'avg'],
 }
 
-// Default TopN limit per chart type (only for types compatible with top_n)
-const CHART_DEFAULT_LIMITS: Record<string, number> = {
-  '': 10,
-  table: 10,
-  bar_row: 10,
-  bar_col: 10,
-  line: 10,
-  stacked_bar: 8,
-  radar: 6,
-}
 
 function ViewsEditor({ config, onChange }: {
   config: FullProjectConfig;
@@ -641,6 +703,8 @@ function ViewsEditor({ config, onChange }: {
 }) {
   const { t } = useTranslation()
   const [expandedViews, setExpandedViews] = useState<Set<string>>(new Set())
+  const [viewRenameInput, setViewRenameInput] = useState<Record<string, string>>({})
+  const [viewNameErrors, setViewNameErrors] = useState<Record<string, string>>({})
 
   const toggleView = (id: string) => {
     setExpandedViews(prev => {
@@ -687,7 +751,6 @@ function ViewsEditor({ config, onChange }: {
     // Auto-switch func.type if current type is not recommended for this chart
     if (chartType && !recommended.includes(view.func.type)) {
       const newType = recommended[0]
-      const defaultLimit = CHART_DEFAULT_LIMITS[chartType] || 10
       views[id] = {
         ...views[id],
         chart_type: chartType,
@@ -695,7 +758,6 @@ function ViewsEditor({ config, onChange }: {
           type: newType,
           analyzer_id: view.func.analyzer_id,
           tag_filters: view.func.tag_filters,
-          ...(newType === 'top_n' ? { limit: defaultLimit } : {}),
           ...(newType === 'distribution' ? { buckets: [] as number[] } : {}),
         } as AggregationFunc,
       }
@@ -708,8 +770,6 @@ function ViewsEditor({ config, onChange }: {
 
   const handleFuncTypeChange = (id: string, newType: string) => {
     const view = config.aggregation_views[id]
-    const chartType = view.chart_type || ''
-    const defaultLimit = CHART_DEFAULT_LIMITS[chartType] || 10
     const views = { ...config.aggregation_views }
 
     views[id] = {
@@ -718,7 +778,6 @@ function ViewsEditor({ config, onChange }: {
         type: newType,
         analyzer_id: view.func.analyzer_id,
         tag_filters: view.func.tag_filters,
-        ...(newType === 'top_n' ? { limit: defaultLimit } : {}),
         ...(newType === 'distribution' ? { buckets: [] as number[] } : {}),
       } as AggregationFunc,
     }
@@ -732,7 +791,7 @@ function ViewsEditor({ config, onChange }: {
       ...config,
       aggregation_views: {
         ...config.aggregation_views,
-        [key]: { title: 'New View', tech_stacks: [], width: 2, func: { type: 'top_n', limit: 10 } },
+        [key]: { title: 'New View', tech_stacks: [], width: 2, func: { type: 'top_n' } },
       },
     })
   }
@@ -746,6 +805,20 @@ function ViewsEditor({ config, onChange }: {
       next.delete(id)
       return next
     })
+  }
+
+  const renameView = (oldId: string, newId: string) => {
+    const trimmed = newId.trim()
+    if (oldId === trimmed || !trimmed) return
+    if (config.aggregation_views[trimmed]) {
+      setViewNameErrors(prev => ({ ...prev, [oldId]: t('config.analyzers.nameDuplicate') }))
+      return
+    }
+    setViewNameErrors(prev => { const next = { ...prev }; delete next[oldId]; return next })
+    const views = { ...config.aggregation_views }
+    views[trimmed] = views[oldId]
+    delete views[oldId]
+    onChange({ ...config, aggregation_views: views })
   }
 
   return (
@@ -766,7 +839,27 @@ function ViewsEditor({ config, onChange }: {
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <span className="flex items-center gap-2 min-w-0">
                 {expandedViews.has(id) ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-400" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-400" />}
-                <CardTitle className="text-base truncate">{id}{view.title ? <><span className="text-slate-400 dark:text-slate-500 mx-1.5">—</span>{view.title}</> : ''}</CardTitle>
+                <CardTitle className="text-base flex items-center gap-1.5 min-w-0">
+                  <input
+                    type="text"
+                    value={viewRenameInput[id] ?? id}
+                    onChange={e => setViewRenameInput(prev => ({ ...prev, [id]: e.target.value }))}
+                    onFocus={() => setViewNameErrors(prev => { const n = { ...prev }; delete n[id]; return n })}
+                    onBlur={() => {
+                      const val = viewRenameInput[id]
+                      if (val !== undefined) {
+                        setViewRenameInput(prev => { const n = { ...prev }; delete n[id]; return n })
+                        renameView(id, val)
+                      }
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                    }}
+                    onClick={e => e.stopPropagation()}
+                    className="w-28 px-1.5 py-0.5 text-sm border rounded bg-transparent border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
+                  />
+                  {viewNameErrors[id] && <span className="text-red-500 text-[10px] leading-tight shrink-0">{viewNameErrors[id]}</span>}
+                  {view.title ? <><span className="text-slate-400 dark:text-slate-500 mx-1.5">—</span><span className="truncate">{view.title}</span></> : ''}</CardTitle>
               </span>
               <span className="shrink-0">
                 <button
@@ -820,13 +913,6 @@ function ViewsEditor({ config, onChange }: {
                   <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.funcType')}</label>
                   <SelectInput value={view.func.type} onChange={v => handleFuncTypeChange(id, v)} options={FUNC_TYPES} />
                 </div>
-                {view.func.type === 'top_n' && (
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">{t('config.views.limit')}</label>
-                    <input type="number" value={view.func.limit || 10} onChange={e => updateFunc(id, 'limit', parseInt(e.target.value) || 10)}
-                      className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-                  </div>
-                )}
                 {view.func.type === 'distribution' && (
                   <div>
                     <label className="block text-xs text-slate-400 mb-1">{t('config.views.buckets')}</label>
@@ -849,7 +935,34 @@ function ViewsEditor({ config, onChange }: {
                     <div className="w-9 h-5 bg-slate-300 dark:bg-slate-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-sky-500 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
                   </label>
                 </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.showTrend')}</label>
+                  <label className="relative inline-flex items-center cursor-pointer mt-2">
+                    <input type="checkbox" checked={view.trend === true} onChange={e => updateView(id, 'trend', e.target.checked || undefined)}
+                      className="sr-only peer" />
+                    <div className="w-9 h-5 bg-slate-300 dark:bg-slate-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-sky-500 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
+                  </label>
+                </div>
               </div>
+              {/* Trend options (shown when trend is enabled) */}
+              {view.trend && (
+                <div className="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-slate-100 dark:border-slate-700/50">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">{t('config.views.trendLimit')}</label>
+                    <input type="number" value={view.trend_limit ?? 30} onChange={e => updateView(id, 'trend_limit', parseInt(e.target.value) || 30)}
+                      min={1} max={100}
+                      className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">{t('config.views.trendMode')}</label>
+                    <select value={view.trend_mode || 'snapshot'} onChange={e => updateView(id, 'trend_mode', e.target.value)}
+                      className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500">
+                      <option value="snapshot">Snapshot</option>
+                      <option value="diff">Diff</option>
+                    </select>
+                  </div>
+                </div>
+              )}
             </div>
           </CardContent>
           </div>

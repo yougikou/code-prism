@@ -373,6 +373,94 @@ func:
   type: "sum"
 ```
 
+### Trend / Timeseries Charts
+
+Trend charts allow you to track how metrics change over time by performing multiple scans of the same repository at different commits. They are configured by adding trend fields directly to an existing `aggregation_view`.
+
+**Trend-specific fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `trend` | boolean | `false` | Enable trend chart mode for this view |
+| `trend_limit` | integer | `30` | Number of recent scans to include in the trend |
+| `trend_mode` | string | View's mode | `"snapshot"` or `"diff"` — which scan mode to query for trend data |
+
+**How it works:**
+
+1. Each scan stores the Git commit timestamp (`commit_timestamp`) in the database
+2. When a view has `trend: true`, the dashboard renders it as a multi-series line chart, independent of any single scan selection
+3. The backend queries recent scans ordered by commit time and aggregates each scan's data into time-series points
+4. The trend endpoint groups data by `(label, metric_key, category, analyzer_id)` to form multiple series
+
+**Configuration examples:**
+
+```yaml
+# Single analyzer, single metric — track file count over time
+aggregation_views:
+  file_trend:
+    title: "Files Over Time"
+    chart_type: line
+    width: 2
+    trend: true
+    trend_limit: 30
+    trend_mode: snapshot
+    func:
+      type: sum
+      analyzer_id: [file_count]
+      tag_filters:
+        category: size
+
+# Single analyzer producing multiple metric_keys (e.g. complexity + lines)
+  python_trend:
+    title: "Python Metrics Over Time"
+    group_by: [metric_key]
+    chart_type: line
+    width: 2
+    trend: true
+    trend_limit: 30
+    func:
+      type: sum
+      analyzer_id: [my_python_analyzer]
+
+# Multiple analyzers × multiple metrics
+  all_metrics_trend:
+    title: "All Metrics Over Time"
+    group_by: [analyzer_id, metric_key]
+    chart_type: line
+    width: 2
+    trend: true
+    trend_limit: 50
+    func:
+      type: sum
+      analyzer_id: [my_python_analyzer, file_count, char_count]
+```
+
+A view with `trend: true` still functions as a regular single-scan view — the same configuration powers both the per-scan chart and the trend line chart automatically.
+
+**API Endpoint:**
+
+```
+GET /api/v1/projects/:project_name/trends/:view_id?mode=snapshot&limit=20
+```
+
+Query parameters:
+- `mode` — `"snapshot"` (default) or `"diff"`
+- `limit` — Number of scans to include (max 100)
+- `base_commit` — For diff mode, filter scans by base commit
+
+**Trend chart features:**
+- X-axis: time (commit timestamp)
+- Y-axis: metric value
+- Multi-series with scrollable legend
+- Interactive data zoom (scroll-wheel and slider)
+- Tooltip showing exact date and value on hover
+
+**Notes:**
+- `Sum` and `Avg` aggregation types work best for trends (produces stable, interpretable series)
+- `TopN` may produce inconsistent series since the top items can change between scans
+- Trend views are displayed with a **Trend** badge on the dashboard
+- Trend data loads independently from the selected scan — no need to pick a specific scan to see trends
+
 ### Reserved metric_key
 
 The following `metric_key` values are reserved for internal use. Custom analyzers should avoid using these:

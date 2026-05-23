@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS scans (
     branch_name TEXT,
     scan_mode TEXT NOT NULL,
     base_commit_hash TEXT,
+    commit_timestamp INTEGER,
     scan_time DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(project_id) REFERENCES projects(id)
 );

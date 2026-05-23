@@ -255,7 +255,8 @@ pub enum AggregationFunc {
         analyzer_id: Vec<String>,
         #[serde(default)]
         tag_filters: HashMap<String, String>,
-        limit: usize,
+        #[serde(default)]
+        limit: Option<usize>,
         #[serde(default)]
         order: SortOrder,
     },
@@ -365,6 +366,14 @@ pub struct AggregationView {
     #[serde(default = "default_width")]
     pub width: u32,
     pub func: AggregationFunc,
+
+    // Trend chart fields
+    #[serde(default)]
+    pub trend: bool,
+    #[serde(default = "default_trend_limit")]
+    pub trend_limit: usize,
+    #[serde(default)]
+    pub trend_mode: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -381,6 +390,10 @@ fn default_columns() -> u32 {
 
 fn default_metric_key() -> String {
     "matches".to_string()
+}
+
+fn default_trend_limit() -> usize {
+    30
 }
 
 impl ProjectConfig {
@@ -627,7 +640,6 @@ project_templates:
         func:
           type: "top_n"
           analyzer_id: "char_count"
-          limit: 10
           order: "desc"
 
       sum_file_count_by_tech_stack_table:
@@ -684,7 +696,6 @@ project_templates:
           tag_filters:
             metric: "complexity"
             category: "maintainability"
-          limit: 10
           order: "desc"
 
       complexity_radar:
@@ -752,14 +763,7 @@ project_templates:
 
                 // Validate func-specific fields
                 match &view.func {
-                    AggregationFunc::TopN { limit, .. } => {
-                        if *limit == 0 {
-                            errors.push(format!(
-                                "TopN view '{}' in project '{}' has limit=0",
-                                view_id, project.name
-                            ));
-                        }
-                    }
+                    AggregationFunc::TopN { .. } => {}
                     AggregationFunc::Distribution { buckets, .. } => {
                         if buckets.is_empty() {
                             errors.push(format!(

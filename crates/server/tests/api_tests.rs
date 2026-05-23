@@ -26,8 +26,11 @@ fn test_app_config_serialization() {
                         analyzer_id: vec!["char_count".to_string()],
                         tag_filters: std::collections::HashMap::new(),
                     },
-                    params: TopNParams { limit: 10, order: Default::default() },
+                    params: TopNParams { order: Default::default() },
                 },
+                trend: false,
+                trend_limit: 30,
+                trend_mode: None,
             }],
             tech_stacks: vec![TechStackInfo { name: "Rust".to_string(), category: None }],
             columns: 4,
@@ -115,6 +118,9 @@ fn test_view_kind_serialization() {
                 tag_filters: std::collections::HashMap::new(),
             },
         },
+        trend: false,
+        trend_limit: 30,
+        trend_mode: None,
     };
 
     let json = serde_json::to_string(&sum_view).expect("Failed to serialize");

@@ -902,6 +902,108 @@ pub async fn get_view(
     }
 }
 
+// ── Trend / Timeseries endpoint ──
+
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+pub struct TrendQuery {
+    #[serde(default = "default_trend_mode")]
+    pub mode: String,
+    #[serde(default = "default_trend_limit")]
+    pub limit: u32,
+    pub base_commit: Option<String>,
+    pub scan_ids: Option<String>,
+    pub tech_stack: Option<String>,
+    pub category: Option<String>,
+    pub metric_key: Option<String>,
+    pub change_type: Option<String>,
+    pub group_by: Option<String>,
+}
+
+fn default_trend_mode() -> String {
+    "snapshot".to_string()
+}
+
+fn default_trend_limit() -> u32 {
+    20
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{project_name}/trends/{view_id}",
+    params(
+        ("project_name" = String, Path, description = "Project Name"),
+        ("view_id" = String, Path, description = "View ID"),
+        TrendQuery
+    ),
+    responses(
+        (status = 200, description = "Trend data", body = inline(crate::aggregation::TrendResponse)),
+        (status = 404, description = "View not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+pub async fn get_trend(
+    State(state): State<AppState>,
+    Path((project_name, view_id)): Path<(String, String)>,
+    Query(query): Query<TrendQuery>,
+) -> impl IntoResponse {
+    let app_config = state.config.read().unwrap().clone();
+
+    // Find the view config (trend is a field on AggregationView)
+    let view_config = app_config
+        .projects
+        .iter()
+        .find(|p| p.name == project_name)
+        .and_then(|p| p.views.iter().find(|v| v.id == view_id))
+        .cloned();
+
+    let view_config = match view_config {
+        Some(v) => v,
+        None => return (StatusCode::NOT_FOUND, "View not found").into_response(),
+    };
+
+    // When scan_ids is explicitly provided, skip the trend flag check (ad-hoc mode)
+    let has_scan_ids = query.scan_ids.is_some();
+    if !has_scan_ids && !view_config.trend {
+        return (StatusCode::BAD_REQUEST, "View does not have trend enabled").into_response();
+    }
+
+    // Parse optional scan_ids (comma-separated)
+    let parsed_scan_ids: Option<Vec<i64>> = query
+        .scan_ids
+        .as_ref()
+        .map(|s| s.split(',').filter_map(|id| id.trim().parse::<i64>().ok()).collect());
+
+    let mode = query.mode.as_str();
+    let limit = query.limit.max(1).min(100);
+
+    let view_filters = ViewFilters {
+        tech_stack: query.tech_stack.as_deref().map(String::from),
+        category: query.category.as_deref().map(String::from),
+        metric_key: query.metric_key.as_deref().map(String::from),
+        change_type: query.change_type.as_deref().map(String::from),
+        group_by: query.group_by.as_deref().map(String::from),
+    };
+
+    match crate::aggregation::TrendAggregator::execute(
+        state.db.pool(),
+        &project_name,
+        &view_config,
+        mode,
+        limit,
+        query.base_commit.as_deref(),
+        parsed_scan_ids.as_deref(),
+        &view_filters,
+    )
+    .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => {
+            eprintln!("Trend Aggregation Error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+        }
+    }
+}
+
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 pub struct ScanFilters {
     pub mode: Option<String>,
@@ -912,6 +1014,9 @@ pub struct ScanResponse {
     id: i64,
     commit_hash: String,
     scan_time: String,
+    commit_timestamp: Option<i64>,
+    base_commit_hash: Option<String>,
+    scan_mode: String,
 }
 
 #[utoipa::path(
@@ -960,9 +1065,9 @@ pub async fn get_scans(
     };
 
     // Query scans from database
-    let query = "SELECT id, commit_hash, scan_time FROM scans WHERE project_id = ? AND scan_mode = ? ORDER BY scan_time DESC";
+    let query = "SELECT id, commit_hash, scan_time, commit_timestamp, base_commit_hash, scan_mode FROM scans WHERE project_id = ? AND scan_mode = ? ORDER BY scan_time DESC";
 
-    match sqlx::query_as::<_, (i64, String, String)>(query)
+    match sqlx::query_as::<_, (i64, String, String, Option<i64>, Option<String>, String)>(query)
         .bind(project_id)
         .bind(mode)
         .fetch_all(state.db.pool())
@@ -971,10 +1076,13 @@ pub async fn get_scans(
         Ok(rows) => {
             let scans: Vec<ScanResponse> = rows
                 .into_iter()
-                .map(|(id, hash, time)| ScanResponse {
+                .map(|(id, hash, time, ts, base, sm)| ScanResponse {
                     id,
                     commit_hash: hash,
                     scan_time: time,
+                    commit_timestamp: ts,
+                    base_commit_hash: base,
+                    scan_mode: sm,
                 })
                 .collect();
             Json(scans).into_response()

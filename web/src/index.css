@@ -108,5 +108,31 @@
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #64748b; 
+  background: #64748b;
+}
+
+/* Card flip animation for trend toggle */
+.flip-card {
+  perspective: 1000px;
+}
+.flip-card-inner {
+  position: relative;
+  transition: transform 0.5s ease;
+  transform-style: preserve-3d;
+  min-height: 300px;
+}
+.flip-card-inner.flipped {
+  transform: rotateY(180deg);
+}
+.flip-card-front,
+.flip-card-back {
+  backface-visibility: hidden;
+}
+.flip-card-back {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  min-height: 300px;
+  transform: rotateY(180deg);
 }

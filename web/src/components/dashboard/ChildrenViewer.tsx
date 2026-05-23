@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
-import { X, Search, CaseSensitive, Regex, Download } from 'lucide-react';
+import { X, Search, CaseSensitive, Regex, Download, Copy } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 interface LeafItem {
@@ -50,6 +50,7 @@ export function ChildrenViewer({ open, title, items, onClose, onFileClick }: Chi
   const hasGroup = items.length > 0 && items.some(item => item.group);
 
   const [copiedLabel, setCopiedLabel] = useState<string | null>(null);
+  const [csvCopied, setCsvCopied] = useState(false);
 
   const copyPath = useCallback(async (label: string) => {
     try {
@@ -79,6 +80,24 @@ export function ChildrenViewer({ open, title, items, onClose, onFileClick }: Chi
     a.click();
     URL.revokeObjectURL(url);
   }, [filteredItems, hasGroup, title]);
+
+  const copyCSV = useCallback(() => {
+    const headers = hasGroup ? ['Group', 'Label', 'Value'] : ['Label', 'Value'];
+    const rows = filteredItems.map(item => {
+      const value = Math.round(item.value).toString();
+      return hasGroup
+        ? [item.group || '', item.label, value]
+        : [item.label, value];
+    });
+
+    const csvContent = [headers.join(','), ...rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(','))].join('\n');
+    navigator.clipboard.writeText(csvContent).then(() => {
+      setCsvCopied(true);
+      setTimeout(() => setCsvCopied(false), 1500);
+    }).catch(() => {
+      // Clipboard API may fail in insecure contexts
+    });
+  }, [filteredItems, hasGroup]);
 
   if (!open) return null;
 
@@ -142,6 +161,18 @@ export function ChildrenViewer({ open, title, items, onClose, onFileClick }: Chi
             title={t('common.downloadCSV') || 'Download CSV'}
           >
             <Download className="h-4 w-4" />
+          </button>
+          <button
+            onClick={copyCSV}
+            className="p-2 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors relative"
+            title={t('common.copyCSV') || 'Copy CSV'}
+          >
+            <Copy className="h-4 w-4" />
+            {csvCopied && (
+              <span className="absolute -top-2 -right-2 text-[10px] bg-sky-500 text-white px-1.5 py-0.5 rounded-full animate-pulse">
+                {t('common.copied') || 'Copied!'}
+              </span>
+            )}
           </button>
         </div>
 

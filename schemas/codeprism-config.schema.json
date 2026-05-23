@@ -285,7 +285,7 @@
             "limit": { "type": "integer", "minimum": 1 },
             "order": { "type": "string", "enum": ["asc", "desc"], "default": "desc" }
           },
-          "required": ["type", "limit"]
+          "required": ["type"]
         },
         {
           "properties": {

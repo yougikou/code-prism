@@ -34,10 +34,13 @@
     "executionErrors": "执行错误",
     "noSummary": "此扫描暂无摘要数据",
     "viewRawResults": "查看原始数据",
+    "expand": "展开",
     "items": "条",
     "analyzerId": "分析器",
     "filesAnalyzed": "分析文件数",
-    "otherCategory": "其他"
+    "otherCategory": "其他",
+    "showTop": "显示数量",
+    "unlimited": "不限"
   },
   "table": {
     "label": "标签",
@@ -77,10 +80,10 @@
     "loadingCommits": "加载提交中...",
     "loadMore": "加载更多提交",
     "step4Title": "扫描配置",
-    "ref1": "参考 1",
-    "ref2": "参考 2",
+    "ref1": "目标",
+    "ref2": "基线",
     "target": "目标",
-    "base": "基准",
+    "base": "基线",
     "clear": "清除",
     "selectBranchOrCommit": "选择分支或提交",
     "optionalDiffRef": "可选——添加第二个参考以进行差异扫描",
@@ -105,8 +108,8 @@
     "checkoutConfirm": "您确定要继续吗？",
     "cancel": "取消",
     "confirmCheckout": "确认检出",
-    "diffBase": "基准（参考 2）",
-    "diffTarget": "目标（参考 1）",
+    "diffBase": "基线",
+    "diffTarget": "目标",
     "diffReversed": "已反转",
     "diffChanges": "变更",
     "diffOrderWarningTitle": "检测到异常的差异顺序",
@@ -206,7 +209,10 @@
       "buckets": "分桶",
       "width": "宽度（列数）",
       "add": "添加视图",
-      "delete": "删除"
+      "delete": "删除",
+      "showTrend": "显示趋势",
+      "trendLimit": "趋势数据点数",
+      "trendMode": "趋势扫描模式"
     },
     "expandAll": "全部展开",
     "collapseAll": "全部收起"
@@ -229,5 +235,41 @@
     "regexAnalyzers": "个正则分析器",
     "views": "个视图",
     "deleteConfirm": "删除模板 '{{name}}'？"
+  },
+  "common": {
+    "loading": "加载中...",
+    "cancel": "取消",
+    "searchPlaceholder": "搜索路径...",
+    "caseSensitiveOn": "区分大小写：开",
+    "caseSensitiveOff": "区分大小写：关",
+    "regexOn": "正则表达式：开",
+    "regexOff": "正则表达式：关",
+    "downloadCSV": "下载CSV",
+    "copyCSV": "复制CSV",
+    "copied": "已复制！",
+    "back": "返回"
+  },
+  "match": {
+    "all": "全部",
+    "base": "基准",
+    "target": "目标"
+  },
+  "trend": {
+    "selectScans": "选择扫描记录",
+    "all": "全部",
+    "snapshots": "快照",
+    "diffs": "差分",
+    "snapshot": "快照",
+    "diff": "差分",
+    "selectAll": "选择全部",
+    "clearSelection": "清除选择",
+    "selectedCount": "已选 {{count}} 个",
+    "noScans": "没有可用的扫描记录",
+    "showTrend": "显示趋势图（{{count}} 个扫描）",
+    "baseCommit": "基准提交",
+    "viewTrend": "查看趋势",
+    "viewCurrent": "查看本次",
+    "adjustScans": "调整范围",
+    "trendView": "趋势图"
   }
 }

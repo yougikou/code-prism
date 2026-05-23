@@ -30,6 +30,7 @@ use crate::git_routes::{clone_repo, list_branches, checkout_branch, list_commits
         crate::routes::get_scans,
         crate::routes::get_config,
         crate::routes::get_scan_job,
+        crate::routes::get_trend,
     ),
     components(schemas(
         crate::aggregation::AggregationResult,
@@ -54,15 +55,14 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
             AggregationFunc::TopN {
                 analyzer_id,
                 tag_filters,
-                limit,
                 order,
+                ..
             } => {
                 let source = SourceConfig {
                     analyzer_id: analyzer_id.clone(),
                     tag_filters: tag_filters.clone(),
                 };
                 let params = TopNParams {
-                    limit: *limit as u32,
                     order: order.clone(),
                 };
                 views.push(ViewConfig {
@@ -74,6 +74,9 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     chart_type: view_def.chart_type.clone(),
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
+                    trend: view_def.trend,
+                    trend_limit: view_def.trend_limit as u32,
+                    trend_mode: view_def.trend_mode.clone(),
                     kind: ViewKind::TopN { source, params },
                 });
             }
@@ -94,6 +97,9 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     chart_type: view_def.chart_type.clone(),
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
+                    trend: view_def.trend,
+                    trend_limit: view_def.trend_limit as u32,
+                    trend_mode: view_def.trend_mode.clone(),
                     kind: ViewKind::Sum { source },
                 });
             }
@@ -114,6 +120,9 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     chart_type: view_def.chart_type.clone(),
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
+                    trend: view_def.trend,
+                    trend_limit: view_def.trend_limit as u32,
+                    trend_mode: view_def.trend_mode.clone(),
                     kind: ViewKind::Avg { source },
                 });
             }
@@ -134,6 +143,9 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     chart_type: view_def.chart_type.clone(),
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
+                    trend: view_def.trend,
+                    trend_limit: view_def.trend_limit as u32,
+                    trend_mode: view_def.trend_mode.clone(),
                     kind: ViewKind::Min { source },
                 });
             }
@@ -154,6 +166,9 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     chart_type: view_def.chart_type.clone(),
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
+                    trend: view_def.trend,
+                    trend_limit: view_def.trend_limit as u32,
+                    trend_mode: view_def.trend_mode.clone(),
                     kind: ViewKind::Max { source },
                 });
             }
@@ -178,6 +193,9 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     chart_type: view_def.chart_type.clone(),
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
+                    trend: view_def.trend,
+                    trend_limit: view_def.trend_limit as u32,
+                    trend_mode: view_def.trend_mode.clone(),
                     kind: ViewKind::Distribution { source, params },
                 });
             }
@@ -293,6 +311,11 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, config_path: Strin
         .route(
             "/api/v1/projects/:project_name/scans/:scan_id/matches",
             get(get_matches),
+        )
+        // Trend endpoint
+        .route(
+            "/api/v1/projects/:project_name/trends/:view_id",
+            get(crate::routes::get_trend),
         )
         // Swagger UI
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))

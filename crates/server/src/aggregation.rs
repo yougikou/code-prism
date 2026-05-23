@@ -105,7 +105,7 @@ impl TopNAggregator {
             SortOrder::Asc => "ASC",
             SortOrder::Desc => "DESC",
         };
-        query.push_str(&format!(" ORDER BY value_after {} LIMIT ?", order_dir));
+        query.push_str(&format!(" ORDER BY value_after {}", order_dir));
 
         let mut sql_query = sqlx::query(&query).bind(scan_id);
 
@@ -130,8 +130,6 @@ impl TopNAggregator {
         if let Some(ct) = &filters.change_type {
             sql_query = sql_query.bind(ct);
         }
-
-        sql_query = sql_query.bind(params.limit);
 
         let rows = sql_query.fetch_all(pool).await?;
 
@@ -821,12 +819,12 @@ impl DistributionAggregator {
 
         let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
 
-        // Fetch all values
-        let mut query = String::from(
-            "SELECT value_after, tech_stack, analyzer_id
-             FROM metrics
-             WHERE scan_id = ?",
-        );
+        // Fetch all values (include file_path when children are requested)
+        let mut select_clause = String::from("SELECT value_after, tech_stack, analyzer_id");
+        if view_config.include_children {
+            select_clause.push_str(", file_path");
+        }
+        let mut query = format!("{} FROM metrics WHERE scan_id = ?", select_clause);
 
         // Source tag filters (sorted for deterministic bind order)
         for (key, _val) in &source_tag_filters {
@@ -883,50 +881,277 @@ impl DistributionAggregator {
 
         let rows = sql_query.fetch_all(pool).await?;
 
-        // Create bucket counts
         let buckets = &params.buckets;
-        let mut bucket_counts: Vec<i64> = vec![0; buckets.len() + 1];
+        let bucket_count = buckets.len() + 1;
 
-        for row in rows {
-            let value: f64 = row.try_get("value_after").unwrap_or_default();
-            let mut placed = false;
-            for (i, &boundary) in buckets.iter().enumerate() {
-                if value < boundary {
-                    bucket_counts[i] += 1;
-                    placed = true;
-                    break;
+        if view_config.include_children {
+            // Collect children per bucket
+            let mut bucket_children: Vec<Vec<AggregationResult>> = vec![vec![]; bucket_count];
+
+            for row in &rows {
+                let value: f64 = row.try_get("value_after").unwrap_or_default();
+                let file_path: String = row.try_get("file_path").unwrap_or_default();
+                let analyzer_id: Option<String> = row.try_get("analyzer_id").unwrap_or_default();
+
+                let mut bucket_idx = bucket_count - 1;
+                for (i, &boundary) in buckets.iter().enumerate() {
+                    if value < boundary {
+                        bucket_idx = i;
+                        break;
+                    }
+                }
+
+                bucket_children[bucket_idx].push(AggregationResult {
+                    label: file_path,
+                    value,
+                    tech_stack: None,
+                    category: None,
+                    change_type: None,
+                    metric_key: None,
+                    analyzer_id,
+                    children: None,
+                    group_key: None, // filled below with bucket label
+                    tags: None,
+                });
+            }
+
+            // Build results with children
+            let mut results: Vec<AggregationResult> = Vec::new();
+            for (i, children) in bucket_children.into_iter().enumerate() {
+                let label = if i == 0 {
+                    format!("< {}", buckets.first().unwrap_or(&0.0))
+                } else if i == buckets.len() {
+                    format!(">= {}", buckets.last().unwrap_or(&0.0))
+                } else {
+                    format!("{} - {}", buckets[i - 1], buckets[i])
+                };
+
+                // Tag each child with its bucket label as group_key
+                let children: Vec<AggregationResult> = children
+                    .into_iter()
+                    .map(|mut c| {
+                        c.group_key = Some(label.clone());
+                        c
+                    })
+                    .collect();
+
+                results.push(AggregationResult {
+                    label,
+                    value: children.len() as f64,
+                    tech_stack: None,
+                    category: None,
+                    change_type: None,
+                    metric_key: None,
+                    analyzer_id: None,
+                    children: Some(children),
+                    group_key: Some(format!("bucket_{}", i)),
+                    tags: None,
+                });
+            }
+
+            Ok(results)
+        } else {
+            // Original behavior: just count per bucket
+            let mut bucket_counts: Vec<i64> = vec![0; bucket_count];
+
+            for row in rows {
+                let value: f64 = row.try_get("value_after").unwrap_or_default();
+                let mut placed = false;
+                for (i, &boundary) in buckets.iter().enumerate() {
+                    if value < boundary {
+                        bucket_counts[i] += 1;
+                        placed = true;
+                        break;
+                    }
+                }
+                if !placed {
+                    bucket_counts[bucket_count - 1] += 1;
                 }
             }
-            if !placed {
-                bucket_counts[buckets.len()] += 1;
+
+            // Build results with bucket labels
+            let mut results: Vec<AggregationResult> = Vec::new();
+            for (i, count) in bucket_counts.iter().enumerate() {
+                let label = if i == 0 {
+                    format!("< {}", buckets.first().unwrap_or(&0.0))
+                } else if i == buckets.len() {
+                    format!(">= {}", buckets.last().unwrap_or(&0.0))
+                } else {
+                    format!("{} - {}", buckets[i - 1], buckets[i])
+                };
+
+                results.push(AggregationResult {
+                    label,
+                    value: *count as f64,
+                    tech_stack: None,
+                    category: None,
+                    change_type: None,
+                    metric_key: None,
+                    analyzer_id: None,
+                    children: None,
+                    group_key: Some(format!("bucket_{}", i)),
+                    tags: None,
+                });
             }
+
+            Ok(results)
         }
+    }
+}
 
-        // Build results with bucket labels
-        let mut results: Vec<AggregationResult> = Vec::new();
-        for (i, count) in bucket_counts.iter().enumerate() {
-            let label = if i == 0 {
-                format!("< {}", buckets.first().unwrap_or(&0.0))
-            } else if i == buckets.len() {
-                format!(">= {}", buckets.last().unwrap_or(&0.0))
-            } else {
-                format!("{} - {}", buckets[i - 1], buckets[i])
-            };
+// ── Trend / Timeseries Aggregation ──
 
-            results.push(AggregationResult {
-                label,
-                value: *count as f64,
-                tech_stack: None,
-                category: None,
-                change_type: None,
-                metric_key: None,
-                analyzer_id: None,
-                children: None,
-                group_key: Some(format!("bucket_{}", i)),
-                tags: None,
+#[derive(Debug, Serialize, ToSchema, Clone)]
+pub struct TrendDataPoint {
+    pub timestamp: i64,
+    pub value: f64,
+}
+
+#[derive(Debug, Serialize, ToSchema, Clone)]
+pub struct TrendSeries {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyzer_id: Option<String>,
+    pub data: Vec<TrendDataPoint>,
+}
+
+#[derive(Debug, Serialize, ToSchema, Clone)]
+pub struct TrendResponse {
+    pub view_id: String,
+    pub series: Vec<TrendSeries>,
+}
+
+pub struct TrendAggregator;
+
+impl TrendAggregator {
+    pub async fn execute(
+        pool: &SqlitePool,
+        project_name: &str,
+        view_config: &ViewConfig,
+        mode: &str,
+        limit: u32,
+        base_commit: Option<&str>,
+        scan_ids: Option<&[i64]>,
+        view_filters: &ViewFilters,
+    ) -> Result<TrendResponse> {
+        // 1. Query scans ordered by commit_timestamp
+        let scans: Vec<(i64, i64)> = if let Some(ids) = scan_ids {
+            if ids.is_empty() {
+                return Ok(TrendResponse {
+                    view_id: view_config.id.clone(),
+                    series: vec![],
+                });
+            }
+            let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+            let scan_query = format!(
+                "SELECT s.id, s.commit_timestamp FROM scans s
+                 JOIN projects p ON s.project_id = p.id
+                 WHERE p.name = ? AND s.id IN ({}) AND s.commit_timestamp IS NOT NULL
+                 ORDER BY s.commit_timestamp ASC",
+                placeholders.join(",")
+            );
+            let mut sql_query = sqlx::query_as::<_, (i64, i64)>(&scan_query).bind(project_name);
+            for id in ids {
+                sql_query = sql_query.bind(id);
+            }
+            sql_query.fetch_all(pool).await?
+        } else {
+            let mut scan_query = String::from(
+                "SELECT s.id, s.commit_timestamp FROM scans s
+                 JOIN projects p ON s.project_id = p.id
+                 WHERE p.name = ? AND s.scan_mode = ? AND s.commit_timestamp IS NOT NULL"
+            );
+            if base_commit.is_some() {
+                scan_query.push_str(" AND s.base_commit_hash = ?");
+            }
+            scan_query.push_str(" ORDER BY s.commit_timestamp ASC LIMIT ?");
+
+            let mut sql_query = sqlx::query_as::<_, (i64, i64)>(&scan_query)
+                .bind(project_name)
+                .bind(mode)
+                .bind(limit as i64);
+
+            if let Some(base) = base_commit {
+                sql_query = sql_query.bind(base);
+            }
+
+            sql_query.fetch_all(pool).await?
+        };
+
+        if scans.is_empty() {
+            return Ok(TrendResponse {
+                view_id: view_config.id.clone(),
+                series: vec![],
             });
         }
 
-        Ok(results)
+        // 2. For each scan, run the appropriate aggregator
+        let filters = view_filters;
+
+        // Key: (label, metric_key, category, analyzer_id)
+        let mut series_map: HashMap<(String, Option<String>, Option<String>, Option<String>), Vec<TrendDataPoint>> = HashMap::new();
+
+        for (scan_id, timestamp) in &scans {
+            let results = match &view_config.kind {
+                ViewKind::TopN { .. } => {
+                    TopNAggregator::execute(pool, *scan_id, view_config, &filters).await?
+                }
+                ViewKind::Sum { .. } => {
+                    SumAggregator::execute(pool, *scan_id, view_config, &filters).await?
+                }
+                ViewKind::Avg { .. } => {
+                    StatAggregator::execute(pool, *scan_id, view_config, &filters, StatType::Avg).await?
+                }
+                ViewKind::Min { .. } => {
+                    StatAggregator::execute(pool, *scan_id, view_config, &filters, StatType::Min).await?
+                }
+                ViewKind::Max { .. } => {
+                    StatAggregator::execute(pool, *scan_id, view_config, &filters, StatType::Max).await?
+                }
+                ViewKind::Distribution { .. } => {
+                    DistributionAggregator::execute(pool, *scan_id, view_config, &filters).await?
+                }
+            };
+
+            for item in &results {
+                let key = (
+                    item.label.clone(),
+                    item.metric_key.clone(),
+                    item.category.clone(),
+                    item.analyzer_id.clone(),
+                );
+                series_map
+                    .entry(key)
+                    .or_default()
+                    .push(TrendDataPoint {
+                        timestamp: *timestamp,
+                        value: item.value,
+                    });
+            }
+        }
+
+        // 3. Build TrendResponse
+        let series: Vec<TrendSeries> = series_map
+            .into_iter()
+            .map(|((label, metric_key, category, analyzer_id), mut data)| {
+                data.sort_by_key(|d| d.timestamp);
+                TrendSeries {
+                    label,
+                    metric_key,
+                    category,
+                    analyzer_id,
+                    data,
+                }
+            })
+            .collect();
+
+        Ok(TrendResponse {
+            view_id: view_config.id.clone(),
+            series,
+        })
     }
 }

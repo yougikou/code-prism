@@ -67,6 +67,14 @@ pub struct ViewConfig {
     pub width: u32,
     #[serde(flatten)]
     pub kind: ViewKind,
+
+    // Trend chart fields
+    #[serde(default)]
+    pub trend: bool,
+    #[serde(default = "default_trend_limit")]
+    pub trend_limit: u32,
+    #[serde(default)]
+    pub trend_mode: Option<String>,
 }
 
 fn default_columns() -> u32 {
@@ -79,6 +87,10 @@ fn default_width() -> u32 {
 
 fn default_include_children() -> bool {
     true
+}
+
+fn default_trend_limit() -> u32 {
+    30
 }
 
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
@@ -122,7 +134,6 @@ impl SourceConfig {
 
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
 pub struct TopNParams {
-    pub limit: u32,
     #[serde(default)]
     pub order: SortOrder,
 }
@@ -148,7 +159,7 @@ projects:
         tech_stacks: ["Gosu"]
         type: "top_n"
         source: { analyzer_id: "char_count" }
-        params: { limit: 10 }
+        params: { }
     tech_stacks: [{ name: "Gosu" }]
 "#;
         let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
@@ -162,9 +173,8 @@ projects:
         assert_eq!(view.tech_stacks, vec!["Gosu"]);
 
         match &view.kind {
-            ViewKind::TopN { source, params } => {
+            ViewKind::TopN { source, .. } => {
                 assert_eq!(source.analyzer_id, vec!["char_count"]);
-                assert_eq!(params.limit, 10);
             }
             _ => panic!("Expected TopN view"),
         }

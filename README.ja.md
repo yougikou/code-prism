@@ -373,6 +373,94 @@ func:
   type: "sum"
 ```
 
+### トレンド / 時系列チャート
+
+トレンドチャートを使用すると、同じリポジトリを異なるコミット時点で複数回スキャンすることで、メトリクスの経時変化を追跡できます。既存の `aggregation_view` にトレンドフィールドを追加するだけで設定できます。
+
+**トレンド専用フィールド：**
+
+| フィールド | 型 | デフォルト | 説明 |
+|------------|------|---------|------|
+| `trend` | boolean | `false` | トレンドチャートモードを有効化 |
+| `trend_limit` | integer | `30` | トレンドに含める最近のスキャン数 |
+| `trend_mode` | string | ビューのモード | `"snapshot"` または `"diff"` — トレンドデータのスキャンモード |
+
+**仕組み：**
+
+1. 各スキャンは Git コミットタイムスタンプ（`commit_timestamp`）をデータベースに保存
+2. ビューに `trend: true` が設定されている場合、ダッシュボードはそれを単一スキャンとは独立した多系列折れ線グラフとして表示
+3. バックエンドはコミット時刻順に最近のスキャンをクエリし、各スキャンの集計データを時系列ポイントに変換
+4. トレンドエンドポイントは `(label, metric_key, category, analyzer_id)` の4タプルでグループ化して系列を形成
+
+**設定例：**
+
+```yaml
+# 単一アナライザー、単一メトリック — ファイル数の推移
+aggregation_views:
+  file_trend:
+    title: "ファイル数の推移"
+    chart_type: line
+    width: 2
+    trend: true
+    trend_limit: 30
+    trend_mode: snapshot
+    func:
+      type: sum
+      analyzer_id: [file_count]
+      tag_filters:
+        category: size
+
+# 単一アナライザーが複数の metric_key を生成（複雑度 + 行数など）
+  python_trend:
+    title: "Python メトリクス推移"
+    group_by: [metric_key]
+    chart_type: line
+    width: 2
+    trend: true
+    trend_limit: 30
+    func:
+      type: sum
+      analyzer_id: [my_python_analyzer]
+
+# 複数アナライザー × 複数メトリック
+  all_metrics_trend:
+    title: "全メトリクス推移"
+    group_by: [analyzer_id, metric_key]
+    chart_type: line
+    width: 2
+    trend: true
+    trend_limit: 50
+    func:
+      type: sum
+      analyzer_id: [my_python_analyzer, file_count, char_count]
+```
+
+`trend: true` が設定されたビューは、通常の単一スキャンビューとしても機能します — 同じ設定で単一スキャンチャートとトレンド折れ線グラフの両方を自動的に駆動します。
+
+**API エンドポイント：**
+
+```
+GET /api/v1/projects/:project_name/trends/:view_id?mode=snapshot&limit=20
+```
+
+クエリパラメータ：
+- `mode` — `"snapshot"`（デフォルト）または `"diff"`
+- `limit` — 含めるスキャン数（最大 100）
+- `base_commit` — 差分モードでベースコミットによるフィルタリング
+
+**トレンドチャートの機能：**
+- X 軸: 時間（コミットタイムスタンプ）
+- Y 軸: メトリック値
+- スクロール可能な凡例付き多系列表示
+- インタラクティブデータズーム（ホイール・スライダー）
+- ホバーツールチップに日付と値を表示
+
+**注意事項：**
+- `Sum` と `Avg` 集計タイプがトレンドに最も適しています（安定した解釈可能な系列）
+- `TopN` はトップ項目がスキャン間で変わる可能性があるため、不連続な系列になる場合があります
+- トレンドビューはダッシュボードに **Trend** バッジ付きで表示されます
+- トレンドデータは選択されたスキャンとは独立して読み込まれます
+
 ### 予約済み metric_key
 
 以下の `metric_key` はシステムで予約されており、カスタムアナライザーでの使用は避けてください：

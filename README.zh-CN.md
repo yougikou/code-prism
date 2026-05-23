@@ -373,6 +373,94 @@ func:
   type: "sum"
 ```
 
+### 趋势图 / 时序图
+
+趋势图表允许您通过对同一仓库在不同提交时间点进行多次扫描，跟踪指标随时间的变化。通过在现有 `aggregation_view` 中添加趋势字段即可启用。
+
+**趋势专用字段：**
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `trend` | boolean | `false` | 启用趋势图模式 |
+| `trend_limit` | integer | `30` | 趋势中包含的最近扫描次数 |
+| `trend_mode` | string | 视图自身模式 | `"snapshot"` 或 `"diff"` — 趋势数据查询哪种扫描模式 |
+
+**工作原理：**
+
+1. 每次扫描会将 Git 提交时间戳（`commit_timestamp`）存入数据库
+2. 当视图设置了 `trend: true`，仪表板将其渲染为多系列折线图，独立于单次扫描选择
+3. 后端按提交时间排序查询最近的扫描，将每次扫描的聚合数据组装为时序数据点
+4. 趋势端点按 `(label, metric_key, category, analyzer_id)` 四元组分组建系列
+
+**配置示例：**
+
+```yaml
+# 单一分析器单一指标 — 跟踪文件数变化
+aggregation_views:
+  file_trend:
+    title: "文件数变化趋势"
+    chart_type: line
+    width: 2
+    trend: true
+    trend_limit: 30
+    trend_mode: snapshot
+    func:
+      type: sum
+      analyzer_id: [file_count]
+      tag_filters:
+        category: size
+
+# 单一分析器产生多个 metric_key（如复杂度和代码行数）
+  python_trend:
+    title: "Python 指标趋势"
+    group_by: [metric_key]
+    chart_type: line
+    width: 2
+    trend: true
+    trend_limit: 30
+    func:
+      type: sum
+      analyzer_id: [my_python_analyzer]
+
+# 多个分析器 × 多个指标
+  all_metrics_trend:
+    title: "全指标趋势"
+    group_by: [analyzer_id, metric_key]
+    chart_type: line
+    width: 2
+    trend: true
+    trend_limit: 50
+    func:
+      type: sum
+      analyzer_id: [my_python_analyzer, file_count, char_count]
+```
+
+设置了 `trend: true` 的视图仍然可以作为普通单次扫描视图使用 —— 同一份配置同时驱动单次扫描图表和趋势折线图。
+
+**API 端点：**
+
+```
+GET /api/v1/projects/:project_name/trends/:view_id?mode=snapshot&limit=20
+```
+
+查询参数：
+- `mode` — `"snapshot"`（默认）或 `"diff"`
+- `limit` — 包含的扫描次数上限（最大 100）
+- `base_commit` — 差异模式下按 base commit 过滤扫描
+
+**趋势图功能：**
+- X 轴：时间（提交时间戳）
+- Y 轴：指标值
+- 支持多系列，带可滚动图例
+- 交互式数据缩放（滚轮缩放和滑块）
+- 悬停提示显示具体日期和数值
+
+**注意事项：**
+- `Sum` 和 `Avg` 聚合类型最适合趋势图（产生稳定、可解释的系列）
+- `TopN` 可能产生不连续的系列，因为 TOP 项在不同扫描间可能变化
+- 趋势视图在仪表板上带有 **Trend** 徽章标识
+- 趋势数据独立于所选扫描加载 —— 无需选择特定扫描即可查看趋势
+
 ### 保留的 metric_key
 
 以下 `metric_key` 为系统保留，自定义分析器应避免使用：

@@ -590,12 +590,7 @@ export default function ExecutePage() {
 
   const clearRef = (which: 1 | 2) => {
     if (which === 1) {
-      if (ref2) {
-        setRef1(ref2)
-        setRef2(null)
-      } else {
-        setRef1(null)
-      }
+      setRef1(null)
     } else {
       setRef2(null)
     }

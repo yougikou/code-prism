@@ -9,8 +9,10 @@ import { MetricCard } from './widgets/MetricCard';
 import ChartRenderer from './ChartRenderer';
 import { ChildrenViewer } from './dashboard/ChildrenViewer';
 import { MatchDetailView } from './dashboard/MatchDetailView';
-import { fetchView, fetchScanSummary, fetchMatches, type AggregationResult, type AppConfig, type ScanSummary, type MatchDetail, getDefaultProject } from '@/services/data';
-import { FileText, Maximize2, Minimize2 } from 'lucide-react';
+import { fetchView, fetchScanSummary, fetchMatches, fetchTrend, type AggregationResult, type AppConfig, type ScanSummary, type MatchDetail, type TrendSeries, getDefaultProject } from '@/services/data';
+import TrendRenderer from './widgets/TrendRenderer';
+import { TrendScanSelector } from './dashboard/TrendScanSelector';
+import { BarChart3, FileText, Maximize2, Minimize2, SlidersHorizontal, TrendingUp } from 'lucide-react';
 
 
 
@@ -37,6 +39,23 @@ const Dashboard = () => {
   const [scanSummary, setScanSummary] = useState<ScanSummary | null>(null);
   // Track change_type filter per view (for switchable mode)
   const [changeTypeFilters, setChangeTypeFilters] = useState<Record<string, string>>({});
+  // Trend state
+  const [trendViews, setTrendViews] = useState<any[]>([]);
+  const [trendDataMap, setTrendDataMap] = useState<Record<string, TrendSeries[]>>({});
+  // Ad-hoc trend mode: each view can be toggled to show trend instead of normal chart: each view can be toggled to show trend instead of normal chart
+  const [trendActive, setTrendActive] = useState<Record<string, boolean>>({});
+  const [trendCustomScanIds, setTrendCustomScanIds] = useState<Record<string, number[]>>({});
+  // TopN limit selector state
+  const [topnLimits, setTopnLimits] = useState<Record<string, number>>({});
+  const [trendLoadingMap, setTrendLoadingMap] = useState<Record<string, boolean>>({});
+  const [scanSelectorView, setScanSelectorView] = useState<{
+    open: boolean;
+    projectName: string;
+    viewId: string;
+    scanMode: 'snapshot' | 'diff';
+    baseCommit?: string;
+    initialSelectedScanIds?: number[];
+  } | null>(null);
 
   // Children viewer modal state
   interface LeafItem {
@@ -67,10 +86,16 @@ const Dashboard = () => {
   const [fullscreenView, setFullscreenView] = useState<{
     open: boolean;
     title: string;
-    type: 'chart' | 'card' | 'table';
+    type: 'chart' | 'card' | 'table' | 'trend';
     options?: any;
     value?: string;
     data?: AggregationResult[];
+    trendSeries?: TrendSeries[];
+    viewId?: string;
+    isTopN?: boolean;
+    chartType?: string;
+    rawData?: AggregationResult[];
+    rawTrendSeries?: TrendSeries[];
   }>({ open: false, title: '', type: 'chart' });
 
   // Sidebar State
@@ -137,15 +162,19 @@ const Dashboard = () => {
     const isGlobalView = (v: any) =>
       !v.tech_stacks || v.tech_stacks.length === 0 || v.tech_stacks.includes('All');
 
-    if (selectedTechStack === 'Summary') {
-      // Show views with NO specific tech stack or containing 'All' (global views)
-      setActiveViews(viewsConfig.filter(isGlobalView));
-    } else {
-      // Show views that include this tech stack (but not 'All'-only views)
-      setActiveViews(viewsConfig.filter(v =>
-        v.tech_stacks && v.tech_stacks.includes(selectedTechStack)
-      ));
-    }
+    const filtered = selectedTechStack === 'Summary'
+      ? viewsConfig.filter(isGlobalView)
+      : viewsConfig.filter(v => v.tech_stacks && v.tech_stacks.includes(selectedTechStack));
+
+    // All views stay in activeViews; trend mode is controlled by trendActive state
+    setActiveViews(filtered);
+    setTrendViews(filtered.filter((v: any) => v.trend));
+    // Auto-activate trend mode for views configured with trend: true
+    setTrendActive(prev => {
+      const next = { ...prev };
+      filtered.filter((v: any) => v.trend).forEach((v: any) => { next[v.id] = true; });
+      return next;
+    });
   }, [selectedTechStack, viewsConfig]);
 
   // Clean up changeTypeFilters for views that are no longer active
@@ -175,7 +204,9 @@ const Dashboard = () => {
       setRuns(data.map(r => ({
         id: r.id,
         hash: r.commit_hash.substring(0, 7),
-        date: r.scan_time
+        date: r.scan_time,
+        scan_mode: r.scan_mode,
+        base_commit_hash: r.base_commit_hash,
       })));
 
       // Always select the first (latest) run when mode changes or on initial load
@@ -268,6 +299,72 @@ const Dashboard = () => {
 
     return () => { isActive = false; };
   }, [currentProject, selectedRunId]);
+
+  // Fetch Trend Data for all views in trend mode
+  useEffect(() => {
+    const activeTrendViewIds = Object.entries(trendActive)
+      .filter(([, isActive]) => isActive)
+      .map(([id]) => id);
+
+    if (activeTrendViewIds.length === 0) return;
+
+    let isActive = true;
+
+    const loadTrends = async () => {
+      const newMap: Record<string, TrendSeries[]> = { ...trendDataMap };
+
+      for (const viewId of activeTrendViewIds) {
+        const view = [...activeViews, ...trendViews].find(v => v.id === viewId);
+        if (!view) continue;
+
+        setTrendLoadingMap(prev => ({ ...prev, [viewId]: true }));
+
+        try {
+          const options: any = {};
+          if (trendCustomScanIds[viewId] && trendCustomScanIds[viewId].length > 0) {
+            options.scanIds = trendCustomScanIds[viewId];
+          } else {
+            // Auto-select: snapshot -> all SNAPSHOT scans; diff -> same-base diffs
+            const { fetchRuns } = await import('@/services/data');
+            const currentRun = runs.find(r => r.id === selectedRunId);
+            if (viewMode === 'snapshot') {
+              const snapshots = await fetchRuns(currentProject, 'SNAPSHOT');
+              options.scanIds = snapshots.map(s => Number(s.id));
+            } else {
+              const baseCommit = currentRun?.base_commit_hash;
+              if (baseCommit) {
+                const diffs = await fetchRuns(currentProject, 'DIFF');
+                options.scanIds = diffs
+                  .filter(s => s.base_commit_hash === baseCommit)
+                  .map(s => Number(s.id));
+              }
+            }
+          }
+          // Pass tech_stack filter so trend data respects current tab context
+          if (selectedTechStack !== 'Summary') {
+            options.techStack = selectedTechStack;
+          }
+          // Pass change_type filter for switchable mode
+          if (view.change_type_mode === 'switchable') {
+            options.changeType = changeTypeFilters[viewId] || 'A';
+          }
+          const result = await fetchTrend(currentProject, viewId, options);
+          if (!isActive) return;
+          newMap[viewId] = result.series;
+        } catch (e) {
+          console.error(`Error fetching trend for ${viewId}:`, e);
+        } finally {
+          if (isActive) setTrendLoadingMap(prev => ({ ...prev, [viewId]: false }));
+        }
+      }
+
+      if (isActive) setTrendDataMap(newMap);
+    };
+
+    loadTrends();
+
+    return () => { isActive = false; };
+  }, [currentProject, viewMode, selectedRunId, trendActive, trendCustomScanIds, activeViews, trendViews, runs, changeTypeFilters]);
 
   // Track previous change_type filters using ref to avoid re-render cycles
   const prevChangeTypeFilters = useRef<Record<string, string>>({});
@@ -687,7 +784,7 @@ const Dashboard = () => {
           ? `${groupLabel}(${changeType})`
           : changeType
             ? `(${changeType})`
-            : groupLabel || undefined;
+            : groupLabel || item.group_key || undefined;
 
         result.push({ label: item.label, value: Math.round(item.value), group, analyzerId: item.analyzer_id });
       }
@@ -848,6 +945,24 @@ const Dashboard = () => {
                   data = flattenMultiLevel(data);
                 }
 
+                // Save unlimited data for fullscreen modal TopN
+                const preLimitData = data;
+
+                // Apply frontend TopN limit (client-side slicing)
+                if (view.type === 'top_n') {
+                  const limit = topnLimits[view.id] || 10;
+                  if (limit > 0 && data.length > limit) {
+                    data = data.slice(0, limit);
+                  }
+                }
+
+                // Apply TopN limit to trend data too, consistent with snapshot behavior
+                const rawTrendSeries = trendDataMap[view.id] || [];
+                const trendLimit = view.type === 'top_n' ? (topnLimits[view.id] || 10) : 0;
+                const displayedTrendSeries = trendLimit > 0 && rawTrendSeries.length > trendLimit
+                  ? rawTrendSeries.slice(0, trendLimit)
+                  : rawTrendSeries;
+
                 // Determine Chart Type
                 let content;
                 const chartType = view.chart_type || (view.type === 'top_n' ? 'bar_row' : 'card');
@@ -902,7 +1017,19 @@ const Dashboard = () => {
                       default:
                         opt = getBarRowOption(title, data, baseColor);
                     }
-                    setFullscreenView({ open: true, title, type: 'chart', options: opt });
+                    setFullscreenView({ open: true, title, type: 'chart', options: opt,
+                      viewId: view.id, isTopN: view.type === 'top_n',
+                      chartType: actualChartType,
+                      rawData: view.type === 'top_n' ? preLimitData : undefined });
+                  }
+                };
+
+                // Trend expand handler
+                const trendExpandView = () => {
+                  if (displayedTrendSeries.length > 0) {
+                    setFullscreenView({ open: true, title, type: 'trend', trendSeries: displayedTrendSeries,
+                      viewId: view.id, isTopN: view.type === 'top_n',
+                      rawTrendSeries: view.type === 'top_n' ? rawTrendSeries : undefined });
                   }
                 };
 
@@ -1016,28 +1143,118 @@ const Dashboard = () => {
                             ))}
                           </div>
                         )}
-                        {view.include_children && (
-                          <button
-                            onClick={() => openChildrenView(view, title)}
-                            className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-sky-500 transition-colors"
-                            title={t('dashboard.viewRawResults')}
-                          >
-                            <FileText className="h-5 w-5" />
-                          </button>
-                        )}
-                        {data.length > 0 && (
-                          <button
-                            onClick={expandView}
-                            className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-sky-500 transition-colors"
-                            title="Expand"
-                          >
-                            <Maximize2 className="h-5 w-5" />
-                          </button>
+                        {trendActive[view.id] ? (
+                          <>
+                            {displayedTrendSeries.length > 0 && (
+                              <button
+                                onClick={trendExpandView}
+                                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-sky-500 transition-colors"
+                                title={t('dashboard.expand')}
+                              >
+                                <Maximize2 className="h-5 w-5" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => setTrendActive(prev => ({ ...prev, [view.id]: false }))}
+                              className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-sky-500 transition-colors"
+                              title={t('trend.viewCurrent')}
+                            >
+                              <BarChart3 className="h-5 w-5" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                const currentRun = runs.find(r => r.id === selectedRunId);
+                                setScanSelectorView({
+                                  open: true,
+                                  projectName: currentProject,
+                                  viewId: view.id,
+                                  scanMode: viewMode,
+                                  baseCommit: currentRun?.base_commit_hash,
+                                  initialSelectedScanIds: trendCustomScanIds[view.id],
+                                });
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-sky-500 transition-colors"
+                              title={t('trend.adjustScans')}
+                            >
+                              <SlidersHorizontal className="h-5 w-5" />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            {data.length > 0 && (
+                              <button
+                                onClick={expandView}
+                                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-sky-500 transition-colors"
+                                title={t('dashboard.expand')}
+                              >
+                                <Maximize2 className="h-5 w-5" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => {
+                                setTrendActive(prev => ({ ...prev, [view.id]: true }));
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-sky-500 transition-colors"
+                              title={t('trend.viewTrend')}
+                            >
+                              <TrendingUp className="h-5 w-5" />
+                            </button>
+                            {view.include_children && (
+                              <button
+                                onClick={() => openChildrenView(view, title)}
+                                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-sky-500 transition-colors"
+                                title={t('dashboard.viewRawResults')}
+                              >
+                                <FileText className="h-5 w-5" />
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     </CardHeader>
                     <CardContent className="pt-6">
-                      {loading ? <div className="animate-pulse h-[300px] bg-slate-100 dark:bg-slate-700/20 rounded"></div> : content}
+                      <div className="flip-card">
+                        <div className={`flip-card-inner ${trendActive[view.id] ? 'flipped' : ''}`}>
+                          {/* Front: Normal chart */}
+                          <div className="flip-card-front">
+                            {loading ? <div className="animate-pulse h-[300px] bg-slate-100 dark:bg-slate-700/20 rounded"></div> : content}
+                          </div>
+                          {/* Back: Trend chart */}
+                          <div className="flip-card-back">
+                            {trendLoadingMap[view.id] ? (
+                              <div className="animate-pulse h-[300px] bg-slate-100 dark:bg-slate-700/20 rounded"></div>
+                            ) : displayedTrendSeries.length === 0 ? (
+                              <div className="flex items-center justify-center h-[300px] text-slate-400 dark:text-slate-500">
+                                <p className="text-sm">{t('dashboard.noData') || 'No trend data available'}</p>
+                              </div>
+                            ) : (
+                              <TrendRenderer key={`trend-${trendLimit}`} series={displayedTrendSeries} theme={theme} />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      {/* Limit selector for TopN charts */}
+                      {view.type === 'top_n' && (
+                        <div className="flex items-center justify-center gap-1 mt-3 pt-3 border-t border-slate-100 dark:border-slate-700/50">
+                          <span className="text-xs text-slate-400 mr-2">{t('dashboard.showTop')}</span>
+                          {[3, 5, 10, 30, 50, 80, 100, 0].map(n => {
+                            const isActive = (topnLimits[view.id] || 10) === n;
+                            return (
+                              <button
+                                key={n}
+                                onClick={() => setTopnLimits(prev => ({ ...prev, [view.id]: n }))}
+                                className={`px-2 py-0.5 text-xs font-medium rounded transition-all ${
+                                  isActive
+                                    ? 'bg-sky-500 text-white'
+                                    : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
+                                }`}
+                              >
+                                {n === 0 ? t('dashboard.unlimited') : n}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 );
@@ -1189,43 +1406,139 @@ const Dashboard = () => {
               </button>
             </div>
             {/* Content */}
-            <div className="flex-1 p-6 min-h-0">
-              {fullscreenView.type === 'chart' && fullscreenView.options && (
-                <ChartRenderer options={fullscreenView.options} theme={theme} height="100%" />
-              )}
-              {fullscreenView.type === 'card' && fullscreenView.value && (
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-center">
-                    <div className="text-7xl font-bold text-slate-800 dark:text-slate-200">{fullscreenView.value}</div>
-                    <div className="text-lg text-slate-500 dark:text-slate-400 mt-2">{fullscreenView.title}</div>
+            <div className="flex-1 min-h-0 flex flex-col">
+              <div className="flex-1 p-6 min-h-0">
+                {fullscreenView.type === 'chart' && fullscreenView.isTopN && fullscreenView.rawData && fullscreenView.chartType ? (
+                  (() => {
+                    const limit = topnLimits[fullscreenView.viewId!] || 10;
+                    const limitedData = limit > 0 && fullscreenView.rawData!.length > limit
+                      ? fullscreenView.rawData!.slice(0, limit)
+                      : fullscreenView.rawData!;
+                    const baseColor = fullscreenView.viewId!.includes('complexity') ? '#ef4444' : '#38bdf8';
+                    let opt;
+                    switch (fullscreenView.chartType) {
+                      case 'bar_row':
+                      case 'bar_horizontal':
+                        opt = getBarRowOption(fullscreenView.title, limitedData, baseColor);
+                        break;
+                      case 'bar_col':
+                      case 'bar_vertical':
+                        opt = getBarColOption(fullscreenView.title, limitedData, baseColor);
+                        break;
+                      case 'pie':
+                        opt = getPieOption(fullscreenView.title, limitedData);
+                        break;
+                      case 'line':
+                        opt = getLineOption(fullscreenView.title, limitedData, baseColor);
+                        break;
+                      case 'stacked_bar':
+                        opt = getStackedBarOption(fullscreenView.title, limitedData);
+                        break;
+                      case 'heatmap':
+                        opt = getHeatmapOption(fullscreenView.title, limitedData);
+                        break;
+                      case 'radar':
+                        opt = getRadarOption(fullscreenView.title, limitedData);
+                        break;
+                      case 'gauge':
+                        opt = getGaugeOption(fullscreenView.title, limitedData);
+                        break;
+                      default:
+                        opt = getBarRowOption(fullscreenView.title, limitedData, baseColor);
+                    }
+                    return <ChartRenderer options={opt} theme={theme} height="100%" />;
+                  })()
+                ) : fullscreenView.type === 'chart' && fullscreenView.options && (
+                  <ChartRenderer options={fullscreenView.options} theme={theme} height="100%" />
+                )}
+                {fullscreenView.type === 'card' && fullscreenView.value && (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center">
+                      <div className="text-7xl font-bold text-slate-800 dark:text-slate-200">{fullscreenView.value}</div>
+                      <div className="text-lg text-slate-500 dark:text-slate-400 mt-2">{fullscreenView.title}</div>
+                    </div>
                   </div>
-                </div>
-              )}
-              {fullscreenView.type === 'table' && fullscreenView.data && (
-                <div className="overflow-auto h-full">
-                  <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
-                    <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50 sticky top-0">
-                      <tr>
-                        <th className="px-4 py-2">Label</th>
-                        <th className="px-4 py-2 text-right">Value</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...fullscreenView.data]
-                        .sort((a, b) => a.label.localeCompare(b.label))
-                        .map((d, i) => (
-                        <tr key={i} className="border-b border-slate-200 dark:border-slate-700/50">
-                          <td className="px-4 py-2 font-medium">{d.label}</td>
-                          <td className="px-4 py-2 text-right">{Math.round(d.value).toLocaleString()}</td>
+                )}
+                {fullscreenView.type === 'table' && fullscreenView.data && (
+                  <div className="overflow-auto h-full">
+                    <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
+                      <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50 sticky top-0">
+                        <tr>
+                          <th className="px-4 py-2">Label</th>
+                          <th className="px-4 py-2 text-right">Value</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {[...fullscreenView.data]
+                          .sort((a, b) => a.label.localeCompare(b.label))
+                          .map((d, i) => (
+                          <tr key={i} className="border-b border-slate-200 dark:border-slate-700/50">
+                            <td className="px-4 py-2 font-medium">{d.label}</td>
+                            <td className="px-4 py-2 text-right">{Math.round(d.value).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {fullscreenView.type === 'trend' && fullscreenView.isTopN && fullscreenView.rawTrendSeries ? (
+                  (() => {
+                    const limit = topnLimits[fullscreenView.viewId!] || 10;
+                    const limitedSeries = limit > 0 && fullscreenView.rawTrendSeries!.length > limit
+                      ? fullscreenView.rawTrendSeries!.slice(0, limit)
+                      : fullscreenView.rawTrendSeries!;
+                    return (
+                      <div className="w-full h-full">
+                        <TrendRenderer key={`trend-modal-${limit}`} series={limitedSeries} theme={theme} height="100%" />
+                      </div>
+                    );
+                  })()
+                ) : fullscreenView.type === 'trend' && fullscreenView.trendSeries && (
+                  <div className="w-full h-full">
+                    <TrendRenderer key="trend-modal-orig" series={fullscreenView.trendSeries} theme={theme} height="100%" />
+                  </div>
+                )}
+              </div>
+              {fullscreenView.isTopN && fullscreenView.viewId && (
+                <div className="flex items-center justify-center gap-1 px-6 pb-4 pt-3 border-t border-slate-100 dark:border-slate-700/50 shrink-0">
+                  <span className="text-xs text-slate-400 mr-2">{t('dashboard.showTop')}</span>
+                  {[3, 5, 10, 30, 50, 80, 100, 0].map(n => {
+                    const isActive = (topnLimits[fullscreenView.viewId!] || 10) === n;
+                    return (
+                      <button
+                        key={n}
+                        onClick={() => setTopnLimits(prev => ({ ...prev, [fullscreenView.viewId!]: n }))}
+                        className={`px-2 py-0.5 text-xs font-medium rounded transition-all ${
+                          isActive
+                            ? 'bg-sky-500 text-white'
+                            : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
+                        }`}
+                      >
+                        {n === 0 ? t('dashboard.unlimited') : n}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
           </div>
         </div>
+      )}
+
+      {/* ─── Trend Scan Selector Modal ──────────────────────────── */}
+      {scanSelectorView && (
+        <TrendScanSelector
+          open={scanSelectorView.open}
+          projectName={scanSelectorView.projectName}
+          scanMode={scanSelectorView.scanMode}
+          baseCommit={scanSelectorView.baseCommit}
+          initialSelectedScanIds={scanSelectorView.initialSelectedScanIds}
+          onConfirm={(scanIds) => {
+            setTrendCustomScanIds(prev => ({ ...prev, [scanSelectorView.viewId]: scanIds }));
+            setScanSelectorView(null);
+          }}
+          onClose={() => setScanSelectorView(null)}
+        />
       )}
 
     </div>

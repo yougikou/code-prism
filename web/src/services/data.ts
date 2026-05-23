@@ -12,11 +12,41 @@ export interface AggregationResult {
   tags?: Record<string, string>;
 }
 
-
 export interface ViewResponse {
   view_id: string;
   items: AggregationResult[];
 }
+
+// ── Trend types ──
+
+export interface TrendDataPoint {
+  timestamp: number;
+  value: number;
+}
+
+export interface TrendSeries {
+  label: string;
+  metric_key?: string;
+  category?: string;
+  analyzer_id?: string;
+  data: TrendDataPoint[];
+}
+
+export interface TrendResponse {
+  view_id: string;
+  series: TrendSeries[];
+}
+
+export interface FetchTrendOptions {
+  mode?: 'snapshot' | 'diff';
+  limit?: number;
+  baseCommit?: string;
+  scanIds?: number[];
+  techStack?: string;
+  changeType?: string;
+}
+
+// ── End Trend types ──
 
 // View Configuration Types from Backend
 export interface ViewConfig {
@@ -34,9 +64,13 @@ export interface ViewConfig {
     tag_filters?: Record<string, string>;
   };
   params?: {
-    limit: number;
+    limit?: number;
     order?: string;
   };
+  // Trend fields
+  trend?: boolean;
+  trend_limit?: number;
+  trend_mode?: string;
 }
 
 export interface TechStackInfo {
@@ -154,11 +188,43 @@ export async function fetchView(
   }
 }
 
+export async function fetchTrend(
+  projectName: string,
+  viewId: string,
+  options?: FetchTrendOptions
+): Promise<TrendResponse> {
+  try {
+    const params = new URLSearchParams();
+
+    if (options?.scanIds && options.scanIds.length > 0) {
+      params.set('scan_ids', options.scanIds.join(','));
+    } else {
+      params.set('mode', options?.mode || 'snapshot');
+      params.set('limit', String(options?.limit || 20));
+    }
+    if (options?.baseCommit) params.set('base_commit', options.baseCommit);
+    if (options?.techStack) params.set('tech_stack', options.techStack);
+    if (options?.changeType) params.set('change_type', options.changeType);
+
+    const url = `/api/v1/projects/${encodeURIComponent(projectName)}/trends/${viewId}?${params}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch trend ${viewId}: ${res.statusText}`);
+    }
+    return await res.json();
+  } catch (error) {
+    console.warn(`Error fetching trend ${viewId}, falling back to empty`, error);
+    return { view_id: viewId, series: [] };
+  }
+}
+
 export interface Run {
   id: string;
   commit_hash: string;
   scan_time: string;
   scan_mode?: 'SNAPSHOT' | 'DIFF';
+  commit_timestamp?: number;
+  base_commit_hash?: string;
 }
 
 export async function fetchRuns(projectId: number | string, mode: 'SNAPSHOT' | 'DIFF'): Promise<Run[]> {
@@ -173,6 +239,21 @@ export async function fetchRuns(projectId: number | string, mode: 'SNAPSHOT' | '
     console.error("Error fetching runs:", error);
     return [];
   }
+}
+
+export async function fetchAllScans(projectId: number | string): Promise<Run[]> {
+  const [snapshots, diffs] = await Promise.all([
+    fetchRuns(projectId, 'SNAPSHOT'),
+    fetchRuns(projectId, 'DIFF'),
+  ]);
+  // Merge and sort by scan_time descending
+  const all = [...snapshots, ...diffs];
+  all.sort((a, b) => {
+    if (a.scan_time > b.scan_time) return -1;
+    if (a.scan_time < b.scan_time) return 1;
+    return 0;
+  });
+  return all;
 }
 
 export async function fetchConfig(): Promise<AppConfig> {
@@ -255,6 +336,10 @@ export interface AggregationView {
   change_type_mode?: string;
   width?: number;
   func: AggregationFunc;
+  // Trend fields
+  trend?: boolean;
+  trend_limit?: number;
+  trend_mode?: string;
 }
 
 export interface FullProjectConfig {

@@ -215,7 +215,7 @@ impl Scanner {
 
         // 1. Resolve Commit Info (Sync, can be done before channel)
         // We open repo briefly to get metadata
-        let (commit_hash, branch_name) = {
+        let (commit_hash, branch_name, commit_timestamp) = {
             let repo = Repository::open(&repo_path).context("Failed to open git repository")?;
             Scanner::resolve_commit_info(&repo, commit_ref.as_deref())?
         };
@@ -231,7 +231,7 @@ impl Scanner {
             .get_or_create_project(&project_name, &repo_path)
             .await?;
         let scan_id = self
-            .create_scan_record(project_id, &commit_hash, &branch_name, "SNAPSHOT", None)
+            .create_scan_record(project_id, &commit_hash, &branch_name, "SNAPSHOT", None, commit_timestamp)
             .await?;
 
         self.update_progress(5, "Creating scan records").await;
@@ -381,11 +381,11 @@ impl Scanner {
         let target_ref = target_ref.to_string();
         let project_name = project_name.to_string();
 
-        let (target_hash, target_branch, base_hash) = {
+        let (target_hash, target_branch, target_timestamp, base_hash) = {
             let repo = Repository::open(&repo_path).context("Failed to open git repository")?;
-            let (h, b) = Scanner::resolve_commit_info(&repo, Some(&target_ref))?;
-            let (bh, _) = Scanner::resolve_commit_info(&repo, Some(&base_ref))?;
-            (h, b, bh)
+            let (h, b, t) = Scanner::resolve_commit_info(&repo, Some(&target_ref))?;
+            let (bh, _, _) = Scanner::resolve_commit_info(&repo, Some(&base_ref))?;
+            (h, b, t, bh)
         };
 
         println!(
@@ -405,6 +405,7 @@ impl Scanner {
                 &target_branch,
                 "DIFF",
                 Some(&base_hash),
+                target_timestamp,
             )
             .await?;
 
@@ -586,7 +587,7 @@ impl Scanner {
 
     // --- Sync Git Logic (Runs in worker thread) ---
 
-    fn resolve_commit_info(repo: &Repository, ref_name: Option<&str>) -> Result<(String, String)> {
+    fn resolve_commit_info(repo: &Repository, ref_name: Option<&str>) -> Result<(String, String, i64)> {
         let obj = match ref_name {
             Some(r) => repo
                 .revparse_single(r)
@@ -603,6 +604,7 @@ impl Scanner {
         };
         let commit = obj.peel_to_commit()?;
         let hash = commit.id().to_string();
+        let commit_timestamp = commit.time().seconds();
 
         // Try branch name
         let branch = if ref_name.is_none() {
@@ -613,7 +615,7 @@ impl Scanner {
         } else {
             ref_name.unwrap().to_string()
         };
-        Ok((hash, branch))
+        Ok((hash, branch, commit_timestamp))
     }
 
     fn walk_tree_sync(
@@ -854,21 +856,23 @@ impl Scanner {
         branch: &str,
         mode: &str,
         base: Option<&str>,
+        commit_timestamp: i64,
     ) -> Result<i64> {
-        let rec = sqlx::query!(
-            "INSERT INTO scans (project_id, commit_hash, branch_name, scan_mode, base_commit_hash) 
-             VALUES (?, ?, ?, ?, ?) 
+        let rec = sqlx::query_as::<_, (i64,)>(
+            "INSERT INTO scans (project_id, commit_hash, branch_name, scan_mode, base_commit_hash, commit_timestamp)
+             VALUES (?, ?, ?, ?, ?, ?)
              RETURNING id",
-            project_id,
-            commit,
-            branch,
-            mode,
-            base
         )
+        .bind(project_id)
+        .bind(commit)
+        .bind(branch)
+        .bind(mode)
+        .bind(base)
+        .bind(commit_timestamp)
         .fetch_one(self.db.pool())
         .await
         .context("Failed to create scan record")?;
-        Ok(rec.id.expect("ID"))
+        Ok(rec.0)
     }
 
     // record_file_change_with_old removed: merged into save_metrics

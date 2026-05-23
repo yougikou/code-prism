@@ -34,10 +34,13 @@
     "executionErrors": "Execution Errors",
     "noSummary": "No summary data available for this scan",
     "viewRawResults": "View Raw Results",
+    "expand": "Expand",
     "items": "items",
     "analyzerId": "Analyzer",
     "filesAnalyzed": "Files Analyzed",
-    "otherCategory": "Other"
+    "otherCategory": "Other",
+    "showTop": "Show top",
+    "unlimited": "All"
   },
   "table": {
     "label": "Label",
@@ -77,8 +80,8 @@
     "loadingCommits": "Loading commits...",
     "loadMore": "Load more commits",
     "step4Title": "Scan Configuration",
-    "ref1": "Ref 1",
-    "ref2": "Ref 2",
+    "ref1": "Target",
+    "ref2": "Base",
     "target": "target",
     "base": "base",
     "clear": "Clear",
@@ -105,8 +108,8 @@
     "checkoutConfirm": "Are you sure you want to proceed?",
     "cancel": "Cancel",
     "confirmCheckout": "Confirm Checkout",
-    "diffBase": "Base (Ref 2)",
-    "diffTarget": "Target (Ref 1)",
+    "diffBase": "Base",
+    "diffTarget": "Target",
     "diffReversed": "REVERSED",
     "diffChanges": "CHANGES",
     "diffOrderWarningTitle": "Unusual diff order detected",
@@ -206,7 +209,10 @@
       "buckets": "Buckets",
       "width": "Width (Columns)",
       "add": "Add View",
-      "delete": "Delete"
+      "delete": "Delete",
+      "showTrend": "Show Trend",
+      "trendLimit": "Trend Data Points",
+      "trendMode": "Trend Scan Mode"
     },
     "expandAll": "Expand All",
     "collapseAll": "Collapse All"
@@ -229,5 +235,41 @@
     "regexAnalyzers": "regex analyzer(s)",
     "views": "view(s)",
     "deleteConfirm": "Delete template '{{name}}'?"
+  },
+  "common": {
+    "loading": "Loading...",
+    "cancel": "Cancel",
+    "searchPlaceholder": "Search paths...",
+    "caseSensitiveOn": "Case-sensitive: ON",
+    "caseSensitiveOff": "Case-sensitive: OFF",
+    "regexOn": "Regex: ON",
+    "regexOff": "Regex: OFF",
+    "downloadCSV": "Download CSV",
+    "copyCSV": "Copy CSV",
+    "copied": "Copied!",
+    "back": "Back"
+  },
+  "match": {
+    "all": "All",
+    "base": "Base",
+    "target": "Target"
+  },
+  "trend": {
+    "selectScans": "Select Scans for Trend",
+    "all": "All",
+    "snapshots": "Snapshots",
+    "diffs": "Diffs",
+    "snapshot": "Snapshot",
+    "diff": "Diff",
+    "selectAll": "Select All",
+    "clearSelection": "Clear",
+    "selectedCount": "{{count}} selected",
+    "noScans": "No scans available",
+    "showTrend": "Show Trend ({{count}} scans)",
+    "baseCommit": "Base",
+    "viewTrend": "View Trend",
+    "viewCurrent": "View Current",
+    "adjustScans": "Adjust Range",
+    "trendView": "Trend"
   }
 }
