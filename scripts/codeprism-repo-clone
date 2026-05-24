@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Clone a Git repository into the CodePrism server's cache.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/codeprism-common.sh"
+
+check_deps
+
+# --- Argument parsing ---
+flag_server=""
+flag_git_url=""
+flag_project=""
+flag_json=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --server)     shift; flag_server="$1" ;;
+        --git-url)    shift; flag_git_url="$1" ;;
+        --project)    shift; flag_project="$1" ;;
+        --json)       flag_json=true ;;
+        --help|-h)    echo "Usage: codeprism-repo-clone --git-url <url> [--project <name>] [--json] [--server <url>]"; exit 0 ;;
+        *)            echo "Unknown: $1"; exit 1 ;;
+    esac
+    shift
+done
+
+# --- Validation ---
+if [[ -z "$flag_git_url" ]]; then
+    echo "Error: --git-url is required." >&2
+    exit 1
+fi
+
+# --- Build request body ---
+REQUEST_BODY=$(jq -n \
+    --arg git_url "$flag_git_url" \
+    '{
+        git_url: $git_url
+    }')
+if [[ -n "$flag_project" ]]; then
+    REQUEST_BODY=$(echo "$REQUEST_BODY" | jq --arg pn "$flag_project" '. + {project_name: $pn}')
+fi
+
+# --- Execute ---
+RESPONSE=$(api_call "POST" "/api/v1/git/clone" "$REQUEST_BODY")
+
+if [[ "$flag_json" == "true" ]]; then
+    echo "$RESPONSE" | jq '.'
+    exit 0
+fi
+
+# Human-readable output
+REPO_ID=$(echo "$RESPONSE" | jq -r '.repo_id')
+BRANCHES=$(echo "$RESPONSE" | jq -r '.branches | length')
+CURRENT_BRANCH=$(echo "$RESPONSE" | jq -r '.current_branch')
+
+echo "Repository cloned successfully."
+echo "  Repo ID: ${REPO_ID}"
+echo "  Branches: ${BRANCHES} total"
+echo "  Current branch: ${CURRENT_BRANCH}"

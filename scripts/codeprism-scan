@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# Trigger a scan on the CodePrism server via API.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/codeprism-common.sh"
+
+check_deps
+
+# --- Argument parsing ---
+flag_server=""
+flag_repo_id=""
+flag_project=""
+flag_git_url=""
+flag_ref=""
+flag_branch=""
+flag_base_ref=""
+flag_mode="snapshot"
+flag_wait=false
+flag_json=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --server)     shift; flag_server="$1" ;;
+        --repo-id)    shift; flag_repo_id="$1" ;;
+        --project)    shift; flag_project="$1" ;;
+        --git-url)    shift; flag_git_url="$1" ;;
+        --ref)        shift; flag_ref="$1" ;;
+        --branch)     shift; flag_branch="$1" ;;
+        --base-ref)   shift; flag_base_ref="$1" ;;
+        --mode)       shift; flag_mode="$1" ;;
+        --wait)       flag_wait=true ;;
+        --json)       flag_json=true ;;
+        --help|-h)
+            echo "Usage: codeprism-scan (--repo-id <uuid> | --project <name> | --git-url <url>) [options]"
+            echo ""
+            echo "Required (choose one):"
+            echo "  --repo-id <uuid>      Cached repository ID"
+            echo "  --project <name>      Project name (resolves to repo-id)"
+            echo "  --git-url <url>       Clone a fresh repository"
+            echo ""
+            echo "Options:"
+            echo "  --ref <commit>        Target commit (default: latest on current branch)"
+            echo "  --branch <name>       Branch name (default: current checked-out branch)"
+            echo "  --base-ref <commit>   Base commit for diff mode (required for diff)"
+            echo "  --mode <mode>         Scan mode: snapshot (default) or diff"
+            echo "  --wait                Wait for scan to complete"
+            echo "  --json                Output raw JSON"
+            echo "  --server <url>        Server URL (default: http://localhost:3000)"
+            exit 0
+            ;;
+        *)            echo "Unknown: $1"; exit 1 ;;
+    esac
+    shift
+done
+
+# --- Determine mode: cached repo vs fresh clone ---
+CACHED_REPO=false
+if [[ -n "$flag_repo_id" ]]; then
+    CACHED_REPO=true
+elif [[ -n "$flag_project" ]]; then
+    CACHED_REPO=true
+    # Resolve project name to repo_id
+    flag_repo_id=$(resolve_project_to_repo_id "$flag_project")
+elif [[ -z "$flag_git_url" ]]; then
+    echo "Error: One of --repo-id, --project, or --git-url is required." >&2
+    exit 1
+fi
+
+# --- Validation ---
+if [[ "$flag_mode" != "snapshot" && "$flag_mode" != "diff" ]]; then
+    echo "Error: --mode must be 'snapshot' or 'diff'" >&2
+    exit 1
+fi
+
+if [[ "$CACHED_REPO" == "false" && "$flag_mode" == "diff" && -z "$flag_base_ref" ]]; then
+    echo "Error: --base-ref is required for diff mode." >&2
+    exit 1
+fi
+
+if [[ "$CACHED_REPO" == "true" && "$flag_mode" == "diff" && -z "$flag_base_ref" ]]; then
+    echo "Error: --base-ref is required for diff mode." >&2
+    exit 1
+fi
+
+# --- Resolve defaults for cached repo mode ---
+if [[ "$CACHED_REPO" == "true" ]]; then
+    # Resolve branch
+    if [[ -z "$flag_branch" ]]; then
+        flag_branch=$(get_current_branch "$flag_repo_id")
+        if [[ -z "$flag_branch" ]]; then
+            echo "Error: Could not determine current branch for repo ${flag_repo_id}." >&2
+            exit 1
+        fi
+    fi
+    # Resolve ref (latest commit) if not specified
+    if [[ -z "$flag_ref" ]]; then
+        flag_ref=$(get_latest_commit "$flag_repo_id" "$flag_branch")
+        if [[ -z "$flag_ref" ]]; then
+            echo "Error: Could not determine latest commit for branch '${flag_branch}'." >&2
+            exit 1
+        fi
+    fi
+fi
+
+# --- Build request body ---
+if [[ "$CACHED_REPO" == "true" ]]; then
+    REQUEST_BODY=$(jq -n \
+        --arg repo_id "$flag_repo_id" \
+        --arg ref1 "$flag_ref" \
+        --arg scan_mode "$flag_mode" \
+        --arg project "$flag_project" \
+        '{
+            git_url: "",
+            repo_id: $repo_id,
+            ref_1: $ref1,
+            scan_mode: $scan_mode,
+            project_name: $project
+        }')
+    if [[ -n "$flag_base_ref" ]]; then
+        REQUEST_BODY=$(echo "$REQUEST_BODY" | jq --arg ref2 "$flag_base_ref" '. + {ref_2: $ref2}')
+    fi
+else
+    # Fresh clone mode
+    REQUEST_BODY=$(jq -n \
+        --arg git_url "$flag_git_url" \
+        --arg scan_mode "$flag_mode" \
+        '{
+            git_url: $git_url,
+            scan_mode: $scan_mode
+        }')
+    if [[ -n "$flag_project" ]]; then
+        REQUEST_BODY=$(echo "$REQUEST_BODY" | jq --arg pn "$flag_project" '. + {project_name: $pn}')
+    fi
+    if [[ -n "$flag_ref" ]]; then
+        REQUEST_BODY=$(echo "$REQUEST_BODY" | jq --arg c "$flag_ref" '. + {commit: $c}')
+    fi
+    if [[ -n "$flag_base_ref" ]]; then
+        REQUEST_BODY=$(echo "$REQUEST_BODY" | jq --arg bc "$flag_base_ref" '. + {base_commit: $bc}')
+    fi
+    if [[ -n "$flag_branch" ]]; then
+        REQUEST_BODY=$(echo "$REQUEST_BODY" | jq --arg b "$flag_branch" '. + {branch: $b}')
+    fi
+fi
+
+# --- Execute scan ---
+RESPONSE=$(api_call "POST" "/api/v1/scan" "$REQUEST_BODY")
+
+JOB_ID=$(echo "$RESPONSE" | jq -r '.job_id')
+echo "Scan started. Job ID: ${JOB_ID}" >&2
+
+if [[ "$flag_wait" == "true" ]]; then
+    echo >&2
+    FINAL_RESPONSE=$(poll_job "$JOB_ID") || {
+        EXIT_CODE=$?
+        if [[ -n "${FINAL_RESPONSE:-}" ]]; then
+            format_output "$FINAL_RESPONSE" "$flag_json"
+        fi
+        exit $EXIT_CODE
+    }
+    format_output "$FINAL_RESPONSE" "$flag_json"
+else
+    format_output "$RESPONSE" "$flag_json"
+fi

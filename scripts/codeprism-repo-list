@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# List all cached Git repositories from the CodePrism server.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/codeprism-common.sh"
+
+check_deps
+
+# --- Argument parsing ---
+flag_server=""
+flag_json=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --server)  shift; flag_server="$1" ;;
+        --json)    flag_json=true ;;
+        --help|-h) echo "Usage: codeprism-repo-list [--json] [--server <url>]"; exit 0 ;;
+        *)         echo "Unknown: $1"; exit 1 ;;
+    esac
+    shift
+done
+
+# --- Execute ---
+RESPONSE=$(api_call "GET" "/api/v1/git/repos")
+
+if [[ "$flag_json" == "true" ]]; then
+    echo "$RESPONSE" | jq '.'
+    exit 0
+fi
+
+# Human-readable output
+REPO_COUNT=$(echo "$RESPONSE" | jq -r '.repos | length')
+if [[ "$REPO_COUNT" -eq 0 ]]; then
+    echo "No cached repositories."
+    exit 0
+fi
+
+echo "Cached Repositories:"
+printf "  %-36s | %-20s | %-22s | %s\n" "Repo ID" "Project" "Branch" "Path"
+printf "  %s\n" "$(printf '%.0s-' {1..36}) | $(printf '%.0s-' {1..20}) | $(printf '%.0s-' {1..22}) | $(printf '%.0s-' {1..30})"
+
+echo "$RESPONSE" | jq -c '.repos[]' | while read -r repo; do
+    id=$(echo "$repo" | jq -r '.repo_id')
+    project=$(echo "$repo" | jq -r '.project_name // "-"')
+    branch=$(echo "$repo" | jq -r '.current_branch // "-"')
+    path=$(echo "$repo" | jq -r '.path')
+    printf "  %-36s | %-20s | %-22s | %s\n" "$id" "$project" "$branch" "$path"
+done

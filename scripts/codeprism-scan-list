@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# List completed scans for a project from the CodePrism server.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/codeprism-common.sh"
+
+check_deps
+
+# --- Argument parsing ---
+flag_server=""
+flag_project=""
+flag_mode=""
+flag_json=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --server)     shift; flag_server="$1" ;;
+        --project)    shift; flag_project="$1" ;;
+        --mode)       shift; flag_mode="$1" ;;
+        --json)       flag_json=true ;;
+        --help|-h)    echo "Usage: codeprism-scan-list --project <name> [--mode snapshot|diff] [--json] [--server <url>]"; exit 0 ;;
+        *)            echo "Unknown: $1"; exit 1 ;;
+    esac
+    shift
+done
+
+# --- Validation ---
+if [[ -z "$flag_project" ]]; then
+    echo "Error: --project is required." >&2
+    exit 1
+fi
+if [[ -n "$flag_mode" && "$flag_mode" != "snapshot" && "$flag_mode" != "diff" ]]; then
+    echo "Error: --mode must be 'snapshot' or 'diff'" >&2
+    exit 1
+fi
+
+# --- Build query ---
+ENDPOINT="/api/v1/projects/${flag_project}/scans"
+if [[ -n "$flag_mode" ]]; then
+    ENDPOINT="${ENDPOINT}?mode=${flag_mode^^}"
+fi
+
+# --- Execute ---
+RESPONSE=$(api_call "GET" "$ENDPOINT")
+
+if [[ "$flag_json" == "true" ]]; then
+    echo "$RESPONSE" | jq '.'
+    exit 0
+fi
+
+# Human-readable output
+SCAN_COUNT=$(echo "$RESPONSE" | jq -r 'length // 0')
+if [[ "$SCAN_COUNT" -eq 0 ]]; then
+    echo "No scans found for project '${flag_project}'."
+    exit 0
+fi
+
+echo "Scans for project \"${flag_project}\":"
+printf "  %-6s | %-40s | %s\n" "ID" "Commit" "Time"
+printf "  %s\n" "$(printf '%.0s-' {1..6}) | $(printf '%.0s-' {1..40}) | $(printf '%.0s-' {1..24})"
+
+echo "$RESPONSE" | jq -c '.[]' | while read -r scan; do
+    id=$(echo "$scan" | jq -r '.id')
+    commit=$(echo "$scan" | jq -r '.commit_hash // ""' | head -c 12)
+    time=$(echo "$scan" | jq -r '.scan_time // ""')
+    printf "  %-6s | %-40s | %s\n" "$id" "${commit}..." "$time"
+done
