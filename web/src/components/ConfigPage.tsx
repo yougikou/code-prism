@@ -1139,7 +1139,7 @@ function ViewsEditor({ config, onChange }: {
             </CardHeader>
           </button>
           <div className={`grid transition-all duration-200 ease-in-out ${expandedViews.has(id) ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
-            <div className="overflow-hidden min-h-0"><CardContent className="space-y-3">
+            <div className={`${expandedViews.has(id) ? '' : 'overflow-hidden'} min-h-0`}><CardContent className="space-y-3">
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.views.viewTitle')}</label>
