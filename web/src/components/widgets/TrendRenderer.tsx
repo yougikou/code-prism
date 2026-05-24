@@ -1,3 +1,4 @@
+import React from 'react';
 import ChartRenderer from '../ChartRenderer';
 import type { TrendSeries } from '../../services/data';
 
@@ -5,11 +6,13 @@ interface TrendRendererProps {
   series: TrendSeries[];
   theme?: 'light' | 'dark';
   height?: string;
+  xAxisMin?: number;
+  xAxisMax?: number;
 }
 
 const CHART_COLORS = ['#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#14b8a6'];
 
-const TrendRenderer = ({ series, theme = 'dark', height = '300px' }: TrendRendererProps) => {
+const TrendRenderer = React.memo(({ series, theme = 'dark', height = '300px', xAxisMin, xAxisMax }: TrendRendererProps) => {
   const textColor = theme === 'dark' ? '#94a3b8' : '#64748b';
   const splitLineColor = theme === 'dark' ? '#334155' : '#e2e8f0';
 
@@ -38,6 +41,8 @@ const TrendRenderer = ({ series, theme = 'dark', height = '300px' }: TrendRender
       type: 'time' as const,
       splitLine: { show: true, lineStyle: { color: splitLineColor } },
       axisLabel: { color: textColor },
+      ...(xAxisMin !== undefined ? { min: xAxisMin } : {}),
+      ...(xAxisMax !== undefined ? { max: xAxisMax } : {}),
     },
     yAxis: {
       type: 'value' as const,
@@ -67,11 +72,10 @@ const TrendRenderer = ({ series, theme = 'dark', height = '300px' }: TrendRender
     },
     dataZoom: [
       { type: 'inside' as const, start: 0, end: 100 },
-      { type: 'slider' as const, show: series.length > 0, bottom: 6, height: 16, borderColor: splitLineColor },
     ],
   };
 
   return <ChartRenderer options={options} height={height} theme={theme} />;
-};
+});
 
 export default TrendRenderer;

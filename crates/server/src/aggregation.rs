@@ -1036,6 +1036,8 @@ impl TrendAggregator {
         limit: u32,
         base_commit: Option<&str>,
         scan_ids: Option<&[i64]>,
+        from: Option<i64>,
+        to: Option<i64>,
         view_filters: &ViewFilters,
     ) -> Result<TrendResponse> {
         // 1. Query scans ordered by commit_timestamp
@@ -1059,6 +1061,59 @@ impl TrendAggregator {
                 sql_query = sql_query.bind(id);
             }
             sql_query.fetch_all(pool).await?
+        } else if let (Some(from_ts), Some(to_ts)) = (from, to) {
+            // Time-range based: query scans within [from, to] plus one baseline scan before `from`
+            let mut base_condition = String::new();
+            if base_commit.is_some() {
+                base_condition.push_str(" AND s.base_commit_hash = ?");
+            }
+
+            // Main range query
+            let mut range_query = String::from(
+                "SELECT s.id, s.commit_timestamp FROM scans s
+                 JOIN projects p ON s.project_id = p.id
+                 WHERE p.name = ? AND s.scan_mode = ?
+                   AND s.commit_timestamp >= ? AND s.commit_timestamp <= ?
+                   AND s.commit_timestamp IS NOT NULL"
+            );
+            range_query.push_str(&base_condition);
+            range_query.push_str(" ORDER BY s.commit_timestamp ASC");
+
+            let mut sql_query = sqlx::query_as::<_, (i64, i64)>(&range_query)
+                .bind(project_name)
+                .bind(mode)
+                .bind(from_ts)
+                .bind(to_ts);
+            if let Some(base) = base_commit {
+                sql_query = sql_query.bind(base);
+            }
+            let mut scans = sql_query.fetch_all(pool).await?;
+
+            // Baseline: one scan immediately before `from`
+            let mut baseline_query = String::from(
+                "SELECT s.id, s.commit_timestamp FROM scans s
+                 JOIN projects p ON s.project_id = p.id
+                 WHERE p.name = ? AND s.scan_mode = ?
+                   AND s.commit_timestamp < ? AND s.commit_timestamp IS NOT NULL"
+            );
+            baseline_query.push_str(&base_condition);
+            baseline_query.push_str(" ORDER BY s.commit_timestamp DESC LIMIT 1");
+
+            let mut baseline_sql = sqlx::query_as::<_, (i64, i64)>(&baseline_query)
+                .bind(project_name)
+                .bind(mode)
+                .bind(from_ts);
+            if let Some(base) = base_commit {
+                baseline_sql = baseline_sql.bind(base);
+            }
+            if let Some(baseline) = baseline_sql.fetch_optional(pool).await? {
+                // Insert baseline at front, skip if already present (edge case)
+                if !scans.iter().any(|s| s.0 == baseline.0) {
+                    scans.insert(0, baseline);
+                }
+            }
+
+            scans
         } else {
             let mut scan_query = String::from(
                 "SELECT s.id, s.commit_timestamp FROM scans s

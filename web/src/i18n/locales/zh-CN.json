@@ -283,6 +283,7 @@
   },
   "trend": {
     "selectScans": "选择扫描记录",
+    "timeRange": "时间范围",
     "all": "全部",
     "snapshots": "快照",
     "diffs": "差分",

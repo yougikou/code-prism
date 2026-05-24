@@ -6,6 +6,7 @@ interface Run {
   id: string;
   hash: string;
   date: string;
+  commit_timestamp?: number;
   message?: string;
 }
 
@@ -86,7 +87,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div
             key={run.id}
             onClick={() => onRunSelect(run.id)}
-            title={isCollapsed ? `${run.hash} - ${run.date}` : undefined}
+            title={isCollapsed ? `${run.hash} - ${run.commit_timestamp ? new Date(run.commit_timestamp * 1000).toLocaleString() : run.date}` : undefined}
             className={`
               rounded-lg cursor-pointer border transition-all duration-200 group
               ${selectedRunId === run.id
@@ -100,6 +101,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {!isCollapsed && (
                 <span className={`font-mono font-semibold truncate ${selectedRunId === run.id ? 'text-sky-900 dark:text-sky-100' : 'text-slate-600 dark:text-slate-300'}`}>
                   {run.hash}
+                </span>
+              )}
+              {!isCollapsed && run.commit_timestamp && (
+                <span className="text-xs text-slate-400 dark:text-slate-500 ml-auto shrink-0">
+                  {new Date(run.commit_timestamp * 1000).toLocaleDateString()}
                 </span>
               )}
             </div>

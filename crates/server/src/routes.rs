@@ -912,6 +912,8 @@ pub struct TrendQuery {
     pub limit: u32,
     pub base_commit: Option<String>,
     pub scan_ids: Option<String>,
+    pub from: Option<i64>,
+    pub to: Option<i64>,
     pub tech_stack: Option<String>,
     pub category: Option<String>,
     pub metric_key: Option<String>,
@@ -992,6 +994,8 @@ pub async fn get_trend(
         limit,
         query.base_commit.as_deref(),
         parsed_scan_ids.as_deref(),
+        query.from,
+        query.to,
         &view_filters,
     )
     .await

@@ -283,6 +283,7 @@
   },
   "trend": {
     "selectScans": "トレンド用スキャンを選択",
+    "timeRange": "期間",
     "all": "すべて",
     "snapshots": "スナップショット",
     "diffs": "差分",

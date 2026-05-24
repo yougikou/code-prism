@@ -15,7 +15,19 @@ import { TrendScanSelector } from './dashboard/TrendScanSelector';
 import { ChartSkeleton } from '@/components/ui/skeleton';
 import { BarChart3, FileText, Maximize2, Minimize2, SlidersHorizontal, TrendingUp } from 'lucide-react';
 
+const TIME_RANGE_PRESETS: Record<string, number> = {
+  '1m': 30,
+  '2m': 60,
+  '3m': 90,
+  '6m': 180,
+  '9m': 270,
+  '12m': 365,
+  '2y': 730,
+  '3y': 1095,
+  '5y': 1825,
+};
 
+const TIME_RANGE_KEYS = ['1m', '2m', '3m', '6m', '9m', '12m', '2y', '3y', '5y'] as const;
 
 const Dashboard = () => {
   const { t } = useTranslation();
@@ -46,6 +58,8 @@ const Dashboard = () => {
   // Ad-hoc trend mode: each view can be toggled to show trend instead of normal chart: each view can be toggled to show trend instead of normal chart
   const [trendActive, setTrendActive] = useState<Record<string, boolean>>({});
   const [trendCustomScanIds, setTrendCustomScanIds] = useState<Record<string, number[]>>({});
+  // Trend time range preset state
+  const [trendTimeRange, setTrendTimeRange] = useState<string>('3m');
   // TopN limit selector state
   const [topnLimits, setTopnLimits] = useState<Record<string, number>>({});
   const [trendLoadingMap, setTrendLoadingMap] = useState<Record<string, boolean>>({});
@@ -207,6 +221,7 @@ const Dashboard = () => {
         hash: r.commit_hash.substring(0, 7),
         date: r.scan_time,
         scan_mode: r.scan_mode,
+        commit_timestamp: r.commit_timestamp,
         base_commit_hash: r.base_commit_hash,
       })));
 
@@ -301,6 +316,9 @@ const Dashboard = () => {
     return () => { isActive = false; };
   }, [currentProject, selectedRunId]);
 
+  // Track per-view trend fetch params to avoid re-fetching unchanged views
+  const prevTrendParamsRef = useRef<Record<string, string>>({});
+
   // Fetch Trend Data for all views in trend mode
   useEffect(() => {
     const activeTrendViewIds = Object.entries(trendActive)
@@ -318,6 +336,21 @@ const Dashboard = () => {
         const view = [...activeViews, ...trendViews].find(v => v.id === viewId);
         if (!view) continue;
 
+        // Compute effective params for this view to detect real changes
+        const paramStr = [
+          currentProject,
+          viewMode,
+          selectedRunId,
+          selectedTechStack,
+          trendTimeRange,
+          changeTypeFilters[viewId] || '',
+          trendCustomScanIds[viewId]?.join(',') || '',
+        ].join('::');
+
+        if (prevTrendParamsRef.current[viewId] === paramStr) {
+          continue; // Skip fetch — this view's params haven't changed
+        }
+
         setTrendLoadingMap(prev => ({ ...prev, [viewId]: true }));
 
         try {
@@ -325,19 +358,45 @@ const Dashboard = () => {
           if (trendCustomScanIds[viewId] && trendCustomScanIds[viewId].length > 0) {
             options.scanIds = trendCustomScanIds[viewId];
           } else {
-            // Auto-select: snapshot -> all SNAPSHOT scans; diff -> same-base diffs
+            // Time-range based auto-selection: fetch scans and filter by time
+            const now = Math.floor(Date.now() / 1000);
+            const days = TIME_RANGE_PRESETS[trendTimeRange] || 90;
+            const fromTs = now - days * 86400;
+
             const { fetchRuns } = await import('@/services/data');
-            const currentRun = runs.find(r => r.id === selectedRunId);
-            if (viewMode === 'snapshot') {
-              const snapshots = await fetchRuns(currentProject, 'SNAPSHOT');
-              options.scanIds = snapshots.map(s => Number(s.id));
-            } else {
-              const baseCommit = currentRun?.base_commit_hash;
-              if (baseCommit) {
-                const diffs = await fetchRuns(currentProject, 'DIFF');
-                options.scanIds = diffs
-                  .filter(s => s.base_commit_hash === baseCommit)
-                  .map(s => Number(s.id));
+            const scanMode = viewMode === 'snapshot' ? 'SNAPSHOT' : 'DIFF';
+            const allScans = await fetchRuns(currentProject, scanMode);
+
+            // Filter scans within the time range
+            const rangeScans = allScans.filter(s => {
+              const ts = s.commit_timestamp || 0;
+              return ts >= fromTs && ts <= now;
+            });
+
+            // Baseline: scan immediately before fromTs
+            const beforeScans = allScans.filter(s => {
+              const ts = s.commit_timestamp || 0;
+              return ts < fromTs;
+            });
+            beforeScans.sort((a, b) => (b.commit_timestamp || 0) - (a.commit_timestamp || 0));
+
+            const scanIds = rangeScans.map(s => Number(s.id));
+            if (beforeScans.length > 0) {
+              const baselineId = Number(beforeScans[0].id);
+              if (!scanIds.includes(baselineId)) {
+                scanIds.unshift(baselineId);
+              }
+            }
+
+            if (scanIds.length > 0) {
+              options.scanIds = scanIds;
+            }
+
+            // For diff mode, also filter by base commit
+            if (viewMode === 'diff') {
+              const currentRun = runs.find(r => r.id === selectedRunId);
+              if (currentRun?.base_commit_hash) {
+                options.baseCommit = currentRun.base_commit_hash;
               }
             }
           }
@@ -352,6 +411,7 @@ const Dashboard = () => {
           const result = await fetchTrend(currentProject, viewId, options);
           if (!isActive) return;
           newMap[viewId] = result.series;
+          prevTrendParamsRef.current[viewId] = paramStr; // Record successful fetch params
         } catch (e) {
           console.error(`Error fetching trend for ${viewId}:`, e);
         } finally {
@@ -365,7 +425,7 @@ const Dashboard = () => {
     loadTrends();
 
     return () => { isActive = false; };
-  }, [currentProject, viewMode, selectedRunId, trendActive, trendCustomScanIds, activeViews, trendViews, runs, changeTypeFilters]);
+  }, [currentProject, viewMode, selectedRunId, trendActive, trendCustomScanIds, activeViews, trendViews, runs, changeTypeFilters, trendTimeRange]);
 
   // Track previous change_type filters using ref to avoid re-render cycles
   const prevChangeTypeFilters = useRef<Record<string, string>>({});
@@ -965,6 +1025,21 @@ const Dashboard = () => {
                   ? rawTrendSeries.slice(0, trendLimit)
                   : rawTrendSeries;
 
+                // Compute fixed x-axis bounds for trend chart, extending to cover earliest data
+                const nowMs = Date.now();
+                const trendDays = TIME_RANGE_PRESETS[trendTimeRange] || 90;
+                let trendXAxisMin = nowMs - trendDays * 86400 * 1000;
+                const trendXAxisMax = nowMs;
+                if (displayedTrendSeries.length > 0) {
+                  const allTs = displayedTrendSeries.flatMap(s => s.data.map(d => d.timestamp * 1000));
+                  if (allTs.length > 0) {
+                    const earliest = Math.min(...allTs);
+                    if (earliest < trendXAxisMin) {
+                      trendXAxisMin = earliest;
+                    }
+                  }
+                }
+
                 // Determine Chart Type
                 let content;
                 const chartType = view.chart_type || (view.type === 'top_n' ? 'bar_row' : 'card');
@@ -1230,11 +1305,38 @@ const Dashboard = () => {
                                 <p className="text-sm">{t('dashboard.noData') || 'No trend data available'}</p>
                               </div>
                             ) : (
-                              <TrendRenderer key={`trend-${trendLimit}`} series={displayedTrendSeries} theme={theme} />
+                              <TrendRenderer series={displayedTrendSeries} theme={theme}
+                                xAxisMin={trendXAxisMin} xAxisMax={trendXAxisMax} />
                             )}
                           </div>
                         </div>
                       </div>
+                      {/* Time range preset buttons for trend charts */}
+                      {trendActive[view.id] && (
+                        <div className="flex items-center justify-center gap-1 mt-3 pt-3 border-t border-slate-100 dark:border-slate-700/50">
+                          <span className="text-xs text-slate-400 mr-2">{t('trend.timeRange')}</span>
+                          {TIME_RANGE_KEYS.map(range => {
+                            const isActive = trendTimeRange === range;
+                            return (
+                              <button
+                                key={range}
+                                onClick={() => {
+                                  setTrendTimeRange(range);
+                                  // Clear manual scan IDs to switch to auto time-range mode
+                                  setTrendCustomScanIds(prev => ({ ...prev, [view.id]: [] }));
+                                }}
+                                className={`px-2 py-0.5 text-xs font-medium rounded transition-all ${
+                                  isActive
+                                    ? 'bg-sky-500 text-white'
+                                    : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
+                                }`}
+                              >
+                                {range}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                       {/* Limit selector for TopN charts */}
                       {view.type === 'top_n' && (
                         <div className="flex items-center justify-center gap-1 mt-3 pt-3 border-t border-slate-100 dark:border-slate-700/50">
@@ -1489,18 +1591,56 @@ const Dashboard = () => {
                     const limitedSeries = limit > 0 && fullscreenView.rawTrendSeries!.length > limit
                       ? fullscreenView.rawTrendSeries!.slice(0, limit)
                       : fullscreenView.rawTrendSeries!;
+                    const fsNowMs = Date.now();
+                    const fsDays = TIME_RANGE_PRESETS[trendTimeRange] || 90;
+                    let fsXMin = fsNowMs - fsDays * 86400 * 1000;
+                    const allTs = limitedSeries.flatMap(s => s.data.map(d => d.timestamp * 1000));
+                    if (allTs.length > 0) fsXMin = Math.min(fsXMin, Math.min(...allTs));
                     return (
                       <div className="w-full h-full">
-                        <TrendRenderer key={`trend-modal-${limit}`} series={limitedSeries} theme={theme} height="100%" />
+                        <TrendRenderer key={`trend-modal-${limit}`} series={limitedSeries} theme={theme} height="100%"
+                          xAxisMin={fsXMin} xAxisMax={fsNowMs} />
                       </div>
                     );
                   })()
                 ) : fullscreenView.type === 'trend' && fullscreenView.trendSeries && (
-                  <div className="w-full h-full">
-                    <TrendRenderer key="trend-modal-orig" series={fullscreenView.trendSeries} theme={theme} height="100%" />
-                  </div>
+                  (() => {
+                    const fsNowMs = Date.now();
+                    const fsDays = TIME_RANGE_PRESETS[trendTimeRange] || 90;
+                    let fsXMin = fsNowMs - fsDays * 86400 * 1000;
+                    const allTs = fullscreenView.trendSeries!.flatMap(s => s.data.map(d => d.timestamp * 1000));
+                    if (allTs.length > 0) fsXMin = Math.min(fsXMin, Math.min(...allTs));
+                    return (
+                      <div className="w-full h-full">
+                        <TrendRenderer key="trend-modal-orig" series={fullscreenView.trendSeries} theme={theme} height="100%"
+                          xAxisMin={fsXMin} xAxisMax={fsNowMs} />
+                      </div>
+                    );
+                  })()
                 )}
               </div>
+              {/* Time range presets in fullscreen trend view */}
+              {fullscreenView.type === 'trend' && (
+                <div className="flex items-center justify-center gap-1 px-6 pb-2 pt-2 border-t border-slate-100 dark:border-slate-700/50 shrink-0">
+                  <span className="text-xs text-slate-400 mr-2">{t('trend.timeRange')}</span>
+                  {TIME_RANGE_KEYS.map(range => {
+                    const isActive = trendTimeRange === range;
+                    return (
+                      <button
+                        key={range}
+                        onClick={() => setTrendTimeRange(range)}
+                        className={`px-2 py-0.5 text-xs font-medium rounded transition-all ${
+                          isActive
+                            ? 'bg-sky-500 text-white'
+                            : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
+                        }`}
+                      >
+                        {range}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               {fullscreenView.isTopN && fullscreenView.viewId && (
                 <div className="flex items-center justify-center gap-1 px-6 pb-4 pt-3 border-t border-slate-100 dark:border-slate-700/50 shrink-0">
                   <span className="text-xs text-slate-400 mr-2">{t('dashboard.showTop')}</span>

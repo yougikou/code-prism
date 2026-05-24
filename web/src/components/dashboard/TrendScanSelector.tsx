@@ -169,7 +169,11 @@ export function TrendScanSelector({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-mono text-slate-400">{scan.commit_hash?.substring(0, 8)}</span>
-                    <span className="text-xs text-slate-400">{formatDate(scan.scan_time)}</span>
+                    <span className="text-xs text-slate-400">
+                      {scan.commit_timestamp
+                        ? new Date(scan.commit_timestamp * 1000).toLocaleDateString()
+                        : formatDate(scan.scan_time)}
+                    </span>
                     {mode === 'DIFF' && (
                       <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400">
                         {t('trend.diff')}

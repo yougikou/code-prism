@@ -283,6 +283,7 @@
   },
   "trend": {
     "selectScans": "Select Scans for Trend",
+    "timeRange": "Time Range",
     "all": "All",
     "snapshots": "Snapshots",
     "diffs": "Diffs",
