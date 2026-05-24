@@ -383,7 +383,6 @@ func:
 |------------|------|---------|------|
 | `trend` | boolean | `false` | トレンドチャートモードを有効化 |
 | `trend_limit` | integer | `30` | トレンドに含める最近のスキャン数 |
-| `trend_mode` | string | ビューのモード | `"snapshot"` または `"diff"` — トレンドデータのスキャンモード |
 
 **仕組み：**
 
@@ -403,7 +402,6 @@ aggregation_views:
     width: 2
     trend: true
     trend_limit: 30
-    trend_mode: snapshot
     func:
       type: sum
       analyzer_id: [file_count]

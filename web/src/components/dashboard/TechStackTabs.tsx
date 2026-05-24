@@ -110,12 +110,30 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ techStacks, select
   const isSelected = (stackName: string) => selectedStack === stackName;
   const isCategoryActive = (category: string) => selectedCategory === category;
 
+  // Build a lookup for selected stack's category display
+  const selectedStackCategory = useMemo(() => {
+    if (selectedStack === 'Summary') return null;
+    const ts = techStacks.find(s => s.name === selectedStack);
+    return ts?.category || null;
+  }, [selectedStack, techStacks]);
+
   return (
-    <div className="mb-8 border-b border-slate-200 dark:border-slate-700">
+    <div className="mb-3 border-b border-slate-200 dark:border-slate-700">
       <style>{`
         .tech-stack-scroll::-webkit-scrollbar { display: none; }
         .tech-stack-scroll { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
+
+      {/* Category indicator — fixed min-height to prevent layout shift */}
+      <div className="min-h-[1.25rem] flex items-center">
+        {selectedStack !== 'Summary' && selectedStackCategory ? (
+          <span className="text-xs text-slate-400 dark:text-slate-500">
+            <span className="font-medium text-slate-600 dark:text-slate-300">{selectedStackCategory}</span>
+            <span className="mx-1 text-slate-300 dark:text-slate-600">&gt;</span>
+            <span>{selectedStack}</span>
+          </span>
+        ) : null}
+      </div>
 
       <div className="flex items-center">
         {canScrollLeft && (
@@ -150,7 +168,7 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ techStacks, select
             )}
           </button>
 
-          {/* Category buttons (dropdown rendered outside overflow container) */}
+          {/* Category dropdown buttons */}
           {groups.map(([category]) => {
             const displayName = category === '\0other' ? t('dashboard.otherCategory') : category;
             const isActive = isCategoryActive(category);
@@ -195,7 +213,7 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ techStacks, select
         )}
       </div>
 
-      {/* Dropdown rendered outside overflow-x-auto container to avoid CSS clipping */}
+      {/* Dropdown rendered outside overflow container to avoid CSS clipping */}
       {openCategory && (() => {
         const stacks = groups.find(([cat]) => cat === openCategory)?.[1];
         const btn = categoryBtnRefs.current.get(openCategory);

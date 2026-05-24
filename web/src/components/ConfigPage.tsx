@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useApp } from '@/contexts/AppContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useToast } from '@/components/ui/toast'
 import {
   fetchFullProjectConfig,
   updateProjectConfig,
@@ -126,21 +127,23 @@ function TagInput({ tags, onChange, placeholder, suggestions, allowCustom = true
 
 // ─── Select Input ───────────────────────────────────────────────────────────
 
-function SelectInput({ value, onChange, options, label }: {
+function SelectInput({ value, onChange, options, label, t }: {
   value: string;
   onChange: (v: string) => void;
   options: { value: string; label: string }[];
   label?: string;
+  t?: (s: string) => string;
 }) {
+  const _t = t || ((s: string) => s)
   return (
     <select
       value={value}
       onChange={e => onChange(e.target.value)}
       className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
     >
-      {label && <option value="" disabled>{label}</option>}
+      {label && <option value="" disabled>{_t(label)}</option>}
       {options.map(o => (
-        <option key={o.value} value={o.value}>{o.label}</option>
+        <option key={o.value} value={o.value}>{_t(o.label)}</option>
       ))}
     </select>
   )
@@ -154,6 +157,7 @@ function TechStacksEditor({ config, onChange }: {
 }) {
   const { t } = useTranslation()
   const [expandedStacks, setExpandedStacks] = useState<Set<number>>(new Set())
+  const [stackRenameInput, setStackRenameInput] = useState<Record<number, string>>({})
 
   const toggleStack = (index: number) => {
     setExpandedStacks(prev => {
@@ -223,6 +227,55 @@ function TechStacksEditor({ config, onChange }: {
     })
   }
 
+  // ── Drag-to-reorder and keyboard reorder for tech stacks ──
+  const [dragStackIndex, setDragStackIndex] = useState<number | null>(null)
+  const [dragOverStackIndex, setDragOverStackIndex] = useState<number | null>(null)
+
+  const handleStackDragStart = (index: number) => {
+    setDragStackIndex(index)
+  }
+
+  const handleStackDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setDragOverStackIndex(index)
+  }
+
+  const handleStackDragLeave = () => {
+    setDragOverStackIndex(null)
+  }
+
+  const handleStackDrop = (index: number) => {
+    if (dragStackIndex === null || dragStackIndex === index) return
+    const stacks = [...config.tech_stacks]
+    const [moved] = stacks.splice(dragStackIndex, 1)
+    stacks.splice(index, 0, moved)
+    onChange({ ...config, tech_stacks: stacks })
+    setDragStackIndex(null)
+    setDragOverStackIndex(null)
+  }
+
+  const handleStackDragEnd = () => {
+    setDragStackIndex(null)
+    setDragOverStackIndex(null)
+  }
+
+  const handleStackKeyDown = (e: React.KeyboardEvent, index: number) => {
+    if (!e.altKey) return
+    if (e.key === 'ArrowUp' && index > 0) {
+      e.preventDefault()
+      const stacks = [...config.tech_stacks]
+      ;[stacks[index - 1], stacks[index]] = [stacks[index], stacks[index - 1]]
+      onChange({ ...config, tech_stacks: stacks })
+    }
+    if (e.key === 'ArrowDown' && index < config.tech_stacks.length - 1) {
+      e.preventDefault()
+      const stacks = [...config.tech_stacks]
+      ;[stacks[index], stacks[index + 1]] = [stacks[index + 1], stacks[index]]
+      onChange({ ...config, tech_stacks: stacks })
+    }
+  }
+
   return (
     <div className="space-y-4">
       {config.tech_stacks.length > 0 && (
@@ -236,34 +289,68 @@ function TechStacksEditor({ config, onChange }: {
         </div>
       )}
       {config.tech_stacks.map((stack, i) => (
-        <Card key={i}>
+        <Card
+          key={i}
+          draggable
+          tabIndex={0}
+          onDragStart={() => handleStackDragStart(i)}
+          onDragOver={e => handleStackDragOver(e, i)}
+          onDragLeave={handleStackDragLeave}
+          onDrop={() => handleStackDrop(i)}
+          onDragEnd={handleStackDragEnd}
+          onKeyDown={e => handleStackKeyDown(e, i)}
+          className={`${dragStackIndex === i ? 'opacity-40' : ''} ${dragOverStackIndex === i ? 'ring-2 ring-sky-400' : ''}`}
+        >
           <button className="w-full text-left" onClick={() => toggleStack(i)}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardHeader className={`flex flex-row items-center justify-between ${expandedStacks.has(i) ? 'p-6 pb-2' : 'p-4'}`}>
               <span className="flex items-center gap-2 min-w-0">
                 {expandedStacks.has(i) ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-400" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-400" />}
-                <CardTitle className="text-base truncate">{t('config.techStack.title', { name: stack.name || `#${i + 1}` })}</CardTitle>
+                {expandedStacks.has(i) ? (
+                  <CardTitle className="text-base flex items-center gap-1.5 min-w-0">
+                    <input
+                      type="text"
+                      value={(stackRenameInput[i] ?? stack.name) || `#${i + 1}`}
+                      onChange={e => setStackRenameInput(prev => ({ ...prev, [i]: e.target.value }))}
+                      onBlur={() => {
+                        const val = stackRenameInput[i]
+                        if (val !== undefined) {
+                          setStackRenameInput(prev => { const n = { ...prev }; delete n[i]; return n })
+                          if (val.trim() && val.trim() !== stack.name) {
+                            updateStack(i, 'name', val.trim())
+                          }
+                        }
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                      }}
+                      onClick={e => e.stopPropagation()}
+                      className="w-36 px-1.5 py-0.5 text-sm border rounded bg-transparent border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
+                    />
+                  </CardTitle>
+                ) : (
+                  <CardTitle className="text-sm font-medium truncate">
+                    {stack.name || `#${i + 1}`}
+                  </CardTitle>
+                )}
               </span>
-              <span className="shrink-0">
+              <span className="flex items-center gap-2 shrink-0">
+                {!expandedStacks.has(i) && (
+                  <span className="text-xs text-slate-400 dark:text-slate-500">
+                    {[stack.extensions?.length > 0 && `${stack.extensions.length} ext`, stack.analyzers?.length > 0 && `${stack.analyzers.length} anl`].filter(Boolean).join(' · ')}
+                  </span>
+                )}
                 <button
                   onClick={e => { e.stopPropagation(); removeStack(i) }}
-                  className="text-xs px-2 py-1 rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                  className="p-1.5 rounded text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                  title={t('config.techStack.delete')}
                 >
-                  {t('config.techStack.delete')}
+                  <Trash2 size={14} />
                 </button>
               </span>
             </CardHeader>
           </button>
-          <div className={`transition-all duration-200 ease-in-out ${expandedStacks.has(i) ? 'max-h-[3000px] opacity-100 overflow-visible' : 'max-h-0 opacity-0 overflow-hidden'}`}>
-            <CardContent className="space-y-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.techStack.name')}</label>
-              <input
-                type="text"
-                value={stack.name}
-                onChange={e => updateStack(i, 'name', e.target.value)}
-                className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
-              />
-            </div>
+          <div className={`grid transition-all duration-200 ease-in-out ${expandedStacks.has(i) ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+            <div className="overflow-hidden min-h-0"><CardContent className="space-y-3">
             <div>
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.techStack.category')}</label>
               <input
@@ -290,7 +377,7 @@ function TechStacksEditor({ config, onChange }: {
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.techStack.excludes')}</label>
               <TagInput tags={stack.excludes} onChange={v => updateStack(i, 'excludes', v)} placeholder="e.g. node_modules/" />
             </div>
-          </CardContent>
+          </CardContent></div>
           </div>
         </Card>
       ))}
@@ -334,6 +421,37 @@ function AnalyzersEditor({ config, onChange }: {
   // Track temporary name field edits (for smooth controlled input while renaming)
   const [editValues, setEditValues] = useState<Record<string, string>>({})
   const [nameErrors, setNameErrors] = useState<Record<string, string>>({})
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set())
+
+  const toggleSection = (section: string) => {
+    setExpandedSections(prev => {
+      const next = new Set(prev)
+      if (next.has(section)) next.delete(section)
+      else next.add(section)
+      return next
+    })
+  }
+
+  const expandAllSections = () => {
+    setExpandedSections(new Set(['builtin', 'regex', 'impl', 'external']))
+  }
+
+  const collapseAllSections = () => {
+    setExpandedSections(new Set())
+  }
+
+  // Map analyzer name → tech stack names that reference it
+  const analyzerRefMap = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    for (const stack of config.tech_stacks) {
+      if (!stack.analyzers) continue
+      for (const a of stack.analyzers) {
+        if (!map[a]) map[a] = []
+        map[a].push(stack.name || '(unnamed)')
+      }
+    }
+    return map
+  }, [config.tech_stacks])
 
   const getAllAnalyzerNames = (excludeNames: string[] = []): Set<string> => {
     const names = new Set<string>()
@@ -405,7 +523,7 @@ function AnalyzersEditor({ config, onChange }: {
   }
 
   const addImpl = () => {
-    const key = `new_impl_${Date.now()}`
+    const key = `py_file_name_no_ext_${Date.now()}`
     onChange({
       ...config,
       custom_impl_analyzers: { ...config.custom_impl_analyzers, [key]: {} },
@@ -499,149 +617,222 @@ function AnalyzersEditor({ config, onChange }: {
     onChange({ ...config, external_analyzers: analyzers, tech_stacks: stacks, aggregation_views: views })
   }
 
+  const hasAnyAnalyzers = true // built-in analyzers always present
+
+  const renderCard = (
+    section: string,
+    titleKey: string,
+    addLabelKey: string,
+    onAdd: () => void,
+    count: number,
+    children: React.ReactNode,
+  ) => {
+    const expanded = expandedSections.has(section)
+    return (
+      <Card>
+        <button className="w-full text-left" onClick={() => toggleSection(section)}>
+          <CardHeader className={`flex flex-row items-center justify-between ${expanded ? 'p-6 pb-2' : 'p-4'}`}>
+            <span className="flex items-center gap-2 min-w-0">
+              {expanded ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-400" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-400" />}
+              <CardTitle className={expanded ? 'text-base' : 'text-sm font-medium truncate'}>
+                {t(titleKey)}
+              </CardTitle>
+            </span>
+            {!expanded && (
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                {count}
+              </span>
+            )}
+          </CardHeader>
+        </button>
+        <div className={`grid transition-all duration-200 ease-in-out ${expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+          <div className="overflow-hidden min-h-0">
+            <CardContent className="space-y-3">
+              {count === 0 && (
+                <p className="text-sm text-slate-400 italic">{t('dashboard.noData')}</p>
+              )}
+              {children}
+              {addLabelKey && (
+                <button onClick={onAdd} className="text-xs px-3 py-1.5 rounded-md bg-sky-500 text-white hover:bg-sky-600 transition-colors">
+                  + {t(addLabelKey)}
+                </button>
+              )}
+            </CardContent>
+          </div>
+        </div>
+      </Card>
+    )
+  }
+
   return (
-    <div className="space-y-6">
-      {/* Regex Analyzers */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-base">{t('config.analyzers.regexAnalyzers')}</CardTitle>
-          <button onClick={addRegex} className="text-xs px-3 py-1.5 rounded-md bg-sky-500 text-white hover:bg-sky-600 transition-colors">
-            + {t('config.analyzers.addRegex')}
+    <div className="space-y-4">
+      {hasAnyAnalyzers && (
+        <div className="flex items-center gap-2">
+          <button onClick={expandAllSections} className="text-xs px-2 py-1 rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+            {t('config.expandAll')}
           </button>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {Object.entries(config.custom_regex_analyzers).length === 0 && (
-            <p className="text-sm text-slate-400 italic">{t('dashboard.noData')}</p>
-          )}
-          {Object.entries(config.custom_regex_analyzers).map(([name, analyzer], index) => {
-            const displayName = editValues[`regex:${name}`] ?? name
-            const error = nameErrors[`regex:${name}`]
-            return (
-            <div key={`regex-${index}`} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
-              <div className="flex-1 grid grid-cols-3 gap-2">
-                <div className="flex flex-col gap-0.5">
-                  <input
-                    type="text"
-                    value={displayName}
-                    onChange={e => setEditValues(prev => ({ ...prev, [`regex:${name}`]: e.target.value }))}
-                    onFocus={() => setNameErrors(prev => { const n = { ...prev }; delete n[`regex:${name}`]; return n })}
-                    onBlur={() => {
-                      const val = editValues[`regex:${name}`]
-                      if (val !== undefined) {
-                        setEditValues(prev => { const n = { ...prev }; delete n[`regex:${name}`]; return n })
-                        renameRegex(name, val)
-                      }
-                    }}
-                    placeholder="Analyzer name"
-                    className="px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
-                  />
-                  {error && <span className="text-red-500 text-[10px] leading-tight">{error}</span>}
-                </div>
-                <input type="text" value={analyzer.metric_key} onChange={e => updateRegex(name, 'metric_key', e.target.value)} placeholder="Metric key" className="px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-                <div className="flex gap-2">
-                  <input type="text" value={analyzer.category || ''} onChange={e => updateRegex(name, 'category', e.target.value)} placeholder="Category" className="flex-1 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-                  <button onClick={() => removeRegex(name)} className="text-red-500 hover:text-red-700 text-xs px-1">&times;</button>
-                </div>
-                <input type="text" value={analyzer.pattern} onChange={e => updateRegex(name, 'pattern', e.target.value)} placeholder="Pattern" className="col-span-3 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-              </div>
-            </div>
-            )
-          })}
-        </CardContent>
-      </Card>
+          <button onClick={collapseAllSections} className="text-xs px-2 py-1 rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+            {t('config.collapseAll')}
+          </button>
+        </div>
+      )}
 
-      {/* Impl Analyzers */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-base">{t('config.analyzers.implAnalyzers')}</CardTitle>
-          <button onClick={addImpl} className="text-xs px-3 py-1.5 rounded-md bg-sky-500 text-white hover:bg-sky-600 transition-colors">
-            + {t('config.analyzers.addImpl')}
-          </button>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {Object.entries(config.custom_impl_analyzers).length === 0 && (
-            <p className="text-sm text-slate-400 italic">{t('dashboard.noData')}</p>
-          )}
-          {Object.entries(config.custom_impl_analyzers).map(([name, analyzer], index) => {
-            const displayName = editValues[`impl:${name}`] ?? name
-            const error = nameErrors[`impl:${name}`]
-            return (
-            <div key={`impl-${index}`} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
-              <div className="flex-1 grid grid-cols-3 gap-2">
-                <div className="flex flex-col gap-0.5">
-                  <input
-                    type="text"
-                    value={displayName}
-                    onChange={e => setEditValues(prev => ({ ...prev, [`impl:${name}`]: e.target.value }))}
-                    onFocus={() => setNameErrors(prev => { const n = { ...prev }; delete n[`impl:${name}`]; return n })}
-                    onBlur={() => {
-                      const val = editValues[`impl:${name}`]
-                      if (val !== undefined) {
-                        setEditValues(prev => { const n = { ...prev }; delete n[`impl:${name}`]; return n })
-                        renameImpl(name, val)
-                      }
-                    }}
-                    placeholder="Analyzer name"
-                    className="px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
-                  />
-                  {error && <span className="text-red-500 text-[10px] leading-tight">{error}</span>}
-                </div>
-                <input type="text" value={analyzer.metric_key || ''} onChange={e => updateImpl(name, 'metric_key', e.target.value)} placeholder="Metric key" className="px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-                <div className="flex gap-2">
-                  <input type="text" value={analyzer.category || ''} onChange={e => updateImpl(name, 'category', e.target.value)} placeholder="Category" className="flex-1 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-                  <button onClick={() => removeImpl(name)} className="text-red-500 hover:text-red-700 text-xs px-1">&times;</button>
-                </div>
+      {(() => {
+        const builtinAnalyzers = [
+          { name: 'file_count', metric_key: 'file_count', category: 'size', description: 'Counts the number of files analyzed' },
+          { name: 'char_count', metric_key: 'char_count', category: 'size', description: 'Counts the total number of characters' },
+        ]
+        return renderCard('builtin', 'config.analyzers.builtinAnalyzers', '', () => {},
+          builtinAnalyzers.length,
+          builtinAnalyzers.map((analyzer, index) => (
+            <div key={`builtin-${index}`} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700 bg-slate-50 dark:bg-slate-800/30">
+              <div className="flex-1 grid grid-cols-10 gap-2">
+                <div className="col-span-2 px-2 py-1 text-xs font-mono text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700 leading-relaxed">{analyzer.name}</div>
+                <div className="col-span-2 px-2 py-1 text-xs font-mono text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700 leading-relaxed">{analyzer.metric_key}</div>
+                <div className="col-span-2 px-2 py-1 text-xs text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700 leading-relaxed">{analyzer.category}</div>
+                <div className="col-span-4 px-2 py-1 text-xs text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700 leading-relaxed">{analyzer.description}</div>
+                {analyzerRefMap[analyzer.name]?.length > 0 && (
+                  <div className="col-span-10 flex flex-wrap items-center gap-1">
+                    <span className="text-[10px] text-slate-400 font-medium">{t('config.analyzers.usedBy')}</span>
+                    {analyzerRefMap[analyzer.name].map(sn => (
+                      <span key={sn} className="px-1.5 py-0.5 text-[10px] rounded bg-sky-50 dark:bg-sky-900/20 text-sky-600 dark:text-sky-400 border border-sky-200 dark:border-sky-800">{sn}</span>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
-            )
-          })}
-        </CardContent>
-      </Card>
+          ))
+        )
+      })()}
 
-      {/* External Analyzers */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-base">{t('config.analyzers.externalAnalyzers')}</CardTitle>
-          <button onClick={addExternal} className="text-xs px-3 py-1.5 rounded-md bg-sky-500 text-white hover:bg-sky-600 transition-colors">
-            + {t('config.analyzers.addExternal')}
-          </button>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {Object.entries(config.external_analyzers).length === 0 && (
-            <p className="text-sm text-slate-400 italic">{t('dashboard.noData')}</p>
-          )}
-          {Object.entries(config.external_analyzers).map(([name, path], index) => {
-            const displayName = editValues[`external:${name}`] ?? name
-            const error = nameErrors[`external:${name}`]
-            return (
-            <div key={`external-${index}`} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
-              <div className="flex-1 grid grid-cols-3 gap-2">
-                <div className="flex flex-col gap-0.5">
-                  <input
-                    type="text"
-                    value={displayName}
-                    onChange={e => setEditValues(prev => ({ ...prev, [`external:${name}`]: e.target.value }))}
-                    onFocus={() => setNameErrors(prev => { const n = { ...prev }; delete n[`external:${name}`]; return n })}
-                    onBlur={() => {
-                      const val = editValues[`external:${name}`]
-                      if (val !== undefined) {
-                        setEditValues(prev => { const n = { ...prev }; delete n[`external:${name}`]; return n })
-                        renameExternal(name, val)
-                      }
-                    }}
-                    placeholder="Analyzer name"
-                    className="px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
-                  />
-                  {error && <span className="text-red-500 text-[10px] leading-tight">{error}</span>}
-                </div>
-                <input type="text" value={path} onChange={e => updateExternal(name, e.target.value)} placeholder="Path to WASM" className="col-span-1 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-                <button onClick={() => removeExternal(name)} className="text-red-500 hover:text-red-700 text-xs px-1 justify-self-end">&times;</button>
+      {renderCard('regex', 'config.analyzers.regexAnalyzers', 'config.analyzers.addRegex', addRegex,
+        Object.keys(config.custom_regex_analyzers || {}).length,
+        Object.entries(config.custom_regex_analyzers).map(([name, analyzer], index) => {
+          const displayName = editValues[`regex:${name}`] ?? name
+          const error = nameErrors[`regex:${name}`]
+          return (
+          <div key={`regex-${index}`} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
+            <div className="flex-1 grid grid-cols-10 gap-2">
+              <div className="col-span-2 flex flex-col gap-0.5">
+                <input type="text" value={displayName}
+                  onChange={e => setEditValues(prev => ({ ...prev, [`regex:${name}`]: e.target.value }))}
+                  onFocus={() => setNameErrors(prev => { const n = { ...prev }; delete n[`regex:${name}`]; return n })}
+                  onBlur={() => {
+                    const val = editValues[`regex:${name}`]
+                    if (val !== undefined) {
+                      setEditValues(prev => { const n = { ...prev }; delete n[`regex:${name}`]; return n })
+                      renameRegex(name, val)
+                    }
+                  }}
+                  placeholder="Analyzer name"
+                  className="w-full px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
+                />
+                {error && <span className="text-red-500 text-[10px] leading-tight">{error}</span>}
+              </div>
+              <input type="text" value={analyzer.metric_key} onChange={e => updateRegex(name, 'metric_key', e.target.value)} placeholder="Metric key" className="col-span-2 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+              <input type="text" value={analyzer.category || ''} onChange={e => updateRegex(name, 'category', e.target.value)} placeholder="Category" className="col-span-2 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+              <input type="text" value={analyzer.description || ''} onChange={e => updateRegex(name, 'description', e.target.value)} placeholder="Description" className="col-span-4 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+              <input type="text" value={analyzer.pattern} onChange={e => updateRegex(name, 'pattern', e.target.value)} placeholder="Pattern" className="col-span-10 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+              <div className="col-span-10 flex flex-wrap items-center gap-1">
+                {analyzerRefMap[name]?.length > 0 && (
+                  <>
+                    <span className="text-[10px] text-slate-400 font-medium">{t('config.analyzers.usedBy')}</span>
+                    {analyzerRefMap[name].map(sn => (
+                      <span key={sn} className="px-1.5 py-0.5 text-[10px] rounded bg-sky-50 dark:bg-sky-900/20 text-sky-600 dark:text-sky-400 border border-sky-200 dark:border-sky-800">{sn}</span>
+                    ))}
+                  </>
+                )}
+                <button onClick={() => removeRegex(name)} className="ml-auto text-red-500 hover:text-red-700 p-0.5" title="Remove"><Trash2 size={12} /></button>
               </div>
             </div>
-            )
-          })}
-        </CardContent>
-      </Card>
+          </div>
+          )
+        })
+      )}
+
+      {renderCard('impl', 'config.analyzers.implAnalyzers', 'config.analyzers.addImpl', addImpl,
+        Object.keys(config.custom_impl_analyzers || {}).length,
+        Object.entries(config.custom_impl_analyzers).map(([name, analyzer], index) => {
+          const displayName = editValues[`impl:${name}`] ?? name
+          const error = nameErrors[`impl:${name}`]
+          return (
+          <div key={`impl-${index}`} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
+            <div className="flex-1 grid grid-cols-10 gap-2">
+              <div className="col-span-2 flex flex-col gap-0.5">
+                <input type="text" value={displayName}
+                  onChange={e => setEditValues(prev => ({ ...prev, [`impl:${name}`]: e.target.value }))}
+                  onFocus={() => setNameErrors(prev => { const n = { ...prev }; delete n[`impl:${name}`]; return n })}
+                  onBlur={() => {
+                    const val = editValues[`impl:${name}`]
+                    if (val !== undefined) {
+                      setEditValues(prev => { const n = { ...prev }; delete n[`impl:${name}`]; return n })
+                      renameImpl(name, val)
+                    }
+                  }}
+                  placeholder={t('config.analyzers.implNamePlaceholder')}
+                  className="w-full px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
+                />
+                {error && <span className="text-red-500 text-[10px] leading-tight">{error}</span>}
+              </div>
+              <input type="text" value={analyzer.metric_key || ''} onChange={e => updateImpl(name, 'metric_key', e.target.value)} placeholder="Metric key" className="col-span-2 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+              <input type="text" value={analyzer.category || ''} onChange={e => updateImpl(name, 'category', e.target.value)} placeholder="Category" className="col-span-2 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+              <input type="text" value={analyzer.description || ''} onChange={e => updateImpl(name, 'description', e.target.value)} placeholder="Description" className="col-span-4 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+              <div className="col-span-10 flex flex-wrap items-center gap-1">
+                {analyzerRefMap[name]?.length > 0 && (
+                  <>
+                    <span className="text-[10px] text-slate-400 font-medium">{t('config.analyzers.usedBy')}</span>
+                    {analyzerRefMap[name].map(sn => (
+                      <span key={sn} className="px-1.5 py-0.5 text-[10px] rounded bg-sky-50 dark:bg-sky-900/20 text-sky-600 dark:text-sky-400 border border-sky-200 dark:border-sky-800">{sn}</span>
+                    ))}
+                  </>
+                )}
+                <button onClick={() => removeImpl(name)} className="ml-auto text-red-500 hover:text-red-700 p-0.5" title="Remove"><Trash2 size={12} /></button>
+              </div>
+            </div>
+          </div>
+          )
+        })
+      )}
+
+      {renderCard('external', 'config.analyzers.externalAnalyzers', 'config.analyzers.addExternal', addExternal,
+        Object.keys(config.external_analyzers || {}).length,
+        Object.entries(config.external_analyzers).map(([name, path], index) => {
+          const displayName = editValues[`external:${name}`] ?? name
+          const error = nameErrors[`external:${name}`]
+          return (
+          <div key={`external-${index}`} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
+            <div className="flex-1 grid grid-cols-3 gap-2">
+              <div className="flex flex-col gap-0.5">
+                <input type="text" value={displayName}
+                  onChange={e => setEditValues(prev => ({ ...prev, [`external:${name}`]: e.target.value }))}
+                  onFocus={() => setNameErrors(prev => { const n = { ...prev }; delete n[`external:${name}`]; return n })}
+                  onBlur={() => {
+                    const val = editValues[`external:${name}`]
+                    if (val !== undefined) {
+                      setEditValues(prev => { const n = { ...prev }; delete n[`external:${name}`]; return n })
+                      renameExternal(name, val)
+                    }
+                  }}
+                  placeholder="Analyzer name"
+                  className="px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
+                />
+                {error && <span className="text-red-500 text-[10px] leading-tight">{error}</span>}
+              </div>
+              <input type="text" value={path} onChange={e => updateExternal(name, e.target.value)} placeholder="Path to WASM" className="col-span-1 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+              <button onClick={() => removeExternal(name)} className="text-red-500 hover:text-red-700 p-0.5 justify-self-end" title="Remove"><Trash2 size={12} /></button>
+              {analyzerRefMap[name]?.length > 0 && (
+                <div className="col-span-3 flex flex-wrap items-center gap-1">
+                  <span className="text-[10px] text-slate-400 font-medium">{t('config.analyzers.usedBy')}</span>
+                  {analyzerRefMap[name].map(sn => (
+                    <span key={sn} className="px-1.5 py-0.5 text-[10px] rounded bg-sky-50 dark:bg-sky-900/20 text-sky-600 dark:text-sky-400 border border-sky-200 dark:border-sky-800">{sn}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          )
+        })
+      )}
     </div>
   )
 }
@@ -649,34 +840,34 @@ function AnalyzersEditor({ config, onChange }: {
 // ─── Views Editor ───────────────────────────────────────────────────────────
 
 const CHART_TYPES = [
-  { value: '', label: 'Default' },
-  { value: 'bar_row', label: 'Horizontal Bar' },
-  { value: 'bar_col', label: 'Vertical Bar' },
-  { value: 'pie', label: 'Pie' },
-  { value: 'line', label: 'Line' },
-  { value: 'stacked_bar', label: 'Stacked Bar' },
-  { value: 'heatmap', label: 'Heatmap' },
-  { value: 'radar', label: 'Radar' },
-  { value: 'gauge', label: 'Gauge' },
-  { value: 'table', label: 'Table' },
-  { value: 'card', label: 'Metric Card' },
+  { value: '', label: 'config.views.chartTypes.default' },
+  { value: 'bar_row', label: 'config.views.chartTypes.bar_row' },
+  { value: 'bar_col', label: 'config.views.chartTypes.bar_col' },
+  { value: 'pie', label: 'config.views.chartTypes.pie' },
+  { value: 'line', label: 'config.views.chartTypes.line' },
+  { value: 'stacked_bar', label: 'config.views.chartTypes.stacked_bar' },
+  { value: 'heatmap', label: 'config.views.chartTypes.heatmap' },
+  { value: 'radar', label: 'config.views.chartTypes.radar' },
+  { value: 'gauge', label: 'config.views.chartTypes.gauge' },
+  { value: 'table', label: 'config.views.chartTypes.table' },
+  { value: 'card', label: 'config.views.chartTypes.card' },
 ]
 
 const CHANGE_TYPE_MODES = [
-  { value: '', label: 'None' },
-  { value: 'all', label: 'All (Stacked)' },
-  { value: 'switchable', label: 'Switchable (A/M/D)' },
+  { value: '', label: 'config.views.changeTypeModes.none' },
+  { value: 'all', label: 'config.views.changeTypeModes.all' },
+  { value: 'switchable', label: 'config.views.changeTypeModes.switchable' },
 ]
 
 const GROUP_BY_OPTIONS = ['tech_stack', 'category', 'metric_key', 'analyzer_id', 'extension']
 
 const FUNC_TYPES = [
-  { value: 'top_n', label: 'Top N' },
-  { value: 'sum', label: 'Sum' },
-  { value: 'avg', label: 'Avg' },
-  { value: 'min', label: 'Min' },
-  { value: 'max', label: 'Max' },
-  { value: 'distribution', label: 'Distribution' },
+  { value: 'top_n', label: 'config.views.funcTypes.top_n' },
+  { value: 'sum', label: 'config.views.funcTypes.sum' },
+  { value: 'avg', label: 'config.views.funcTypes.avg' },
+  { value: 'min', label: 'config.views.funcTypes.min' },
+  { value: 'max', label: 'config.views.funcTypes.max' },
+  { value: 'distribution', label: 'config.views.funcTypes.distribution' },
 ]
 
 // Recommended aggregation function types per chart type
@@ -821,6 +1012,56 @@ function ViewsEditor({ config, onChange }: {
     onChange({ ...config, aggregation_views: views })
   }
 
+  // ── Drag-to-reorder and keyboard reorder for views ──
+  const [dragViewIndex, setDragViewIndex] = useState<number | null>(null)
+  const [dragOverViewIndex, setDragOverViewIndex] = useState<number | null>(null)
+  const viewEntries = Object.entries(config.aggregation_views)
+
+  const handleViewDragStart = (index: number) => {
+    setDragViewIndex(index)
+  }
+
+  const handleViewDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setDragOverViewIndex(index)
+  }
+
+  const handleViewDragLeave = () => {
+    setDragOverViewIndex(null)
+  }
+
+  const handleViewDrop = (index: number) => {
+    if (dragViewIndex === null || dragViewIndex === index) return
+    const entries = [...viewEntries]
+    const [moved] = entries.splice(dragViewIndex, 1)
+    entries.splice(index, 0, moved)
+    onChange({ ...config, aggregation_views: Object.fromEntries(entries) })
+    setDragViewIndex(null)
+    setDragOverViewIndex(null)
+  }
+
+  const handleViewDragEnd = () => {
+    setDragViewIndex(null)
+    setDragOverViewIndex(null)
+  }
+
+  const handleViewKeyDown = (e: React.KeyboardEvent, index: number) => {
+    if (!e.altKey) return
+    if (e.key === 'ArrowUp' && index > 0) {
+      e.preventDefault()
+      const entries = [...viewEntries]
+      ;[entries[index - 1], entries[index]] = [entries[index], entries[index - 1]]
+      onChange({ ...config, aggregation_views: Object.fromEntries(entries) })
+    }
+    if (e.key === 'ArrowDown' && index < viewEntries.length - 1) {
+      e.preventDefault()
+      const entries = [...viewEntries]
+      ;[entries[index], entries[index + 1]] = [entries[index + 1], entries[index]]
+      onChange({ ...config, aggregation_views: Object.fromEntries(entries) })
+    }
+  }
+
   return (
     <div className="space-y-4">
       {Object.keys(config.aggregation_views).length > 0 && (
@@ -833,46 +1074,72 @@ function ViewsEditor({ config, onChange }: {
           </button>
         </div>
       )}
-      {Object.entries(config.aggregation_views).map(([id, view]) => (
-        <Card key={id}>
+      {viewEntries.map(([id, view], idx) => (
+        <Card
+          key={id}
+          draggable
+          tabIndex={0}
+          onDragStart={() => handleViewDragStart(idx)}
+          onDragOver={e => handleViewDragOver(e, idx)}
+          onDragLeave={handleViewDragLeave}
+          onDrop={() => handleViewDrop(idx)}
+          onDragEnd={handleViewDragEnd}
+          onKeyDown={e => handleViewKeyDown(e, idx)}
+          className={`${dragViewIndex === idx ? 'opacity-40' : ''} ${dragOverViewIndex === idx ? 'ring-2 ring-sky-400' : ''}`}
+        >
           <button className="w-full text-left" onClick={() => toggleView(id)}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardHeader className={`flex flex-row items-center justify-between ${expandedViews.has(id) ? 'p-6 pb-2' : 'p-4'}`}>
               <span className="flex items-center gap-2 min-w-0">
                 {expandedViews.has(id) ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-400" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-400" />}
-                <CardTitle className="text-base flex items-center gap-1.5 min-w-0">
-                  <input
-                    type="text"
-                    value={viewRenameInput[id] ?? id}
-                    onChange={e => setViewRenameInput(prev => ({ ...prev, [id]: e.target.value }))}
-                    onFocus={() => setViewNameErrors(prev => { const n = { ...prev }; delete n[id]; return n })}
-                    onBlur={() => {
-                      const val = viewRenameInput[id]
-                      if (val !== undefined) {
-                        setViewRenameInput(prev => { const n = { ...prev }; delete n[id]; return n })
-                        renameView(id, val)
-                      }
-                    }}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                    }}
-                    onClick={e => e.stopPropagation()}
-                    className="w-28 px-1.5 py-0.5 text-sm border rounded bg-transparent border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
-                  />
-                  {viewNameErrors[id] && <span className="text-red-500 text-[10px] leading-tight shrink-0">{viewNameErrors[id]}</span>}
-                  {view.title ? <><span className="text-slate-400 dark:text-slate-500 mx-1.5">—</span><span className="truncate">{view.title}</span></> : ''}</CardTitle>
+                {expandedViews.has(id) ? (
+                  <CardTitle className="text-base flex items-center gap-1.5 min-w-0">
+                    <input
+                      type="text"
+                      value={viewRenameInput[id] ?? id}
+                      onChange={e => setViewRenameInput(prev => ({ ...prev, [id]: e.target.value }))}
+                      onFocus={() => setViewNameErrors(prev => { const n = { ...prev }; delete n[id]; return n })}
+                      onBlur={() => {
+                        const val = viewRenameInput[id]
+                        if (val !== undefined) {
+                          setViewRenameInput(prev => { const n = { ...prev }; delete n[id]; return n })
+                          renameView(id, val)
+                        }
+                      }}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                      }}
+                      onClick={e => e.stopPropagation()}
+                      className="w-28 px-1.5 py-0.5 text-sm border rounded bg-transparent border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
+                    />
+                    {viewNameErrors[id] && <span className="text-red-500 text-[10px] leading-tight shrink-0">{viewNameErrors[id]}</span>}
+                    {view.title ? <><span className="text-slate-400 dark:text-slate-500 mx-1.5">—</span><span className="truncate">{view.title}</span></> : ''}
+                  </CardTitle>
+                ) : (
+                  <CardTitle className="text-sm font-medium truncate">
+                    {view.title || id}
+                  </CardTitle>
+                )}
               </span>
-              <span className="shrink-0">
+              <span className="flex items-center gap-2 shrink-0">
+                {!expandedViews.has(id) && (
+                  <span className="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1">
+                    {t(CHART_TYPES.find(ct => ct.value === view.chart_type)?.label || '') || view.chart_type || view.func.type}
+                    <span className="text-slate-300 dark:text-slate-600">·</span>
+                    w:{view.width ?? 2}
+                  </span>
+                )}
                 <button
                   onClick={e => { e.stopPropagation(); removeView(id) }}
-                  className="text-xs px-2 py-1 rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                  className="p-1.5 rounded text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                  title={t('config.techStack.delete')}
                 >
-                  {t('config.techStack.delete')}
+                  <Trash2 size={14} />
                 </button>
               </span>
             </CardHeader>
           </button>
-          <div className={`transition-all duration-200 ease-in-out ${expandedViews.has(id) ? 'max-h-[3000px] opacity-100 overflow-visible' : 'max-h-0 opacity-0 overflow-hidden'}`}>
-          <CardContent className="space-y-3">
+          <div className={`grid transition-all duration-200 ease-in-out ${expandedViews.has(id) ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+            <div className="overflow-hidden min-h-0"><CardContent className="space-y-3">
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.viewTitle')}</label>
@@ -881,7 +1148,7 @@ function ViewsEditor({ config, onChange }: {
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.chartType')}</label>
-                <SelectInput value={view.chart_type || ''} onChange={v => handleChartTypeChange(id, v)} options={CHART_TYPES} />
+                <SelectInput value={view.chart_type || ''} onChange={v => handleChartTypeChange(id, v)} options={CHART_TYPES} t={t} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.width')}</label>
@@ -897,35 +1164,23 @@ function ViewsEditor({ config, onChange }: {
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.techStacks')}</label>
               <TagInput tags={view.tech_stacks || []} onChange={v => updateView(id, 'tech_stacks', v)} placeholder="Leave empty for Summary" suggestions={['All', ...config.tech_stacks.map(s => s.name)]} allowCustom={false} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">{t('config.views.analyzerId')}</label>
+              <TagInput tags={view.func.analyzer_id || []} onChange={v => updateFunc(id, 'analyzer_id', v.length > 0 ? v : undefined)} suggestions={validAnalyzerIds} allowCustom={false} placeholder="Select analyzer IDs..." />
+            </div>
+            <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.changeTypeMode')}</label>
-                <SelectInput value={view.change_type_mode || ''} onChange={v => updateView(id, 'change_type_mode', v || undefined)} options={CHANGE_TYPE_MODES} />
+                <SelectInput value={view.change_type_mode || ''} onChange={v => updateView(id, 'change_type_mode', v || undefined)} options={CHANGE_TYPE_MODES} t={t} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.groupBy')}</label>
                 <TagInput tags={view.group_by || []} onChange={v => updateView(id, 'group_by', v)} suggestions={GROUP_BY_OPTIONS} allowCustom={false} placeholder="e.g. tech_stack, category" maxTags={2} />
               </div>
-            </div>
-            <div className="border-t dark:border-slate-700 pt-3">
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                <div>
+              <div className="flex items-start gap-2">
+                <div className="w-36 shrink-0">
                   <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.funcType')}</label>
-                  <SelectInput value={view.func.type} onChange={v => handleFuncTypeChange(id, v)} options={FUNC_TYPES} />
-                </div>
-                {view.func.type === 'distribution' && (
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">{t('config.views.buckets')}</label>
-                    <input type="text" value={(view.func.buckets || []).join(',')} onChange={e => updateFunc(id, 'buckets', e.target.value.split(',').map(Number).filter(n => !isNaN(n)))}
-                      placeholder="e.g. 0,10,50,100"
-                      className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-                  </div>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">{t('config.views.analyzerId')}</label>
-                  <TagInput tags={view.func.analyzer_id || []} onChange={v => updateFunc(id, 'analyzer_id', v.length > 0 ? v : undefined)} suggestions={validAnalyzerIds} allowCustom={false} placeholder="Select analyzer IDs..." />
+                  <SelectInput value={view.func.type} onChange={v => handleFuncTypeChange(id, v)} options={FUNC_TYPES} t={t} />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.includeChildren')}</label>
@@ -944,27 +1199,16 @@ function ViewsEditor({ config, onChange }: {
                   </label>
                 </div>
               </div>
-              {/* Trend options (shown when trend is enabled) */}
-              {view.trend && (
-                <div className="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-slate-100 dark:border-slate-700/50">
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">{t('config.views.trendLimit')}</label>
-                    <input type="number" value={view.trend_limit ?? 30} onChange={e => updateView(id, 'trend_limit', parseInt(e.target.value) || 30)}
-                      min={1} max={100}
-                      className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1">{t('config.views.trendMode')}</label>
-                    <select value={view.trend_mode || 'snapshot'} onChange={e => updateView(id, 'trend_mode', e.target.value)}
-                      className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500">
-                      <option value="snapshot">Snapshot</option>
-                      <option value="diff">Diff</option>
-                    </select>
-                  </div>
-                </div>
-              )}
             </div>
-          </CardContent>
+            {view.func.type === 'distribution' && (
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">{t('config.views.buckets')}</label>
+                <input type="text" value={(view.func.buckets || []).join(',')} onChange={e => updateFunc(id, 'buckets', e.target.value.split(',').map(Number).filter(n => !isNaN(n)))}
+                  placeholder="e.g. 0,10,50,100"
+                  className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+              </div>
+            )}
+          </CardContent></div>
           </div>
         </Card>
       ))}
@@ -994,6 +1238,7 @@ const TABS: { key: ConfigTab; labelKey: string }[] = [
 export default function ConfigPage() {
   const { t } = useTranslation()
   const { currentProject, setProject, triggerConfigRefresh, configVersion, projectList } = useApp()
+  const toast = useToast()
 
   const [config, setConfig] = useState<FullProjectConfig | null>(null)
   const [originalConfig, setOriginalConfig] = useState<string>('')
@@ -1042,7 +1287,9 @@ export default function ConfigPage() {
     checkNames(Object.keys(config.custom_impl_analyzers || {}))
     checkNames(Object.keys(config.external_analyzers || {}))
     if (duplicateNames.length > 0) {
-      setMessage({ type: 'error', text: `${t('config.analyzers.nameDuplicate')}: ${duplicateNames.join(', ')}` })
+      const dupMsg = `${t('config.analyzers.nameDuplicate')}: ${duplicateNames.join(', ')}`
+      setMessage({ type: 'error', text: dupMsg })
+      toast.error(dupMsg)
       return
     }
 
@@ -1052,9 +1299,12 @@ export default function ConfigPage() {
       const result = await updateProjectConfig(currentProject, config)
       setOriginalConfig(JSON.stringify(config))
       setMessage({ type: 'success', text: result.message || t('config.savedSuccess') })
+      toast.success(result.message || t('config.savedSuccess'))
       triggerConfigRefresh()
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : t('config.saveError') })
+      const msg = err instanceof Error ? err.message : t('config.saveError')
+      setMessage({ type: 'error', text: msg })
+      toast.error(msg)
     } finally {
       setSaving(false)
     }
@@ -1078,11 +1328,15 @@ export default function ConfigPage() {
     setTemplateSaving(true)
     try {
       await saveTemplate(templateNameInput.trim(), config)
-      setMessage({ type: 'success', text: t('templates.saved', { name: templateNameInput.trim() }) })
+      const savedMsg = t('templates.saved', { name: templateNameInput.trim() })
+      setMessage({ type: 'success', text: savedMsg })
+      toast.success(savedMsg)
       setShowSaveAsTemplate(false)
       setTemplateNameInput('')
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : t('templates.saveError') })
+      const errMsg = err instanceof Error ? err.message : t('templates.saveError')
+      setMessage({ type: 'error', text: errMsg })
+      toast.error(errMsg)
     } finally {
       setTemplateSaving(false)
     }
@@ -1175,8 +1429,11 @@ export default function ConfigPage() {
                   await reloadConfig()
                   triggerConfigRefresh()
                   setMessage({ type: 'success', text: 'Configuration reloaded from disk' })
+                  toast.success('Configuration reloaded from disk')
                 } catch (err) {
-                  setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to reload config' })
+                  const reloadErr = err instanceof Error ? err.message : 'Failed to reload config'
+                  setMessage({ type: 'error', text: reloadErr })
+                  toast.error(reloadErr)
                 }
               }}
               className="p-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
@@ -1318,10 +1575,14 @@ export default function ConfigPage() {
                       try {
                         const { repo_path: _, ...configWithoutRepo } = config
                         await updateProjectConfig(p.name, { ...configWithoutRepo, name: p.name })
-                        setMessage({ type: 'success', text: `${t('config.copySuccess') || 'Config copied to'} "${p.name}"` })
+                        const copyMsg = `${t('config.copySuccess') || 'Config copied to'} "${p.name}"`
+                        setMessage({ type: 'success', text: copyMsg })
+                        toast.success(copyMsg)
                         setShowCopyTo(false)
                       } catch (err) {
-                        setMessage({ type: 'error', text: err instanceof Error ? err.message : t('config.saveError') })
+                        const copyErr = err instanceof Error ? err.message : t('config.saveError')
+                        setMessage({ type: 'error', text: copyErr })
+                        toast.error(copyErr)
                       } finally {
                         setCopySaving('')
                       }
@@ -1523,9 +1784,10 @@ function TemplateManagementModal({ onClose, t }: {
                     <button
                       onClick={() => handleDelete(name)}
                       disabled={deleting === name}
-                      className="text-xs px-2 py-1 rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
+                      className="p-1.5 rounded text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
+                      title={t('config.techStack.delete')}
                     >
-                      {t('config.techStack.delete')}
+                      <Trash2 size={14} />
                     </button>
                   </CardHeader>
                   <CardContent>

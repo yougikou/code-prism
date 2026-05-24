@@ -383,7 +383,6 @@ func:
 |------|------|--------|------|
 | `trend` | boolean | `false` | 启用趋势图模式 |
 | `trend_limit` | integer | `30` | 趋势中包含的最近扫描次数 |
-| `trend_mode` | string | 视图自身模式 | `"snapshot"` 或 `"diff"` — 趋势数据查询哪种扫描模式 |
 
 **工作原理：**
 
@@ -403,7 +402,6 @@ aggregation_views:
     width: 2
     trend: true
     trend_limit: 30
-    trend_mode: snapshot
     func:
       type: sum
       analyzer_id: [file_count]

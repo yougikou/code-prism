@@ -179,6 +179,9 @@ pub enum CustomAnalyzerDef {
         metric_key: String,
         #[serde(default)]
         category: Option<String>,
+        /// Human-readable description of the analyzer's purpose
+        #[serde(default)]
+        description: Option<String>,
         /// Arbitrary key-value tags attached to analyzer results
         #[serde(default)]
         tags: HashMap<String, String>,
@@ -195,6 +198,9 @@ pub enum CustomAnalyzerDef {
 pub struct ImplAnalyzerConfig {
     pub metric_key: Option<String>,
     pub category: Option<String>,
+    /// Human-readable description of the analyzer's purpose
+    #[serde(default)]
+    pub description: Option<String>,
     /// Override or add tags for analyzer results (merged on top of script output)
     #[serde(default)]
     pub tags: HashMap<String, String>,
@@ -367,13 +373,9 @@ pub struct AggregationView {
     pub width: u32,
     pub func: AggregationFunc,
 
-    // Trend chart fields
+    // Trend chart field
     #[serde(default)]
     pub trend: bool,
-    #[serde(default = "default_trend_limit")]
-    pub trend_limit: usize,
-    #[serde(default)]
-    pub trend_mode: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -390,10 +392,6 @@ fn default_columns() -> u32 {
 
 fn default_metric_key() -> String {
     "matches".to_string()
-}
-
-fn default_trend_limit() -> usize {
-    30
 }
 
 impl ProjectConfig {
@@ -582,6 +580,7 @@ project_templates:
         pattern: "\\b(?:(?:info|print(?:ln)?)!|print(?:ln)?\\b|console\\.(?:log|info)\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.info\\b)"
         metric_key: "log_info"
         category: "logging"
+        description: "Counts info-level logging calls across languages"
       log_warn_finder:
         pattern: "\\b(?:warn!|console\\.warn\\b|(?:\\w*[Ll]og(?:ger|ging)?)\\.(?:warn|warning)\\b)"
         metric_key: "log_warn"
@@ -602,6 +601,7 @@ project_templates:
     # Python script analyzers — place .py files in custom_analyzers/ dir
     custom_impl_analyzers:
       java_complexity:
+        description: "Analyzes cyclomatic complexity of Java methods"
         tags:
           metric: "complexity"
           category: "maintainability"

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { X, Search, CaseSensitive, Regex, Download, Copy } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -61,6 +61,16 @@ export function ChildrenViewer({ open, title, items, onClose, onFileClick }: Chi
       // Clipboard API may fail in insecure contexts
     }
   }, []);
+
+  // Close on Escape key
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [open, onClose]);
 
   const downloadCSV = useCallback(() => {
     const headers = hasGroup ? ['Group', 'Label', 'Value'] : ['Label', 'Value'];

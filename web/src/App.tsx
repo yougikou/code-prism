@@ -4,6 +4,7 @@ import { Header } from './components/layout/Header'
 import Dashboard from './components/Dashboard'
 import ExecutePage from './components/ExecutePage'
 import ConfigPage from './components/ConfigPage'
+import { ToastProvider } from './components/ui/toast'
 
 function AppContent() {
   const { currentPage, currentProject } = useApp()
@@ -28,7 +29,9 @@ function AppContent() {
 function App() {
   return (
     <AppProvider>
-      <AppContent />
+      <ToastProvider>
+        <AppContent />
+      </ToastProvider>
     </AppProvider>
   )
 }

@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { X, ArrowLeft, Code } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { MatchDetail } from '@/services/data';
@@ -30,6 +31,16 @@ export function MatchDetailView({
   onBack,
 }: MatchDetailViewProps) {
   const { t } = useTranslation();
+
+  // Close on Escape key
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [open, onClose]);
 
   if (!open) return null;
 

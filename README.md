@@ -383,7 +383,6 @@ Trend charts allow you to track how metrics change over time by performing multi
 |-------|------|---------|-------------|
 | `trend` | boolean | `false` | Enable trend chart mode for this view |
 | `trend_limit` | integer | `30` | Number of recent scans to include in the trend |
-| `trend_mode` | string | View's mode | `"snapshot"` or `"diff"` — which scan mode to query for trend data |
 
 **How it works:**
 
@@ -403,7 +402,6 @@ aggregation_views:
     width: 2
     trend: true
     trend_limit: 30
-    trend_mode: snapshot
     func:
       type: sum
       analyzer_id: [file_count]

@@ -69,8 +69,6 @@ export interface ViewConfig {
   };
   // Trend fields
   trend?: boolean;
-  trend_limit?: number;
-  trend_mode?: string;
 }
 
 export interface TechStackInfo {
@@ -305,6 +303,7 @@ export interface CustomAnalyzerDef {
   pattern: string;
   metric_key: string;
   category?: string;
+  description?: string;
   tags?: Record<string, string>;
   scan_mode?: 'all' | 'snapshot' | 'diff';
   change_type?: 'all' | 'A' | 'M' | 'D';
@@ -313,6 +312,7 @@ export interface CustomAnalyzerDef {
 export interface ImplAnalyzerConfig {
   metric_key?: string;
   category?: string;
+  description?: string;
   tags?: Record<string, string>;
   scan_mode?: 'all' | 'snapshot' | 'diff';
   change_type?: 'all' | 'A' | 'M' | 'D';
@@ -338,8 +338,6 @@ export interface AggregationView {
   func: AggregationFunc;
   // Trend fields
   trend?: boolean;
-  trend_limit?: number;
-  trend_mode?: string;
 }
 
 export interface FullProjectConfig {

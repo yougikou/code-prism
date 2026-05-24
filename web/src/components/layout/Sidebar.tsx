@@ -63,7 +63,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className="bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 flex flex-col shrink-0 h-[calc(100vh-70px)] relative transition-width duration-200"
+      className="bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 flex flex-col shrink-0 h-full relative transition-width duration-200"
       style={{ width: isCollapsed ? 64 : width }}
     >
       {/* Toggle Button */}

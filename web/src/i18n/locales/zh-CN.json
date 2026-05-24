@@ -159,7 +159,7 @@
     "tabs": {
       "techStacks": "技术栈",
       "globalExcludes": "全局排除",
-      "analyzers": "自定义分析器",
+      "analyzers": "分析器",
       "views": "聚合视图",
       "templates": "项目模板"
     },
@@ -178,8 +178,9 @@
       "title": "全局排除模式"
     },
     "analyzers": {
+      "builtinAnalyzers": "内置分析器",
       "regexAnalyzers": "自定义正则分析器",
-      "implAnalyzers": "自定义实现分析器",
+      "implAnalyzers": "自定义Python分析器",
       "externalAnalyzers": "外部分析器（WASM）",
       "name": "名称",
       "pattern": "模式",
@@ -187,10 +188,13 @@
       "category": "类别",
       "path": "路径",
       "addRegex": "添加正则",
-      "addImpl": "添加实现",
+      "addImpl": "添加Python",
+      "implNamePlaceholder": "python文件名（无扩展名）",
       "addExternal": "添加外部",
       "delete": "删除",
-      "nameDuplicate": "同名分析器已存在"
+      "nameDuplicate": "同名分析器已存在",
+      "uncategorized": "（未分类）",
+      "usedBy": "被引用："
     },
     "views": {
       "title": "视图：{{id}}",
@@ -211,9 +215,32 @@
       "add": "添加视图",
       "delete": "删除",
       "showTrend": "显示趋势",
-      "trendLimit": "趋势数据点数",
-      "trendMode": "趋势扫描模式"
-    },
+      "chartTypes": {
+        "default": "默认",
+        "bar_row": "横向柱状图",
+        "bar_col": "纵向柱状图",
+        "pie": "饼图",
+        "line": "折线图",
+        "stacked_bar": "堆叠柱状图",
+        "heatmap": "热力图",
+        "radar": "雷达图",
+        "gauge": "仪表盘",
+        "table": "表格",
+        "card": "指标卡片"
+      },
+      "changeTypeModes": {
+        "none": "无",
+        "all": "全部（堆叠）",
+        "switchable": "可切换（A/M/D）"
+      },
+      "funcTypes": {
+        "top_n": "前N位",
+        "sum": "总和",
+        "avg": "平均值",
+        "min": "最小值",
+        "max": "最大值",
+        "distribution": "分布"
+      }    },
     "expandAll": "全部展开",
     "collapseAll": "全部收起"
   },

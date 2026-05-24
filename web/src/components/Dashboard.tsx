@@ -12,6 +12,7 @@ import { MatchDetailView } from './dashboard/MatchDetailView';
 import { fetchView, fetchScanSummary, fetchMatches, fetchTrend, type AggregationResult, type AppConfig, type ScanSummary, type MatchDetail, type TrendSeries, getDefaultProject } from '@/services/data';
 import TrendRenderer from './widgets/TrendRenderer';
 import { TrendScanSelector } from './dashboard/TrendScanSelector';
+import { ChartSkeleton } from '@/components/ui/skeleton';
 import { BarChart3, FileText, Maximize2, Minimize2, SlidersHorizontal, TrendingUp } from 'lucide-react';
 
 
@@ -493,7 +494,7 @@ const Dashboard = () => {
         itemWidth: 12,
         itemHeight: 12,
         itemGap: 8,
-        formatter: (name: string) => name.length > 12 ? name.substring(0, 12) + '..' : name
+        formatter: (name: string) => name.length > 24 ? name.substring(0, 24) + '..' : name
       },
       series: [
         {
@@ -858,7 +859,8 @@ const Dashboard = () => {
           {/* Background gradient effect */}
           <div className="absolute inset-0 bg-gradient-to-br from-white via-slate-50 to-blue-50/50 dark:from-slate-900 dark:via-slate-900 dark:to-blue-950/20 pointer-events-none -z-10" />
 
-          <div className="container mx-auto p-8 space-y-8 min-h-full">
+          <div className="max-w-7xl mx-auto p-3 sm:p-4 lg:p-5 space-y-4 min-h-full">
+
             <TechStackTabs
               techStacks={availableTechStacks}
               selectedStack={selectedTechStack}
@@ -866,7 +868,7 @@ const Dashboard = () => {
             />
 
             {/* Dynamic Widgets Grid */}
-            <div key={`${selectedTechStack}-${theme}`} className="grid gap-6" style={{ gridTemplateColumns: `repeat(${4}, minmax(0, 1fr))` }}>
+            <div key={`${selectedTechStack}-${theme}`} className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
               {activeViews.length === 0 ? (
                 <div style={{ gridColumn: '1 / -1' }} className="flex flex-col items-center justify-center py-16 text-slate-400">
                   <div className="text-6xl mb-4 opacity-30">📊</div>
@@ -1217,12 +1219,12 @@ const Dashboard = () => {
                         <div className={`flip-card-inner ${trendActive[view.id] ? 'flipped' : ''}`}>
                           {/* Front: Normal chart */}
                           <div className="flip-card-front">
-                            {loading ? <div className="animate-pulse h-[300px] bg-slate-100 dark:bg-slate-700/20 rounded"></div> : content}
+                            {loading ? <ChartSkeleton type="bar" height="300px" /> : content}
                           </div>
                           {/* Back: Trend chart */}
                           <div className="flip-card-back">
                             {trendLoadingMap[view.id] ? (
-                              <div className="animate-pulse h-[300px] bg-slate-100 dark:bg-slate-700/20 rounded"></div>
+                              <ChartSkeleton type="bar" height="300px" />
                             ) : displayedTrendSeries.length === 0 ? (
                               <div className="flex items-center justify-center h-[300px] text-slate-400 dark:text-slate-500">
                                 <p className="text-sm">{t('dashboard.noData') || 'No trend data available'}</p>

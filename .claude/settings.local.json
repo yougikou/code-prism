@@ -62,7 +62,10 @@
       "Bash(Remove-Item \"e:\\\\develop\\\\code-prism\\\\test_invalid_analyzer.yaml\", \"e:\\\\develop\\\\code-prism\\\\test_valid_custom.yaml\", \"e:\\\\develop\\\\code-prism\\\\test_multi_project_invalid.yaml\")",
       "Bash(cargo run *)",
       "Bash(curl -s http://localhost:3000/api/v1/scan-jobs/1)",
-      "Bash(powershell -Command \"Get-Process -Name codeprism -ErrorAction SilentlyContinue | Stop-Process -Force\")"
+      "Bash(powershell -Command \"Get-Process -Name codeprism -ErrorAction SilentlyContinue | Stop-Process -Force\")",
+      "WebFetch(domain:localhost)",
+      "WebFetch(domain:127.0.0.1)",
+      "Bash(curl -s http://localhost:3000/)"
     ]
   }
 }

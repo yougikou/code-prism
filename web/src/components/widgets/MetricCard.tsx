@@ -1,5 +1,6 @@
 import React from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { ChartSkeleton } from '@/components/ui/skeleton';
 
 interface MetricCardProps {
   title: string;
@@ -18,7 +19,7 @@ export const MetricCard: React.FC<MetricCardProps> = ({ title, value, subValue, 
       </CardHeader>
       <CardContent>
         {loading ? (
-          <div className="animate-pulse h-16 bg-slate-100 dark:bg-slate-700/20 rounded"></div>
+          <ChartSkeleton type="card" height="80px" />
         ) : (
           <div>
             <div className="text-5xl font-bold text-slate-800 dark:text-slate-100">{value}</div>

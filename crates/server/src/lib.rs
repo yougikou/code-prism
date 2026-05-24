@@ -75,8 +75,6 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
                     trend: view_def.trend,
-                    trend_limit: view_def.trend_limit as u32,
-                    trend_mode: view_def.trend_mode.clone(),
                     kind: ViewKind::TopN { source, params },
                 });
             }
@@ -98,8 +96,6 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
                     trend: view_def.trend,
-                    trend_limit: view_def.trend_limit as u32,
-                    trend_mode: view_def.trend_mode.clone(),
                     kind: ViewKind::Sum { source },
                 });
             }
@@ -121,8 +117,6 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
                     trend: view_def.trend,
-                    trend_limit: view_def.trend_limit as u32,
-                    trend_mode: view_def.trend_mode.clone(),
                     kind: ViewKind::Avg { source },
                 });
             }
@@ -144,8 +138,6 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
                     trend: view_def.trend,
-                    trend_limit: view_def.trend_limit as u32,
-                    trend_mode: view_def.trend_mode.clone(),
                     kind: ViewKind::Min { source },
                 });
             }
@@ -167,8 +159,6 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
                     trend: view_def.trend,
-                    trend_limit: view_def.trend_limit as u32,
-                    trend_mode: view_def.trend_mode.clone(),
                     kind: ViewKind::Max { source },
                 });
             }
@@ -194,8 +184,6 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
                     trend: view_def.trend,
-                    trend_limit: view_def.trend_limit as u32,
-                    trend_mode: view_def.trend_mode.clone(),
                     kind: ViewKind::Distribution { source, params },
                 });
             }

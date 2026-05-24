@@ -95,20 +95,30 @@
    scrollbar-gutter: stable;
 }
 
-/* Global scrollbar styling for the main content area if using defaults */
+/* Global scrollbar styling — theme-aware via CSS variables */
+:root {
+  --scrollbar-track: #f1f5f9;
+  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-thumb-hover: #94a3b8;
+}
+.dark {
+  --scrollbar-track: #1e293b;
+  --scrollbar-thumb: #475569;
+  --scrollbar-thumb-hover: #64748b;
+}
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #1e293b; 
+  background: var(--scrollbar-track);
 }
 ::-webkit-scrollbar-thumb {
-  background: #475569; 
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* Card flip animation for trend toggle */

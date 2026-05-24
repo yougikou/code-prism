@@ -159,7 +159,7 @@
     "tabs": {
       "techStacks": "テクノロジースタック",
       "globalExcludes": "グローバル除外",
-      "analyzers": "カスタム分析器",
+      "analyzers": "分析器",
       "views": "集計ビュー",
       "templates": "プロジェクトテンプレート"
     },
@@ -178,8 +178,9 @@
       "title": "グローバル除外パターン"
     },
     "analyzers": {
+      "builtinAnalyzers": "組み込み分析器",
       "regexAnalyzers": "カスタム正規表現分析器",
-      "implAnalyzers": "カスタム実装分析器",
+      "implAnalyzers": "カスタムPython分析器",
       "externalAnalyzers": "外部分析器（WASM）",
       "name": "名前",
       "pattern": "パターン",
@@ -187,10 +188,13 @@
       "category": "カテゴリ",
       "path": "パス",
       "addRegex": "正規表現を追加",
-      "addImpl": "実装を追加",
+      "addImpl": "Pythonを追加",
+      "implNamePlaceholder": "Pythonファイル名（拡張子なし）",
       "addExternal": "外部を追加",
       "delete": "削除",
-      "nameDuplicate": "同じ名前のアナライザーが既に存在します"
+      "nameDuplicate": "同じ名前のアナライザーが既に存在します",
+      "uncategorized": "（未分類）",
+      "usedBy": "使用元："
     },
     "views": {
       "title": "ビュー：{{id}}",
@@ -211,9 +215,32 @@
       "add": "ビューを追加",
       "delete": "削除",
       "showTrend": "トレンドを表示",
-      "trendLimit": "トレンドデータ数",
-      "trendMode": "トレンドスキャンモード"
-    },
+      "chartTypes": {
+        "default": "デフォルト",
+        "bar_row": "水平棒グラフ",
+        "bar_col": "垂直棒グラフ",
+        "pie": "円グラフ",
+        "line": "折れ線グラフ",
+        "stacked_bar": "積み上げ棒グラフ",
+        "heatmap": "ヒートマップ",
+        "radar": "レーダーチャート",
+        "gauge": "ゲージ",
+        "table": "テーブル",
+        "card": "メトリックカード"
+      },
+      "changeTypeModes": {
+        "none": "なし",
+        "all": "すべて（積み上げ）",
+        "switchable": "切り替え可能（A/M/D）"
+      },
+      "funcTypes": {
+        "top_n": "上位N",
+        "sum": "合計",
+        "avg": "平均",
+        "min": "最小",
+        "max": "最大",
+        "distribution": "分布"
+      }    },
     "expandAll": "すべて展開",
     "collapseAll": "すべて折りたたむ"
   },

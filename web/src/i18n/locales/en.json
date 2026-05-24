@@ -159,7 +159,7 @@
     "tabs": {
       "techStacks": "Tech Stacks",
       "globalExcludes": "Global Excludes",
-      "analyzers": "Custom Analyzers",
+      "analyzers": "Analyzers",
       "views": "Aggregation Views",
       "templates": "Project Templates"
     },
@@ -178,8 +178,9 @@
       "title": "Global Exclude Patterns"
     },
     "analyzers": {
+      "builtinAnalyzers": "Built-in Analyzers",
       "regexAnalyzers": "Custom Regex Analyzers",
-      "implAnalyzers": "Custom Implementation Analyzers",
+      "implAnalyzers": "Custom Python Analyzers",
       "externalAnalyzers": "External Analyzers (WASM)",
       "name": "Name",
       "pattern": "Pattern",
@@ -187,10 +188,13 @@
       "category": "Category",
       "path": "Path",
       "addRegex": "Add Regex",
-      "addImpl": "Add Impl",
+      "addImpl": "Add Python",
+      "implNamePlaceholder": "Python filename (no ext)",
       "addExternal": "Add External",
       "delete": "Delete",
-      "nameDuplicate": "An analyzer with this name already exists"
+      "nameDuplicate": "An analyzer with this name already exists",
+      "uncategorized": "(uncategorized)",
+      "usedBy": "Used by:"
     },
     "views": {
       "title": "View: {{id}}",
@@ -211,9 +215,32 @@
       "add": "Add View",
       "delete": "Delete",
       "showTrend": "Show Trend",
-      "trendLimit": "Trend Data Points",
-      "trendMode": "Trend Scan Mode"
-    },
+      "chartTypes": {
+        "default": "Default",
+        "bar_row": "Horizontal Bar",
+        "bar_col": "Vertical Bar",
+        "pie": "Pie",
+        "line": "Line",
+        "stacked_bar": "Stacked Bar",
+        "heatmap": "Heatmap",
+        "radar": "Radar",
+        "gauge": "Gauge",
+        "table": "Table",
+        "card": "Metric Card"
+      },
+      "changeTypeModes": {
+        "none": "None",
+        "all": "All (Stacked)",
+        "switchable": "Switchable (A/M/D)"
+      },
+      "funcTypes": {
+        "top_n": "Top N",
+        "sum": "Sum",
+        "avg": "Avg",
+        "min": "Min",
+        "max": "Max",
+        "distribution": "Distribution"
+      }    },
     "expandAll": "Expand All",
     "collapseAll": "Collapse All"
   },

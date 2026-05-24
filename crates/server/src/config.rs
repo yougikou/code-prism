@@ -68,13 +68,9 @@ pub struct ViewConfig {
     #[serde(flatten)]
     pub kind: ViewKind,
 
-    // Trend chart fields
+    // Trend chart field
     #[serde(default)]
     pub trend: bool,
-    #[serde(default = "default_trend_limit")]
-    pub trend_limit: u32,
-    #[serde(default)]
-    pub trend_mode: Option<String>,
 }
 
 fn default_columns() -> u32 {
@@ -87,10 +83,6 @@ fn default_width() -> u32 {
 
 fn default_include_children() -> bool {
     true
-}
-
-fn default_trend_limit() -> u32 {
-    30
 }
 
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
