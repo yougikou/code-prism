@@ -8,6 +8,7 @@ import {
   addLocalProject,
   listBranches,
   checkoutBranch,
+  pullRepo,
   listCommits,
   listRepos,
   deleteRepo,
@@ -29,6 +30,7 @@ import {
   XIcon,
   SearchIcon,
   RefreshCwIcon,
+  DownloadIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   Code2Icon,
@@ -218,6 +220,7 @@ export default function ExecutePage() {
   const [isBranchListOpen, setIsBranchListOpen] = useState(true)
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null)
   const [checkoutConfirm, setCheckoutConfirm] = useState<{ branch: string; is_remote: boolean } | null>(null)
+  const [pulling, setPulling] = useState(false)
 
   // ── Delete repo confirmation state ──
   const [deleteConfirmRepoId, setDeleteConfirmRepoId] = useState<string | null>(null)
@@ -269,6 +272,19 @@ export default function ExecutePage() {
       }
       setCommitsHasMore(res.has_more)
       setCommitOffset(offset + res.commits.length)
+
+      // Auto-show HEAD commit hash in ref1/ref2 when commits first load
+      if (!append && res.commits.length > 0) {
+        const head = res.commits[0]
+        const updateRef = (prev: RefSelection | null) => {
+          if (prev?.type === 'branch' && prev.value === branch && !prev.short_hash) {
+            return { ...prev, label: `${branch} @ ${head.short_hash}`, short_hash: head.short_hash, timestamp: head.timestamp }
+          }
+          return prev
+        }
+        setRef1(updateRef)
+        setRef2(updateRef)
+      }
     } catch (err) {
       setCommitError(err instanceof Error ? err.message : 'Failed to load commits')
     } finally {
@@ -541,6 +557,30 @@ export default function ExecutePage() {
     }
   }
 
+  // ── Pull handler ──
+  const handlePull = async () => {
+    if (!repoId || pulling) return
+    setPulling(true)
+    try {
+      const res = await pullRepo(repoId)
+      setCloneSuccess(res.message)
+      // Reload branches to get updated state
+      const branchesRes = await listBranches(repoId)
+      setBranches(branchesRes.branches)
+      setCurrentBranch(branchesRes.current_branch)
+      // Reload commits to show latest after pull
+      if (selectedBranch) {
+        setCommits([])
+        setCommitOffset(0)
+        loadCommits(repoId, selectedBranch, 0, commitSearch, false)
+      }
+    } catch (err) {
+      setCloneError(err instanceof Error ? err.message : 'Pull failed')
+    } finally {
+      setPulling(false)
+    }
+  }
+
   // ── Ref selection handlers ──
   const selectRefFromBranch = (branch: string) => {
     if (!ref1 || (ref1.value !== branch && ref2?.value !== branch)) {
@@ -715,14 +755,14 @@ export default function ExecutePage() {
                             {repo.git_url ? shortUrl(repo.git_url) : repo.path.split('\\').pop() || repo.path}
                           </span>
                         </div>
-                        <div className="flex items-center gap-3 text-xs text-slate-500 ml-6">
+                        <div className="flex items-center gap-3 text-xs text-slate-600 ml-6">
                           {repo.git_url ? (
                             <span className="truncate">{repo.git_url}</span>
                           ) : (
                             <span className="truncate">{repo.path}</span>
                           )}
                           <span className="shrink-0">·</span>
-                          <span className="shrink-0">{t('execute.branchLabel')} <span className="text-slate-400">{repo.current_branch || 'main'}</span></span>
+                          <span className="shrink-0">{t('execute.branchLabel')} <span className="text-slate-600">{repo.current_branch || 'main'}</span></span>
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0 ml-4">
@@ -915,12 +955,22 @@ export default function ExecutePage() {
                 <GitBranchIcon className="w-4 h-4 text-slate-500 shrink-0" />
                 <span className="text-sky-300">{currentBranch}</span>
               </div>
-              <button
-                onClick={handleReset}
-                className="px-3 py-1.5 text-xs bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-md hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors flex items-center gap-1.5 shrink-0 ml-4"
-              >
-                <RefreshCwIcon className="w-3.5 h-3.5" /> {t('execute.switchRepo')}
-              </button>
+              <div className="flex items-center gap-2 shrink-0 ml-4">
+                <button
+                  onClick={handlePull}
+                  disabled={pulling}
+                  className="px-3 py-1.5 text-xs bg-emerald-600/20 text-emerald-400 border border-emerald-600/30 rounded-md hover:bg-emerald-600/30 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+                >
+                  <DownloadIcon className={`w-3.5 h-3.5 ${pulling ? 'animate-pulse' : ''}`} />
+                  {pulling ? t('execute.pulling') : t('execute.pull')}
+                </button>
+                <button
+                  onClick={handleReset}
+                  className="px-3 py-1.5 text-xs bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-md hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors flex items-center gap-1.5"
+                >
+                  <RefreshCwIcon className="w-3.5 h-3.5" /> {t('execute.switchRepo')}
+                </button>
+              </div>
             </div>
 
             {/* ──────────── Step: Branches ──────────── */}
@@ -1018,7 +1068,7 @@ export default function ExecutePage() {
                                 'px-2.5 py-1 text-xs rounded-md transition-colors',
                                 isRef1 || isRef2
                                   ? 'bg-sky-600/20 text-sky-300 hover:bg-sky-600/30'
-                                  : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600',
+                                  : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600',
                               )}
                             >
                               {isRef1 || isRef2 ? t('execute.selected') : t('execute.select')}
@@ -1035,6 +1085,11 @@ export default function ExecutePage() {
                       </div>
                     )}
                     {branches.filter(b => b.is_remote).map((branch) => {
+                      // Derive local branch name from remote (e.g. "origin/main" → "main")
+                      const localName = branch.name.includes('/')
+                        ? branch.name.substring(branch.name.indexOf('/') + 1)
+                        : branch.name
+                      const isCurrent = localName === currentBranch
                       const isRef1 = ref1?.value === branch.name && ref1?.type === 'branch'
                       const isRef2 = ref2?.value === branch.name && ref2?.type === 'branch'
                       const isLoading = checkoutLoading === branch.name
@@ -1044,20 +1099,32 @@ export default function ExecutePage() {
                           key={branch.name}
                           className={classNames(
                             'flex items-center justify-between px-3 py-2 rounded-lg transition-colors cursor-pointer',
-                            isRef1 || isRef2
+                            isCurrent
                               ? 'bg-sky-600/10 border border-sky-500/30'
-                              : 'hover:bg-slate-100/50 dark:hover:bg-slate-700/50 border border-transparent',
+                              : isRef1 || isRef2
+                                ? 'bg-sky-600/10 border border-sky-500/30'
+                                : 'hover:bg-slate-100/50 dark:hover:bg-slate-700/50 border border-transparent',
                           )}
                           onClick={() => {
-                            requestCheckout(branch.name, true)
+                            if (!isCurrent) requestCheckout(branch.name, true)
                           }}
                         >
                           <div className="flex items-center gap-3 min-w-0">
-                            <GitForkIcon className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                            <span className="text-sm text-slate-400 truncate">
+                            {isCurrent ? (
+                              <span className="w-2 h-2 rounded-full bg-sky-400 shrink-0" />
+                            ) : (
+                              <GitForkIcon className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                            )}
+                            <span className={classNames(
+                              'text-sm truncate',
+                              isCurrent ? 'text-sky-200 font-medium' : 'text-slate-500',
+                            )}>
                               {branch.name}
                             </span>
                             <span className="text-xs text-slate-500 bg-slate-100/50 dark:bg-slate-700/50 px-1.5 py-0.5 rounded shrink-0">{t('execute.remote')}</span>
+                            {isCurrent && (
+                              <span className="text-xs text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded-full shrink-0">{t('execute.current')}</span>
+                            )}
                             {isRef1 && (
                               <span className="text-xs text-blue-300 bg-blue-500/10 px-2 py-0.5 rounded-full shrink-0">{t('execute.ref1')}</span>
                             )}
@@ -1067,25 +1134,15 @@ export default function ExecutePage() {
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              onClick={() => requestCheckout(branch.name, true)}
-                              disabled={isLoading}
-                              className="px-2.5 py-1 text-xs bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-md hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 transition-colors"
-                            >
-                              {isLoading ? <LoaderIcon className="w-3 h-3 animate-spin" /> : 'Checkout'}
-                            </button>
-                            <button
-                              onClick={() => selectRefFromBranch(branch.name)}
-                              disabled={isRef1 && !ref2}
-                              className={classNames(
-                                'px-2.5 py-1 text-xs rounded-md transition-colors',
-                                isRef1 || isRef2
-                                  ? 'bg-sky-600/20 text-sky-300 hover:bg-sky-600/30'
-                                  : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600',
-                              )}
-                            >
-                              {isRef1 || isRef2 ? t('execute.selected') : t('execute.select')}
-                            </button>
+                            {!isCurrent && (
+                              <button
+                                onClick={() => requestCheckout(branch.name, true)}
+                                disabled={isLoading}
+                                className="px-2.5 py-1 text-xs bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-md hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 transition-colors"
+                              >
+                                {isLoading ? <LoaderIcon className="w-3 h-3 animate-spin" /> : t('execute.checkout')}
+                              </button>
+                            )}
                           </div>
                         </div>
                       )
@@ -1137,7 +1194,6 @@ export default function ExecutePage() {
                       const isRef2 = ref2?.value === commit.hash && ref2?.type === 'commit'
                       const isSelected = isRef1 || isRef2
                       const hasEmptySlot = !ref1 || !ref2
-                      const slotHint = !ref1 ? t('execute.ref1') : !ref2 ? t('execute.ref2') : ''
 
                       return (
                         <div
@@ -1151,7 +1207,7 @@ export default function ExecutePage() {
                                 ? 'hover:bg-slate-100/50 dark:hover:bg-slate-700/50 border border-transparent cursor-pointer'
                                 : 'border border-transparent cursor-default opacity-60',
                           )}
-                          title={!hasEmptySlot && !isSelected ? t('execute.bothRefsFilled') : slotHint ? t('execute.clickToSelectAs', { slot: slotHint }) : ''}
+                          title={!hasEmptySlot && !isSelected ? t('execute.bothRefsFilled') : ''}
                         >
                           <div className="flex items-center gap-3 min-w-0">
                             <div className={classNames(
@@ -1168,16 +1224,13 @@ export default function ExecutePage() {
                             <span className="text-sm text-slate-700 dark:text-slate-300 truncate">{commit.message}</span>
                           </div>
                           <div className="flex items-center gap-2 shrink-0 ml-2">
-                            <span className="text-xs text-slate-500 hidden sm:inline">{commit.author}</span>
-                            <span className="text-xs text-slate-500 hidden sm:inline">{formatDate(commit.timestamp)}</span>
+                            <span className="text-xs text-slate-600 hidden sm:inline">{commit.author}</span>
+                            <span className="text-xs text-slate-600 hidden sm:inline">{formatDate(commit.timestamp)}</span>
                             {isRef1 && (
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-300">Ref 1</span>
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-300">{t('execute.ref1')}</span>
                             )}
                             {isRef2 && (
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300">Ref 2</span>
-                            )}
-                            {!isSelected && hasEmptySlot && (
-                              <span className="text-xs text-slate-500 hidden sm:inline">{slotHint}</span>
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300">{t('execute.ref2')}</span>
                             )}
                           </div>
                         </div>

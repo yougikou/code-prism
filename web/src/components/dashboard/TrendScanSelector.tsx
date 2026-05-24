@@ -122,7 +122,7 @@ export function TrendScanSelector({
 
         {/* Context bar */}
         <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-700/50">
-          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+          <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
             {contextLabel}
           </span>
         </div>
@@ -135,7 +135,7 @@ export function TrendScanSelector({
           <button onClick={clearAll} className="px-2.5 py-1 text-xs font-medium rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
             {t('trend.clearSelection')}
           </button>
-          <span className="text-xs text-slate-400 ml-auto">
+          <span className="text-xs text-slate-500 ml-auto">
             {t('trend.selectedCount', { count: selectedIds.size })}
           </span>
         </div>
@@ -143,11 +143,11 @@ export function TrendScanSelector({
         {/* Scan List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-1">
           {loading ? (
-            <div className="flex items-center justify-center h-32 text-slate-400">
+            <div className="flex items-center justify-center h-32 text-slate-500">
               <div className="animate-pulse">{t('common.loading')}</div>
             </div>
           ) : scans.length === 0 ? (
-            <div className="flex items-center justify-center h-32 text-slate-400">
+            <div className="flex items-center justify-center h-32 text-slate-500">
               <p className="text-sm">{t('trend.noScans')}</p>
             </div>
           ) : (
@@ -168,8 +168,8 @@ export function TrendScanSelector({
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono text-slate-400">{scan.commit_hash?.substring(0, 8)}</span>
-                    <span className="text-xs text-slate-400">
+                    <span className="text-xs font-mono text-slate-500">{scan.commit_hash?.substring(0, 8)}</span>
+                    <span className="text-xs text-slate-500">
                       {scan.commit_timestamp
                         ? new Date(scan.commit_timestamp * 1000).toLocaleDateString()
                         : formatDate(scan.scan_time)}

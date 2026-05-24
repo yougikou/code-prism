@@ -33,7 +33,7 @@ export const Header: React.FC = () => {
         {/* Compact Project Selector */}
         {isMultiProject ? (
           <div className="relative group">
-            <button className="px-2 py-1 rounded-md text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1">
+            <button className="px-2 py-1 rounded-md text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1">
               {currentProject || projectList[0]?.name}
               <ChevronDown className="w-3.5 h-3.5" />
             </button>
@@ -53,7 +53,7 @@ export const Header: React.FC = () => {
             </div>
           </div>
         ) : (
-          <span className="px-2 py-1 text-sm font-medium text-slate-400 dark:text-slate-500 opacity-80 cursor-default">
+          <span className="px-2 py-1 text-sm font-medium text-slate-500 dark:text-slate-500 opacity-80 cursor-default">
             {currentProject || projectList[0]?.name || 'default'}
           </span>
         )}
@@ -69,7 +69,7 @@ export const Header: React.FC = () => {
                 px-3 py-1.5 rounded-md text-sm font-medium transition-colors
                 ${currentPage === key
                   ? 'bg-sky-600 text-white'
-                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
                 }
               `}
             >

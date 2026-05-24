@@ -477,7 +477,7 @@ const Dashboard = () => {
 
   // --- Chart Option Generators ---
 
-  const textColor = theme === 'dark' ? '#94a3b8' : '#64748b';
+  const textColor = theme === 'dark' ? '#94a3b8' : '#475569';
   const splitLineColor = theme === 'dark' ? '#334155' : '#e2e8f0';
   const labelColor = theme === 'dark' ? '#f8fafc' : '#1e293b';
 
@@ -930,7 +930,7 @@ const Dashboard = () => {
             {/* Dynamic Widgets Grid */}
             <div key={`${selectedTechStack}-${theme}`} className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
               {activeViews.length === 0 ? (
-                <div style={{ gridColumn: '1 / -1' }} className="flex flex-col items-center justify-center py-16 text-slate-400">
+                <div style={{ gridColumn: '1 / -1' }} className="flex flex-col items-center justify-center py-16 text-slate-500">
                   <div className="text-6xl mb-4 opacity-30">📊</div>
                   <p className="text-lg font-medium text-slate-500 dark:text-slate-400 mb-2">
                     {t('dashboard.noViewsTitle')}
@@ -1113,7 +1113,7 @@ const Dashboard = () => {
                 // Show empty state when data is empty and not loading
                 if (data.length === 0 && !loading) {
                   content = (
-                    <div className="flex flex-col items-center justify-center h-[300px] text-slate-400 dark:text-slate-500">
+                    <div className="flex flex-col items-center justify-center h-[300px] text-slate-500 dark:text-slate-400">
                       <p className="text-sm">{t('dashboard.noData') || 'No data available'}</p>
                     </div>
                   );
@@ -1135,8 +1135,8 @@ const Dashboard = () => {
                     const sortedData = [...data].sort((a, b) => a.label.localeCompare(b.label));
                     content = (
                       <div className="overflow-x-auto">
-                        <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
-                          <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50">
+                        <table className="w-full text-sm text-left text-slate-700 dark:text-slate-300">
+                          <thead className="text-xs text-slate-600 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50">
                             <tr>
                               <th className="px-4 py-2">{t('table.label')}</th>
                               <th className="px-4 py-2 text-right">{t('table.value')}</th>
@@ -1301,7 +1301,7 @@ const Dashboard = () => {
                             {trendLoadingMap[view.id] ? (
                               <ChartSkeleton type="bar" height="300px" />
                             ) : displayedTrendSeries.length === 0 ? (
-                              <div className="flex items-center justify-center h-[300px] text-slate-400 dark:text-slate-500">
+                              <div className="flex items-center justify-center h-[300px] text-slate-500 dark:text-slate-400">
                                 <p className="text-sm">{t('dashboard.noData') || 'No trend data available'}</p>
                               </div>
                             ) : (
@@ -1314,7 +1314,7 @@ const Dashboard = () => {
                       {/* Time range preset buttons for trend charts */}
                       {trendActive[view.id] && (
                         <div className="flex items-center justify-center gap-1 mt-3 pt-3 border-t border-slate-100 dark:border-slate-700/50">
-                          <span className="text-xs text-slate-400 mr-2">{t('trend.timeRange')}</span>
+                          <span className="text-xs text-slate-500 mr-2">{t('trend.timeRange')}</span>
                           {TIME_RANGE_KEYS.map(range => {
                             const isActive = trendTimeRange === range;
                             return (
@@ -1340,7 +1340,7 @@ const Dashboard = () => {
                       {/* Limit selector for TopN charts */}
                       {view.type === 'top_n' && (
                         <div className="flex items-center justify-center gap-1 mt-3 pt-3 border-t border-slate-100 dark:border-slate-700/50">
-                          <span className="text-xs text-slate-400 mr-2">{t('dashboard.showTop')}</span>
+                          <span className="text-xs text-slate-500 mr-2">{t('dashboard.showTop')}</span>
                           {[3, 5, 10, 30, 50, 80, 100, 0].map(n => {
                             const isActive = (topnLimits[view.id] || 10) === n;
                             return (
@@ -1380,31 +1380,31 @@ const Dashboard = () => {
                       <div className="grid grid-cols-2 md:grid-cols-6 gap-4 text-sm">
                         <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
                           <div className="text-2xl font-bold text-sky-600 dark:text-sky-400">{scanSummary.total_files_scanned.toLocaleString()}</div>
-                          <div className="text-slate-500 dark:text-slate-400 mt-1">{t('dashboard.totalFiles')}</div>
+                          <p className="text-slate-600 dark:text-slate-400 mt-1">{t('dashboard.totalFiles')}</p>
                         </div>
                         <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
                           <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{scanSummary.total_analyzers_loaded.toLocaleString()}</div>
-                          <div className="text-slate-500 dark:text-slate-400 mt-1">{t('dashboard.analyzersLoaded')}</div>
+                          <p className="text-slate-600 dark:text-slate-400 mt-1">{t('dashboard.analyzersLoaded')}</p>
                         </div>
                         <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
                           <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{scanSummary.total_analyzers_executed.toLocaleString()}</div>
-                          <div className="text-slate-500 dark:text-slate-400 mt-1">{t('dashboard.analyzersExecuted')}</div>
+                          <p className="text-slate-600 dark:text-slate-400 mt-1">{t('dashboard.analyzersExecuted')}</p>
                         </div>
                         <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
                           <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{scanSummary.total_analyzer_executions.toLocaleString()}</div>
-                          <div className="text-slate-500 dark:text-slate-400 mt-1">{t('dashboard.totalExecutions')}</div>
+                          <p className="text-slate-600 dark:text-slate-400 mt-1">{t('dashboard.totalExecutions')}</p>
                         </div>
                         <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
                           <div className={`text-2xl font-bold ${(scanSummary.load_errors.length > 0 || scanSummary.total_errors > 0) ? 'text-red-500' : 'text-green-500'}`}>
                             {scanSummary.total_errors.toLocaleString()}
                           </div>
-                          <div className="text-slate-500 dark:text-slate-400 mt-1">{t('dashboard.totalErrors')}</div>
+                          <p className="text-slate-600 dark:text-slate-400 mt-1">{t('dashboard.totalErrors')}</p>
                         </div>
                         <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
                           <div className={`text-2xl font-bold ${(scanSummary.load_errors.length > 0 || scanSummary.total_errors > 0) ? 'text-amber-500' : 'text-green-500'}`}>
                             {scanSummary.load_errors.length.toLocaleString()}
                           </div>
-                          <div className="text-slate-500 dark:text-slate-400 mt-1">{t('dashboard.loadErrors')}</div>
+                          <p className="text-slate-600 dark:text-slate-400 mt-1">{t('dashboard.loadErrors')}</p>
                         </div>
                       </div>
 
@@ -1423,8 +1423,8 @@ const Dashboard = () => {
                       {/* Per-analyzer table */}
                       {scanSummary.analyzer_stats.length > 0 && (
                         <div className="overflow-x-auto">
-                          <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
-                            <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50">
+                          <table className="w-full text-sm text-left text-slate-700 dark:text-slate-300">
+                            <thead className="text-xs text-slate-600 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50">
                               <tr>
                                 <th className="px-3 py-2">{t('dashboard.analyzerId')}</th>
                                 <th className="px-3 py-2 text-right">{t('dashboard.filesAnalyzed')}</th>
@@ -1453,7 +1453,7 @@ const Dashboard = () => {
                       )}
                     </div>
                   ) : (
-                    <p className="text-sm text-slate-400 dark:text-slate-500 text-center py-4">
+                    <p className="text-sm text-slate-500 dark:text-slate-400 text-center py-4">
                       {t('dashboard.noSummary')}
                     </p>
                   )}
@@ -1565,8 +1565,8 @@ const Dashboard = () => {
                 )}
                 {fullscreenView.type === 'table' && fullscreenView.data && (
                   <div className="overflow-auto h-full">
-                    <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
-                      <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50 sticky top-0">
+                    <table className="w-full text-sm text-left text-slate-700 dark:text-slate-300">
+                      <thead className="text-xs text-slate-600 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50 sticky top-0">
                         <tr>
                           <th className="px-4 py-2">Label</th>
                           <th className="px-4 py-2 text-right">Value</th>
@@ -1622,7 +1622,7 @@ const Dashboard = () => {
               {/* Time range presets in fullscreen trend view */}
               {fullscreenView.type === 'trend' && (
                 <div className="flex items-center justify-center gap-1 px-6 pb-2 pt-2 border-t border-slate-100 dark:border-slate-700/50 shrink-0">
-                  <span className="text-xs text-slate-400 mr-2">{t('trend.timeRange')}</span>
+                  <span className="text-xs text-slate-500 mr-2">{t('trend.timeRange')}</span>
                   {TIME_RANGE_KEYS.map(range => {
                     const isActive = trendTimeRange === range;
                     return (
@@ -1643,7 +1643,7 @@ const Dashboard = () => {
               )}
               {fullscreenView.isTopN && fullscreenView.viewId && (
                 <div className="flex items-center justify-center gap-1 px-6 pb-4 pt-3 border-t border-slate-100 dark:border-slate-700/50 shrink-0">
-                  <span className="text-xs text-slate-400 mr-2">{t('dashboard.showTop')}</span>
+                  <span className="text-xs text-slate-500 mr-2">{t('dashboard.showTop')}</span>
                   {[3, 5, 10, 30, 50, 80, 100, 0].map(n => {
                     const isActive = (topnLimits[fullscreenView.viewId!] || 10) === n;
                     return (

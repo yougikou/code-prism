@@ -65,7 +65,8 @@
       "Bash(powershell -Command \"Get-Process -Name codeprism -ErrorAction SilentlyContinue | Stop-Process -Force\")",
       "WebFetch(domain:localhost)",
       "WebFetch(domain:127.0.0.1)",
-      "Bash(curl -s http://localhost:3000/)"
+      "Bash(curl -s http://localhost:3000/)",
+      "Bash(powershell *)"
     ]
   }
 }

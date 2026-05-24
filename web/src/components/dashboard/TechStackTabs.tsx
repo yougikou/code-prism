@@ -127,9 +127,9 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ techStacks, select
       {/* Category indicator — fixed min-height to prevent layout shift */}
       <div className="min-h-[1.25rem] flex items-center">
         {selectedStack !== 'Summary' && selectedStackCategory ? (
-          <span className="text-xs text-slate-400 dark:text-slate-500">
+          <span className="text-xs text-slate-500 dark:text-slate-400">
             <span className="font-medium text-slate-600 dark:text-slate-300">{selectedStackCategory}</span>
-            <span className="mx-1 text-slate-300 dark:text-slate-600">&gt;</span>
+            <span className="mx-1 text-slate-400 dark:text-slate-500">&gt;</span>
             <span>{selectedStack}</span>
           </span>
         ) : null}
@@ -159,7 +159,7 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ techStacks, select
             onClick={handleSummarySelect}
             className={`
               pb-4 pt-4 text-sm font-medium transition-colors relative whitespace-nowrap shrink-0
-              ${isSelected('Summary') ? 'text-sky-600 dark:text-sky-400' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}
+              ${isSelected('Summary') ? 'text-sky-600 dark:text-sky-400' : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}
             `}
           >
             {t('dashboard.summary')}
@@ -184,7 +184,7 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ techStacks, select
                   onClick={() => setOpenCategory(isOpen ? null : category)}
                   className={`
                     pb-4 pt-4 text-sm font-medium transition-colors relative whitespace-nowrap flex items-center gap-1
-                    ${isActive ? 'text-sky-600 dark:text-sky-400' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}
+                    ${isActive ? 'text-sky-600 dark:text-sky-400' : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}
                   `}
                 >
                   {displayName}

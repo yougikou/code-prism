@@ -133,7 +133,7 @@ export function MatchDetailView({
                   className="border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden"
                 >
                   {/* Match header: line number + side badge */}
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 dark:bg-slate-700/30 border-b border-slate-200 dark:border-slate-700 text-xs text-slate-500 dark:text-slate-400">
+                  <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 dark:bg-slate-700/30 border-b border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-400">
                     <Code className="h-3.5 w-3.5" />
                     <span className="font-mono font-medium">
                       L{match.line_number}
@@ -157,7 +157,7 @@ export function MatchDetailView({
 
                   {/* Context before */}
                   {match.context_before && (
-                    <div className="px-3 py-1 bg-slate-100/50 dark:bg-slate-700/10 text-xs text-slate-400 dark:text-slate-500 font-mono border-b border-slate-100 dark:border-slate-700/30 truncate">
+                    <div className="px-3 py-1 bg-slate-100/50 dark:bg-slate-700/10 text-xs text-slate-500 dark:text-slate-400 font-mono border-b border-slate-100 dark:border-slate-700/30 truncate">
                       {match.context_before}
                     </div>
                   )}

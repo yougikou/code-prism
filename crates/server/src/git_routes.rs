@@ -73,6 +73,12 @@ pub struct CommitsResponse {
 }
 
 #[derive(Serialize)]
+pub struct PullResponse {
+    pub branch: String,
+    pub message: String,
+}
+
+#[derive(Serialize)]
 struct ErrorResponse {
     error: String,
 }
@@ -183,9 +189,13 @@ fn walk_commits(
             let short_hash = hash[..7.min(hash.len())].to_string();
             let timestamp = commit_obj.time().seconds();
 
-            // Apply search filter if present
+            // Apply search filter if present (matches against message, hash, or short_hash)
             if let Some(ref search_str) = search_lower {
-                if !message.to_lowercase().contains(search_str) {
+                let msg_lower = message.to_lowercase();
+                if !msg_lower.contains(search_str)
+                    && !hash.contains(search_str.as_str())
+                    && !short_hash.contains(search_str.as_str())
+                {
                     continue;
                 }
             }
@@ -496,6 +506,102 @@ pub async fn checkout_branch(
                 }),
             )
                 .into_response()
+        }
+        Ok(Err(err)) => err_response(StatusCode::BAD_REQUEST, err),
+        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {}", e)),
+    }
+}
+
+/// POST /api/v1/git/{repo_id}/pull
+pub async fn pull_branch(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Response {
+    let repo_info = match state.git_cache.get(&repo_id) {
+        Some(info) => info,
+        None => return err_response(StatusCode::NOT_FOUND, "Repository not found".to_string()),
+    };
+
+    let path = repo_info.path.clone();
+    let current_branch = repo_info.current_branch.clone();
+    let branch_for_response = current_branch.clone();
+
+    let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let repo = Repository::open(&path).map_err(|e| e.message().to_string())?;
+
+        // Get HEAD reference and verify it's a branch
+        let head = repo.head().map_err(|e| format!("Failed to get HEAD: {}", e))?;
+        if !head.is_branch() {
+            return Err("HEAD is not a branch (detached HEAD)".to_string());
+        }
+
+        // Determine remote tracking ref name
+        let remote_ref_name = format!("refs/remotes/origin/{}", current_branch);
+
+        // Fetch from origin
+        let mut callbacks = git2::RemoteCallbacks::new();
+        callbacks.transfer_progress(|_stats| true);
+
+        let mut fetch_opts = git2::FetchOptions::new();
+        fetch_opts.remote_callbacks(callbacks);
+
+        let mut remote = repo.find_remote("origin")
+            .map_err(|_| "No remote 'origin' configured".to_string())?;
+        remote.fetch(&[] as &[&String], Some(&mut fetch_opts), None)
+            .map_err(|e| format!("Fetch from 'origin' failed: {}", e))?;
+
+        // After fetch, look up remote tracking ref and local branch ref
+        let local_ref_name = format!("refs/heads/{}", current_branch);
+        let mut local_ref = repo.find_reference(&local_ref_name)
+            .map_err(|e| format!("Failed to find local branch '{}': {}", local_ref_name, e))?;
+        let local_oid = local_ref.target()
+            .ok_or_else(|| "Local ref has no target".to_string())?;
+
+        // Try to get the remote tracking ref; if it doesn't exist, nothing to pull
+        let upstream_oid = match repo.find_reference(&remote_ref_name)
+            .and_then(|r| r.target().ok_or_else(|| git2::Error::from_str("No target")))
+        {
+            Ok(oid) => oid,
+            Err(_) => return Err(format!("No remote tracking branch '{}' found. Make sure the branch is pushed to origin.", remote_ref_name)),
+        };
+
+        if local_oid == upstream_oid {
+            return Ok("Already up to date".to_string());
+        }
+
+        // Check if fast-forward is possible
+        let merge_base = repo.merge_base(local_oid, upstream_oid)
+            .map_err(|e| format!("Cannot compute merge base: {}", e))?;
+
+        if merge_base != local_oid {
+            return Err(
+                "Local branch has diverged from upstream; fast-forward not possible. "
+                    .to_string()
+                    + "Try checking out a branch that hasn't diverged, or use git pull --rebase manually."
+            );
+        }
+
+        // Fast-forward: update local branch ref to point to upstream oid
+        local_ref.set_target(upstream_oid, "pull: fast-forward")
+            .map_err(|e| format!("Failed to update local branch: {}", e))?;
+
+        // Checkout to update working tree
+        let mut checkout_opts = git2::build::CheckoutBuilder::new();
+        checkout_opts.force();
+        repo.checkout_head(Some(&mut checkout_opts))
+            .map_err(|e| format!("Checkout after pull failed: {}", e))?;
+
+        let short_hash = upstream_oid.to_string();
+        let short_hash = &short_hash[..7.min(short_hash.len())];
+        Ok(format!(
+            "Successfully pulled '{}'. New HEAD at {}.",
+            current_branch, short_hash
+        ))
+    }).await;
+
+    match result {
+        Ok(Ok(message)) => {
+            (StatusCode::OK, Json(PullResponse { branch: branch_for_response, message })).into_response()
         }
         Ok(Err(err)) => err_response(StatusCode::BAD_REQUEST, err),
         Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {}", e)),

@@ -352,7 +352,7 @@ function TechStacksEditor({ config, onChange }: {
           <div className={`grid transition-all duration-200 ease-in-out ${expandedStacks.has(i) ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
             <div className="overflow-hidden min-h-0"><CardContent className="space-y-3">
             <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.techStack.category')}</label>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.techStack.category')}</label>
               <input
                 type="text"
                 value={stack.category || ''}
@@ -362,19 +362,19 @@ function TechStacksEditor({ config, onChange }: {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.techStack.extensions')}</label>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.techStack.extensions')}</label>
               <TagInput tags={stack.extensions} onChange={v => updateStack(i, 'extensions', v)} placeholder="e.g. .rs" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.techStack.analyzers')}</label>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.techStack.analyzers')}</label>
               <TagInput tags={stack.analyzers} onChange={v => updateStack(i, 'analyzers', v)} placeholder="e.g. file_count" suggestions={validAnalyzerIds} allowCustom={false} />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.techStack.paths')}</label>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.techStack.paths')}</label>
               <TagInput tags={stack.paths} onChange={v => updateStack(i, 'paths', v)} placeholder="e.g. src/" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.techStack.excludes')}</label>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.techStack.excludes')}</label>
               <TagInput tags={stack.excludes} onChange={v => updateStack(i, 'excludes', v)} placeholder="e.g. node_modules/" />
             </div>
           </CardContent></div>
@@ -649,7 +649,7 @@ function AnalyzersEditor({ config, onChange }: {
           <div className="overflow-hidden min-h-0">
             <CardContent className="space-y-3">
               {count === 0 && (
-                <p className="text-sm text-slate-400 italic">{t('dashboard.noData')}</p>
+                <p className="text-sm text-slate-500 italic">{t('dashboard.noData')}</p>
               )}
               {children}
               {addLabelKey && (
@@ -1142,16 +1142,16 @@ function ViewsEditor({ config, onChange }: {
             <div className="overflow-hidden min-h-0"><CardContent className="space-y-3">
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.viewTitle')}</label>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.views.viewTitle')}</label>
                 <input type="text" value={view.title} onChange={e => updateView(id, 'title', e.target.value)}
                   className="w-full px-3 py-2 text-sm border rounded-lg bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 focus:ring-2 focus:ring-sky-500 outline-none" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.chartType')}</label>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.views.chartType')}</label>
                 <SelectInput value={view.chart_type || ''} onChange={v => handleChartTypeChange(id, v)} options={CHART_TYPES} t={t} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.width')}</label>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.views.width')}</label>
                 <SelectInput value={String(view.width ?? 2)} onChange={v => updateView(id, 'width', Number(v))} options={[
                   { value: '1', label: '1' },
                   { value: '2', label: '2' },
@@ -1161,7 +1161,7 @@ function ViewsEditor({ config, onChange }: {
               </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.techStacks')}</label>
+              <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.views.techStacks')}</label>
               <TagInput tags={view.tech_stacks || []} onChange={v => updateView(id, 'tech_stacks', v)} placeholder="Leave empty for Summary" suggestions={['All', ...config.tech_stacks.map(s => s.name)]} allowCustom={false} />
             </div>
             <div>
@@ -1170,20 +1170,20 @@ function ViewsEditor({ config, onChange }: {
             </div>
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.changeTypeMode')}</label>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.views.changeTypeMode')}</label>
                 <SelectInput value={view.change_type_mode || ''} onChange={v => updateView(id, 'change_type_mode', v || undefined)} options={CHANGE_TYPE_MODES} t={t} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.groupBy')}</label>
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.views.groupBy')}</label>
                 <TagInput tags={view.group_by || []} onChange={v => updateView(id, 'group_by', v)} suggestions={GROUP_BY_OPTIONS} allowCustom={false} placeholder="e.g. tech_stack, category" maxTags={2} />
               </div>
               <div className="flex items-start gap-2">
                 <div className="w-36 shrink-0">
-                  <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.funcType')}</label>
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.views.funcType')}</label>
                   <SelectInput value={view.func.type} onChange={v => handleFuncTypeChange(id, v)} options={FUNC_TYPES} t={t} />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.includeChildren')}</label>
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.views.includeChildren')}</label>
                   <label className="relative inline-flex items-center cursor-pointer mt-2">
                     <input type="checkbox" checked={view.include_children !== false} onChange={e => updateView(id, 'include_children', e.target.checked)}
                       className="sr-only peer" />
@@ -1191,7 +1191,7 @@ function ViewsEditor({ config, onChange }: {
                   </label>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">{t('config.views.showTrend')}</label>
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.views.showTrend')}</label>
                   <label className="relative inline-flex items-center cursor-pointer mt-2">
                     <input type="checkbox" checked={view.trend === true} onChange={e => updateView(id, 'trend', e.target.checked || undefined)}
                       className="sr-only peer" />
@@ -1369,7 +1369,7 @@ export default function ConfigPage() {
                 className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
                   activeTab === tab.key
                     ? 'border-sky-500 text-sky-600 dark:text-sky-400'
-                    : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+                    : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
                 }`}
               >
                 {t(tab.labelKey)}
@@ -1646,7 +1646,7 @@ function ProjectManagementModal({ projectList, currentProject, onSelect, onCreat
         <div className="flex-1 overflow-y-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400">
+              <tr className="border-b border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400">
                 <th className="text-left py-2 px-2 font-medium">Name</th>
                 <th className="text-center py-2 px-2 font-medium">Config</th>
                 <th className="text-center py-2 px-2 font-medium">Scans</th>

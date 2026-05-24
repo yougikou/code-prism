@@ -99,7 +99,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-2 mb-1'} transition-all`}>
               <GitCommit className={`w-4 h-4 shrink-0 ${selectedRunId === run.id ? 'text-sky-600 dark:text-sky-400' : 'text-slate-400 dark:text-slate-500 group-hover:text-slate-500 dark:group-hover:text-slate-400'}`} />
               {!isCollapsed && (
-                <span className={`font-mono font-semibold truncate ${selectedRunId === run.id ? 'text-sky-900 dark:text-sky-100' : 'text-slate-600 dark:text-slate-300'}`}>
+                <span className={`font-mono font-semibold truncate ${selectedRunId === run.id ? 'text-sky-900 dark:text-sky-100' : 'text-slate-700 dark:text-slate-300'}`}>
                   {run.hash}
                 </span>
               )}
@@ -112,7 +112,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {!isCollapsed && (
               <div className="flex items-center gap-1.5 pl-6 overflow-hidden">
                 <Calendar className="w-3 h-3 text-slate-400 dark:text-slate-500 shrink-0" />
-                <span className="text-xs text-slate-500 truncate">
+                <span className="text-xs text-slate-600 truncate">
                   {run.date}
                 </span>
               </div>

@@ -21,7 +21,7 @@ use crate::routes::{
     AppState, get_scan_summary, get_view, get_scans, static_handler, execute_scan, get_scan_job, add_local_project,
     list_unified_projects, create_project, delete_project, get_matches,
 };
-use crate::git_routes::{clone_repo, list_branches, checkout_branch, list_commits, list_repos, delete_repo, extract_branches};
+use crate::git_routes::{clone_repo, list_branches, checkout_branch, pull_branch, list_commits, list_repos, delete_repo, extract_branches};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -282,6 +282,7 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, config_path: Strin
         .route("/api/v1/git/:repo_id", delete(delete_repo))
         .route("/api/v1/git/:repo_id/branches", get(list_branches))
         .route("/api/v1/git/:repo_id/checkout", post(checkout_branch))
+        .route("/api/v1/git/:repo_id/pull", post(pull_branch))
         .route("/api/v1/git/:repo_id/commits", get(list_commits))
         // Scan operations
         .route("/api/v1/scan", post(execute_scan))

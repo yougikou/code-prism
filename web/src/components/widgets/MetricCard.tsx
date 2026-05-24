@@ -13,7 +13,7 @@ export const MetricCard: React.FC<MetricCardProps> = ({ title, value, subValue, 
   return (
     <Card className="border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 backdrop-blur shadow-sm dark:shadow-xl transition-all">
       <CardHeader>
-        <CardTitle className="text-slate-500 dark:text-slate-200 text-sm font-medium uppercase tracking-wide">
+        <CardTitle className="text-slate-600 dark:text-slate-200 text-sm font-medium uppercase tracking-wide">
           {title}
         </CardTitle>
       </CardHeader>

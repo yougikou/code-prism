@@ -516,6 +516,17 @@ export async function checkoutBranch(repoId: string, branch: string): Promise<{ 
   return res.json();
 }
 
+export async function pullRepo(repoId: string): Promise<{ branch: string; message: string }> {
+  const res = await fetch(`/api/v1/git/${repoId}/pull`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Pull failed');
+  }
+  return res.json();
+}
+
 export async function listCommits(
   repoId: string,
   options?: { ref?: string; offset?: number; limit?: number; search?: string }
