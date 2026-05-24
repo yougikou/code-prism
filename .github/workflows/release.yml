@@ -102,7 +102,7 @@ jobs:
           Copy-Item ../../../scripts/codeprism-repo-list.ps1 scripts/
           Copy-Item ../../../scripts/codeprism-repo-clone.ps1 scripts/
           Copy-Item ../../../scripts/README.md scripts/
-          7z a ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }} \
+          7z a ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }} `
             ${{ env.BINARY_NAME }}.exe custom_analyzers\ scripts\
 
       - name: Upload artifact
