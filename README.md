@@ -25,21 +25,23 @@
 
 ---
 
-CodePrism is a **high-performance code analysis tool** built with Rust. It scans Git repositories, extracts metrics, and provides actionable insights through an intuitive web dashboard.
+CodePrism is a **high-performance code analysis tool** built with Rust. It scans Git repositories, extracts metrics, and provides actionable insights through an intuitive web dashboard. It features a **server-driven UI** architecture — the dashboard views, charts, and aggregation logic are defined in a YAML configuration file, allowing you to customize the analysis without touching frontend code.
 
 ![CodePrism Dashboard](screenshot.png)
 
 ## ✨ Features
 
 - 🚀 **High Performance** - Built with Rust for maximum speed
-- 📊 **Rich Analytics** - Multiple aggregation types and chart visualizations
-- 🔍 **Match-Level Detail** - Drill down from aggregated metrics to individual regex/Script/WASM match locations with line numbers and code context
+- 📊 **Rich Analytics** - Multiple aggregation types (Sum, Avg, TopN, Min, Max, Distribution) and chart visualizations (bar, line, pie, radar, heatmap, gauge, table)
+- 🔍 **Match-Level Detail** - Drill down from aggregated metrics to individual regex/Script/WASM match locations with line numbers, code context, and diff side filtering
 - 🔄 **Git Integration** - Snapshot and Diff scanning modes with background job tracking
-- 🎨 **Server-Driven UI** - Configurable dashboard via YAML with flexible grid layout
+- 🗂️ **Git Repository Management** - Clone remote repos, pull latest changes, switch branches, and browse commits directly from the dashboard
+- 🎨 **Server-Driven UI** - Configurable dashboard via YAML with flexible grid layout, per-view width, and change type display modes
 - 📦 **Multi-Project Support** - Manage multiple projects in one config with reusable templates
-- 🔌 **Extensible Analyzers** - Built-in, regex, Python, and WASM analyzers
-- 🌐 **i18n Support** - Built-in multi-language UI (English, Chinese, Japanese)
-- 📋 **Scan Job Tracking** - Background scan execution with real-time status monitoring
+- 🔌 **Extensible Analyzers** - Built-in, regex, Python, and WASM analyzers with per-file context, change type, and scan mode filtering
+- 🌐 **i18n Support** - Built-in multi-language UI (English, Chinese, Japanese) with runtime switching
+- 📋 **Scan Job Tracking** - Background scan execution with real-time status monitoring and progress reporting
+- ⚡ **Execute Page** - Unified UI for managing repositories, selecting branches/commits, and running scans with progress feedback
 
 ### Architecture
 
@@ -58,6 +60,19 @@ CodePrism is a **high-performance code analysis tool** built with Rust. It scans
 - `init-config` - Generate default configuration file
 - `check-config` - Validate configuration file
 - `test-analyzers` - Run self-tests for all Python analyzers in `custom_analyzers/`
+
+### CLI Helper Scripts
+
+The `scripts/` directory contains helper scripts for repository management and batch scanning:
+
+| Script | Description |
+|--------|-------------|
+| `codeprism-repo-list` / `.ps1` | List registered projects and their scan history |
+| `codeprism-repo-clone` / `.ps1` | Clone a remote repository and register it as a project |
+| `codeprism-scan` / `.ps1` | Scan one or all registered projects (supports batch mode) |
+| `codeprism-scan-list` / `.ps1` | List recent scans with status and timestamps |
+
+These scripts communicate with the running CodePrism server via its REST API, providing automation support when the server is running — ideal for recurring scans, CI/CD integration, and scheduled analysis workflows without direct CLI scan commands.
 
 ### Analyzers
 
@@ -294,6 +309,49 @@ codeprism check-config
 | `3` | Database error |
 | `4` | Git error |
 
+## 🖥️ Web Dashboard
+
+CodePrism includes a full-featured web dashboard built with React + TypeScript + Vite, embedded in the binary.
+
+### Pages
+
+| Page | Route | Description |
+|------|-------|-------------|
+| **Dashboard** | `/` | Main analytics view with configurable charts per tech stack tab |
+| **Execute** | `/execute` | Repository management and scan execution UI |
+| **Config** | `/config` | Visual configuration editor for views and projects |
+
+### Dashboard Features
+
+- **Tech Stack Tabs** — Each tech stack gets its own tab with dedicated aggregation views
+- **Summary Tab** — Views without a specific tech stack or marked as "All" appear here
+- **Trend Charts** — Timeseries line charts track metrics across multiple scans over time
+- **Drill-Down** — Click chart items to view file lists, then click files to see individual match locations with line numbers and code context
+- **Change Type Filtering** — Stacked A/M/D bars or switchable toggle buttons per view
+- **Skeleton Loaders** — Smooth loading states while data is being fetched
+- **Toast Notifications** — Non-intrusive feedback for background operations
+
+### Execute Page Features
+
+- **Repository Management** — Clone remote git repos, pull latest changes, switch branches
+- **Local Project Registration** — Register local directories as scan projects
+- **Scan Execution** — Run snapshot or diff scans with branch/commit selection
+- **Progress Tracking** — Real-time scan job status with progress bars
+- **Commit Browser** — Browse and search commits for diff scan reference
+
+### Config Page Features
+
+- **Views Editor** — Add, edit, and remove aggregation views with all func types (sum, avg, top_n, min, max, distribution)
+- **Project Manager** — Create, rename, and delete projects via UI modals
+- **Template Management** — Save and apply reusable project templates
+- **Live Preview** — See configuration changes reflected in the YAML output
+
+### Layout
+
+- **Sidebar** — Persistent navigation with links to Dashboard, Execute, and Config pages
+- **Header** — Current project info and language switcher
+- **Language Switcher** — Toggle between English, Chinese, and Japanese at runtime
+
 ## ⚙️ Configuration
 
 CodePrism uses YAML configuration files. See [Configuration Guide](#configuration-file-format) for details.
@@ -338,17 +396,27 @@ aggregation_views:
 
 ### Aggregation View func Configuration
 
-The `func` object in aggregation views supports the following fields:
+The `func` object in aggregation views supports the following fields for tag-based filtering:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `type` | string | **Yes** | Aggregation type: `sum`, `avg`, `top_n`, `min`, `max`, `distribution` |
-| `metric_key` | string | No | Filter by metric key (e.g., `"char_count"`) |
-| `category` | string | No | Filter by category (e.g., `"logging"`) |
-| `analyzer_id` | string | No | Filter by analyzer ID |
+| `tag_filters` | object | No | Key-value filter pairs (e.g., `metric: char_count`, `category: size`) |
+| `analyzer_id` | string or string[] | No | Filter by analyzer ID(s) |
 | `limit` | integer | For `top_n` | Number of results to return |
+| `order` | string | For `top_n` | Sort order: `"desc"` (default) or `"asc"` |
 | `buckets` | float[] | For `distribution` | Bucket boundaries for distribution |
-| `width` | integer | No | Grid width: `1` (half) or `2` (full). Defaults to `1`. |
+
+**Additional View Fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `width` | integer | `1` | Grid width: `1` (half) or `2` (full) |
+| `include_children` | boolean | `true` | Include child entries in aggregation results |
+| `change_type_mode` | string | — | Change type display: `"all"` (stacked), `"switchable"` (A/M/D toggle), or undefined (no change-type filtering) |
+| `group_by` | string[] | `[]` | Group results by: `tech_stack`, `category`, `change_type`, `metric_key`, `analyzer_id` |
+| `trend` | boolean | `false` | Enable trend/timeseries chart mode |
+| `trend_limit` | integer | `30` | Number of recent scans to include in trend data |
 
 **Supported Grouping Keys:**
 
@@ -360,17 +428,62 @@ The `group_by` field supports the following keys: `tech_stack`, `category`, `cha
 # Filter by metric_key only
 func:
   type: "sum"
-  metric_key: "char_count"
+  tag_filters:
+    metric: "char_count"
 
 # Filter by category only (no metric_key)
 func:
   type: "sum"
-  category: "logging"
+  tag_filters:
+    category: "logging"
 group_by: ["metric_key"]
 
 # No filters (aggregate all data)
 func:
   type: "sum"
+```
+
+**Sort Order for TopN:**
+
+```yaml
+# Top 10 largest files (descending, default)
+func:
+  type: "top_n"
+  tag_filters:
+    metric: "char_count"
+  limit: 10
+  order: "desc"
+
+# Bottom 10 smallest files (ascending)
+func:
+  type: "top_n"
+  tag_filters:
+    metric: "char_count"
+  limit: 10
+  order: "asc"
+```
+
+**Aggregation View Width and Change Type Mode:**
+
+```yaml
+# Full-width view with stacked A/M/D display
+aggregation_views:
+  code_churn:
+    title: "Code Churn by Tech Stack"
+    chart_type: bar_col
+    width: 2
+    change_type_mode: all
+    func:
+      type: sum
+      tag_filters:
+        metric: char_count
+
+# Switchable A/M/D toggle buttons
+  changes:
+    title: "Changes by Category"
+    change_type_mode: switchable
+    func:
+      type: sum
 ```
 
 ### Trend / Timeseries Charts
@@ -478,6 +591,29 @@ When developing custom analyzers, understand the distinction between `analyzer_i
 | `metric_key` | Identifies **what type of measurement** | Can be shared across analyzers |
 | `category` | Groups related metrics | For filtering/organization |
 
+**Custom Regex Analyzer Fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `pattern` | string | **Required** | Regex pattern to match |
+| `metric_key` | string | `"custom_match"` | Metric key for results |
+| `category` | string | — | Category for filtering |
+| `description` | string | — | Human-readable description |
+| `tags` | object | `{}` | Arbitrary key-value tags attached to results |
+| `scan_mode` | string | `"all"` | Apply to: `"all"`, `"snapshot"`, or `"diff"` |
+| `change_type` | string | `"all"` | Filter by change type: `"all"`, `"A"` (Add), `"M"` (Modify), `"D"` (Delete) |
+
+**Custom Implementation/script Analyzer Fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `metric_key` | string | — | Metric key for results |
+| `category` | string | — | Category for filtering |
+| `description` | string | — | Human-readable description |
+| `tags` | object | `{}` | Override or add tags on top of script output |
+| `scan_mode` | string | `"all"` | Apply to: `"all"`, `"snapshot"`, or `"diff"` |
+| `change_type` | string | `"all"` | Filter by change type: `"all"`, `"A"`, `"M"`, `"D"` |
+
 **Design Patterns:**
 
 1. **Multiple analyzers, same metric_key** - Different language analyzers can output the same `metric_key`:
@@ -571,9 +707,50 @@ flowchart TD
     C --> D[SQLite Database<br/>Metrics + Scan History]
 ```
 
-## 📚 Documentation
+## 📚 API Reference
 
-- [API Documentation](http://localhost:3000/swagger-ui) (when server running)
+### Core Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/projects/:name/scans/:scan_id/views/:view_id` | Get aggregated view data |
+| GET | `/api/v1/projects/:name/scans` | List scans for a project |
+| GET | `/api/v1/projects/:name/trends/:view_id` | Get trend/timeseries data |
+| GET | `/api/v1/projects/:name/scans/:scan_id/matches` | Get match-level details with pagination |
+| GET | `/api/v1/scans/jobs/:job_id` | Get scan job status and progress |
+| GET | `/api/v1/config` | Get current configuration |
+
+### Project Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/projects/unified` | List all projects from config + DB |
+| POST | `/api/v1/projects/add-local` | Register a local git repository |
+| POST | `/api/v1/projects` | Create a new project |
+| DELETE | `/api/v1/projects/:name` | Delete a project |
+| POST | `/api/v1/scans/execute` | Execute a new scan |
+
+### Git Repository Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/git/repos` | List all cached repositories |
+| POST | `/api/v1/git/clone` | Clone a remote repository |
+| GET | `/api/v1/git/:repo_id/branches` | List branches |
+| POST | `/api/v1/git/:repo_id/checkout` | Switch branch |
+| POST | `/api/v1/git/:repo_id/pull` | Pull latest changes |
+| GET | `/api/v1/git/:repo_id/commits` | List commits with search |
+| DELETE | `/api/v1/git/:repo_id` | Delete a cached repository |
+
+### Templates
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/templates` | List project templates |
+
+### Documentation
+
+- Swagger UI available at `/swagger-ui` (when server running)
 - OpenAPI spec at `/api-docs/openapi.json`
 
 ## 🤝 Contributing

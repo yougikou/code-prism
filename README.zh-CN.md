@@ -25,21 +25,23 @@
 
 ---
 
-CodePrism 是一个使用 Rust 构建的**高性能代码分析工具**。它可以扫描 Git 仓库、提取代码指标，并通过直观的 Web 仪表板提供可操作的洞察。
+CodePrism 是一个使用 Rust 构建的**高性能代码分析工具**。它可以扫描 Git 仓库、提取代码指标，并通过直观的 Web 仪表板提供可操作的洞察。采用**服务端驱动 UI** 架构——仪表板的视图、图表和聚合逻辑通过 YAML 配置文件定义，无需修改前端代码即可自定义分析。
 
 ![CodePrism Dashboard](screenshot.png)
 
 ## ✨ 功能特性
 
 - 🚀 **高性能** - 使用 Rust 构建，速度极快
-- 📊 **丰富的分析** - 多种聚合类型和图表可视化
-- 🔍 **匹配级别详情** - 从聚合指标下钻到单个正则/Python/WASM 匹配位置，包含行号和代码上下文
+- 📊 **丰富的分析** - 多种聚合类型（Sum、Avg、TopN、Min、Max、Distribution）和图表可视化（柱状图、折线图、饼图、雷达图、热力图、仪表盘、表格）
+- 🔍 **匹配级别详情** - 从聚合指标下钻到单个正则/Python/WASM 匹配位置，包含行号、代码上下文和差异侧过滤
 - 🔄 **Git 集成** - 支持快照和差异扫描模式，后台任务追踪
-- 🎨 **服务端驱动 UI** - 通过 YAML 配置仪表板，灵活网格布局
+- 🗂️ **Git 仓库管理** - 直接从仪表板克隆远程仓库、拉取最新变更、切换分支和浏览提交
+- 🎨 **服务端驱动 UI** - 通过 YAML 配置仪表板，灵活网格布局，支持按视图宽度和变更类型显示模式
 - 📦 **多项目支持** - 在一个配置文件中管理多个项目，支持可复用模板
-- 🔌 **可扩展分析器** - 内置、正则、Python 和 WASM 分析器
-- 🌐 **国际化 (i18n)** - 内置多语言 UI（英文、中文、日文）
-- 📋 **扫描任务追踪** - 后台扫描执行，实时状态监控
+- 🔌 **可扩展分析器** - 内置、正则、Python 和 WASM 分析器，支持按文件上下文、变更类型和扫描模式过滤
+- 🌐 **国际化 (i18n)** - 内置多语言 UI（英文、中文、日文），支持运行时切换
+- 📋 **扫描任务追踪** - 后台扫描执行，实时状态监控和进度报告
+- ⚡ **执行页面** - 统一的仓库管理、分支/提交选择和扫描执行 UI，带进度反馈
 
 ### 架构
 
@@ -58,6 +60,19 @@ CodePrism 是一个使用 Rust 构建的**高性能代码分析工具**。它可
 - `init-config` - 生成默认配置文件
 - `check-config` - 验证配置文件
 - `test-analyzers` - 运行 `custom_analyzers/` 中所有 Python 分析器的自测试
+
+### CLI 辅助脚本
+
+`scripts/` 目录包含仓库管理和批量扫描的辅助脚本：
+
+| 脚本 | 说明 |
+|--------|------|
+| `codeprism-repo-list` / `.ps1` | 列出已注册的项目及其扫描历史 |
+| `codeprism-repo-clone` / `.ps1` | 克隆远程仓库并注册为项目 |
+| `codeprism-scan` / `.ps1` | 扫描一个或所有已注册项目（支持批量模式） |
+| `codeprism-scan-list` / `.ps1` | 列出最近的扫描状态和时间 |
+
+这些脚本通过 REST API 与正在运行的 CodePrism 服务器通信，为服务器启动模式提供自动化支持——适用于定期扫描、CI/CD 集成和定时分析工作流，无需直接使用 CLI scan 命令。
 
 ### 分析器
 
@@ -294,6 +309,49 @@ codeprism check-config
 | `3` | 数据库错误 |
 | `4` | Git 错误 |
 
+## 🖥️ Web 仪表板
+
+CodePrism 包含一个功能齐全的 Web 仪表板，使用 React + TypeScript + Vite 构建，嵌入在二进制文件中。
+
+### 页面
+
+| 页面 | 路由 | 说明 |
+|------|------|------|
+| **仪表板 (Dashboard)** | `/` | 主分析视图，每个技术栈标签页有可配置的图表 |
+| **执行 (Execute)** | `/execute` | 仓库管理和扫描执行 UI |
+| **配置 (Config)** | `/config` | 视图和项目的可视化配置编辑器 |
+
+### 仪表板功能
+
+- **技术栈标签页** — 每个技术栈拥有独立标签页和对应的聚合视图
+- **汇总标签页** — 未指定技术栈或标记为 "All" 的视图显示在此
+- **趋势图** — 时序折线图跟踪多个扫描周期的指标变化
+- **下钻分析** — 点击图表项查看文件列表，点击文件查看匹配位置（含行号和代码上下文）
+- **变更类型过滤** — 每个视图支持堆叠 A/M/D 柱状图或可切换按钮
+- **骨架加载** — 数据获取时的平滑加载状态
+- **通知提示** — 后台操作的非侵入式反馈
+
+### 执行页面功能
+
+- **仓库管理** — 克隆远程 Git 仓库、拉取最新变更、切换分支
+- **本地项目注册** — 将本地目录注册为扫描项目
+- **扫描执行** — 使用分支/提交选择运行快照或差异扫描
+- **进度跟踪** — 扫描任务实时状态和进度条
+- **提交浏览器** — 浏览和搜索提交以供差异扫描参考
+
+### 配置页面功能
+
+- **视图编辑器** — 添加、编辑和删除聚合视图，支持所有 func 类型
+- **项目管理器** — 通过 UI 弹窗创建、重命名和删除项目
+- **模板管理** — 保存和应用可复用的项目模板
+- **实时预览** — 配置变更反映在 YAML 输出中
+
+### 布局
+
+- **侧边栏** — 提供仪表板、执行和配置页面的持久导航
+- **顶部栏** — 当前项目信息和语言切换器
+- **语言切换器** — 在运行时可切换英文、中文和日文
+
 ## ⚙️ 配置
 
 CodePrism 使用 YAML 配置文件。详情请参见[配置指南](#配置文件格式)。
@@ -338,17 +396,27 @@ aggregation_views:
 
 ### 聚合视图 func 配置
 
-聚合视图中的 `func` 对象支持以下字段：
+聚合视图中的 `func` 对象支持以下基于标签过滤的字段：
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `type` | string | **是** | 聚合类型：`sum`, `avg`, `top_n`, `min`, `max`, `distribution` |
-| `metric_key` | string | 否 | 按指标键筛选（如 `"char_count"`） |
-| `category` | string | 否 | 按类别筛选（如 `"logging"`） |
-| `analyzer_id` | string | 否 | 按分析器 ID 筛选 |
+| `tag_filters` | object | 否 | 键值过滤对（如 `metric: char_count`, `category: size`） |
+| `analyzer_id` | string 或 string[] | 否 | 按分析器 ID 筛选 |
 | `limit` | integer | `top_n` 需要 | 返回的结果数量 |
+| `order` | string | `top_n` 使用 | 排序方式：`"desc"`（默认）或 `"asc"` |
 | `buckets` | float[] | `distribution` 需要 | 分布统计的桶边界 |
-| `width` | integer | 否 | 网格宽度：`1`（半宽）或 `2`（全宽）。默认为 `1`。 |
+
+**附加视图字段：**
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `width` | integer | `1` | 网格宽度：`1`（半宽）或 `2`（全宽） |
+| `include_children` | boolean | `true` | 是否在聚合结果中包含子条目 |
+| `change_type_mode` | string | — | 变更类型显示模式：`"all"`（堆叠）、`"switchable"`（A/M/D 切换按钮）或不设置（无过滤） |
+| `group_by` | string[] | `[]` | 分组键：`tech_stack`, `category`, `change_type`, `metric_key`, `analyzer_id` |
+| `trend` | boolean | `false` | 启用趋势/时序图模式 |
+| `trend_limit` | integer | `30` | 趋势中包含的最近扫描次数 |
 
 **支持的分组键：**
 
@@ -360,17 +428,62 @@ aggregation_views:
 # 仅按 metric_key 筛选
 func:
   type: "sum"
-  metric_key: "char_count"
+  tag_filters:
+    metric: "char_count"
 
 # 仅按 category 筛选（不指定 metric_key）
 func:
   type: "sum"
-  category: "logging"
+  tag_filters:
+    category: "logging"
 group_by: ["metric_key"]
 
 # 无筛选条件（统计所有数据）
 func:
   type: "sum"
+```
+
+**TopN 排序：**
+
+```yaml
+# 最大的 10 个文件（降序，默认）
+func:
+  type: "top_n"
+  tag_filters:
+    metric: "char_count"
+  limit: 10
+  order: "desc"
+
+# 最小的 10 个文件（升序）
+func:
+  type: "top_n"
+  tag_filters:
+    metric: "char_count"
+  limit: 10
+  order: "asc"
+```
+
+**视图宽度和变更类型模式：**
+
+```yaml
+# 全宽视图，堆叠 A/M/D 显示
+aggregation_views:
+  code_churn:
+    title: "按技术栈的代码变动"
+    chart_type: bar_col
+    width: 2
+    change_type_mode: all
+    func:
+      type: sum
+      tag_filters:
+        metric: char_count
+
+# A/M/D 切换按钮
+  changes:
+    title: "按类别的变更"
+    change_type_mode: switchable
+    func:
+      type: sum
 ```
 
 ### 趋势图 / 时序图
@@ -478,6 +591,29 @@ GET /api/v1/projects/:project_name/trends/:view_id?mode=snapshot&limit=20
 | `metric_key` | 标识**什么类型的测量值** | 可跨分析器共享 |
 | `category` | 指标分组 | 用于过滤/组织 |
 
+**自定义正则分析器字段：**
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `pattern` | string | **必填** | 要匹配的正则表达式 |
+| `metric_key` | string | `"custom_match"` | 结果的指标键 |
+| `category` | string | — | 用于过滤的类别 |
+| `description` | string | — | 可读描述 |
+| `tags` | object | `{}` | 附加到结果的任意键值标签 |
+| `scan_mode` | string | `"all"` | 应用模式：`"all"`, `"snapshot"`, `"diff"` |
+| `change_type` | string | `"all"` | 变更类型过滤：`"all"`, `"A"`（新增）, `"M"`（修改）, `"D"`（删除） |
+
+**自定义实现/脚本分析器字段：**
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `metric_key` | string | — | 结果的指标键 |
+| `category` | string | — | 用于过滤的类别 |
+| `description` | string | — | 可读描述 |
+| `tags` | object | `{}` | 覆盖或补充脚本输出的标签 |
+| `scan_mode` | string | `"all"` | 应用模式：`"all"`, `"snapshot"`, `"diff"` |
+| `change_type` | string | `"all"` | 变更类型过滤：`"all"`, `"A"`, `"M"`, `"D"` |
+
 **设计模式：**
 
 1. **多个分析器，相同 metric_key** - 不同语言的分析器可以输出相同的 `metric_key`：
@@ -571,10 +707,48 @@ flowchart TD
     C --> D[SQLite 数据库<br/>指标 + 扫描历史]
 ```
 
-## 📚 文档
+## 📚 API 参考
 
-- [API 文档](http://localhost:3000/swagger-ui)（需要服务器运行中）
-- OpenAPI 规范：`/api-docs/openapi.json`
+### 核心端点
+
+| 方法 | 路径 | 说明 |
+|--------|------|------|
+| GET | `/api/v1/projects/:name/scans/:scan_id/views/:view_id` | 获取聚合视图数据 |
+| GET | `/api/v1/projects/:name/scans` | 列出项目的扫描记录 |
+| GET | `/api/v1/projects/:name/trends/:view_id` | 获取趋势/时序数据 |
+| GET | `/api/v1/projects/:name/scans/:scan_id/matches` | 获取匹配级别详情（分页） |
+| GET | `/api/v1/scans/jobs/:job_id` | 获取扫描任务状态和进度 |
+| GET | `/api/v1/config` | 获取当前配置 |
+
+### 项目管理
+
+| 方法 | 路径 | 说明 |
+|--------|------|------|
+| GET | `/api/v1/projects/unified` | 列出所有项目（配置 + 数据库） |
+| POST | `/api/v1/projects/add-local` | 注册本地 Git 仓库 |
+| POST | `/api/v1/projects` | 创建新项目 |
+| DELETE | `/api/v1/projects/:name` | 删除项目 |
+| POST | `/api/v1/scans/execute` | 执行新扫描 |
+
+### Git 仓库管理
+
+| 方法 | 路径 | 说明 |
+|--------|------|------|
+| GET | `/api/v1/git/repos` | 列出所有缓存的仓库 |
+| POST | `/api/v1/git/clone` | 克隆远程仓库 |
+| GET | `/api/v1/git/:repo_id/branches` | 列出分支 |
+| POST | `/api/v1/git/:repo_id/checkout` | 切换分支 |
+| POST | `/api/v1/git/:repo_id/pull` | 拉取最新变更 |
+| GET | `/api/v1/git/:repo_id/commits` | 列出提交（支持搜索） |
+| DELETE | `/api/v1/git/:repo_id` | 删除缓存的仓库 |
+
+### 模板
+
+| 方法 | 路径 | 说明 |
+|--------|------|------|
+| GET | `/api/v1/templates` | 列出项目模板 |
+
+- 文档：Swagger UI `/swagger-ui`（需要服务器运行中），OpenAPI 规范 `/api-docs/openapi.json`
 
 ## 🤝 贡献
 
