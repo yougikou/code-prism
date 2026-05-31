@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 interface LeafItem {
   label: string;
   value: number;
+  value_before?: number;
   group?: string;
   analyzerId?: string;
 }
@@ -13,11 +14,12 @@ interface ChildrenViewerProps {
   open: boolean;
   title: string;
   items: LeafItem[];
+  viewMode?: 'snapshot' | 'diff';
   onClose: () => void;
   onFileClick?: (label: string, analyzerId?: string) => void;
 }
 
-export function ChildrenViewer({ open, title, items, onClose, onFileClick }: ChildrenViewerProps) {
+export function ChildrenViewer({ open, title, items, viewMode, onClose, onFileClick }: ChildrenViewerProps) {
   const { t } = useTranslation();
   const [searchQuery, setSearchQuery] = useState('');
   const [caseSensitive, setCaseSensitive] = useState(false);
@@ -48,6 +50,7 @@ export function ChildrenViewer({ open, title, items, onClose, onFileClick }: Chi
   }, [items, searchQuery, caseSensitive, useRegex]);
 
   const hasGroup = items.length > 0 && items.some(item => item.group);
+  const isDiff = viewMode === 'diff';
 
   const [copiedLabel, setCopiedLabel] = useState<string | null>(null);
   const [csvCopied, setCsvCopied] = useState(false);
@@ -73,12 +76,21 @@ export function ChildrenViewer({ open, title, items, onClose, onFileClick }: Chi
   }, [open, onClose]);
 
   const downloadCSV = useCallback(() => {
-    const headers = hasGroup ? ['Group', 'Label', 'Value'] : ['Label', 'Value'];
+    const hasBeforeCol = isDiff;
+    const headers = hasGroup
+      ? ['Group', 'Label', ...(hasBeforeCol ? ['Before', 'After'] : ['Value'])]
+      : ['Label', ...(hasBeforeCol ? ['Before', 'After'] : ['Value'])];
     const rows = filteredItems.map(item => {
-      const value = Math.round(item.value).toString();
+      const after = Math.round(item.value).toString();
+      if (hasBeforeCol) {
+        const before = item.value_before != null ? Math.round(item.value_before).toString() : '0';
+        return hasGroup
+          ? [item.group || '', item.label, before, after]
+          : [item.label, before, after];
+      }
       return hasGroup
-        ? [item.group || '', item.label, value]
-        : [item.label, value];
+        ? [item.group || '', item.label, after]
+        : [item.label, after];
     });
 
     const csvContent = [headers.join(','), ...rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(','))].join('\n');
@@ -89,15 +101,24 @@ export function ChildrenViewer({ open, title, items, onClose, onFileClick }: Chi
     a.download = `${title.replace(/\s+/g, '_')}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [filteredItems, hasGroup, title]);
+  }, [filteredItems, hasGroup, isDiff, title]);
 
   const copyCSV = useCallback(() => {
-    const headers = hasGroup ? ['Group', 'Label', 'Value'] : ['Label', 'Value'];
+    const hasBeforeCol = isDiff;
+    const headers = hasGroup
+      ? ['Group', 'Label', ...(hasBeforeCol ? ['Before', 'After'] : ['Value'])]
+      : ['Label', ...(hasBeforeCol ? ['Before', 'After'] : ['Value'])];
     const rows = filteredItems.map(item => {
-      const value = Math.round(item.value).toString();
+      const after = Math.round(item.value).toString();
+      if (hasBeforeCol) {
+        const before = item.value_before != null ? Math.round(item.value_before).toString() : '0';
+        return hasGroup
+          ? [item.group || '', item.label, before, after]
+          : [item.label, before, after];
+      }
       return hasGroup
-        ? [item.group || '', item.label, value]
-        : [item.label, value];
+        ? [item.group || '', item.label, after]
+        : [item.label, after];
     });
 
     const csvContent = [headers.join(','), ...rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(','))].join('\n');
@@ -107,7 +128,7 @@ export function ChildrenViewer({ open, title, items, onClose, onFileClick }: Chi
     }).catch(() => {
       // Clipboard API may fail in insecure contexts
     });
-  }, [filteredItems, hasGroup]);
+  }, [filteredItems, hasGroup, isDiff]);
 
   if (!open) return null;
 
@@ -198,7 +219,7 @@ export function ChildrenViewer({ open, title, items, onClose, onFileClick }: Chi
                 <tr>
                   {hasGroup && <th className="px-4 py-2 whitespace-nowrap">{t('table.group')}</th>}
                   <th className="px-4 py-2 w-full">{t('table.label')}</th>
-                  <th className="px-4 py-2 text-right whitespace-nowrap">{t('table.value')}</th>
+                  <th className="px-4 py-2 text-right whitespace-nowrap">{isDiff ? t('table.beforeAfter') || 'Before → After' : t('table.value')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -239,8 +260,12 @@ export function ChildrenViewer({ open, title, items, onClose, onFileClick }: Chi
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-2 text-right text-slate-700 dark:text-slate-400 tabular-nums">
-                      {Math.round(item.value).toLocaleString()}
+                    <td className="px-4 py-2 text-right text-slate-700 dark:text-slate-400 tabular-nums whitespace-nowrap">
+                      {isDiff ? (
+                        <>{Math.round(item.value_before ?? 0).toLocaleString()} → <strong>{Math.round(item.value).toLocaleString()}</strong></>
+                      ) : (
+                        Math.round(item.value).toLocaleString()
+                      )}
                     </td>
                   </tr>
                 ))}

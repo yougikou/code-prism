@@ -45,7 +45,8 @@
   "table": {
     "label": "标签",
     "value": "值",
-    "group": "分组"
+    "group": "分组",
+    "beforeAfter": "改动前→改动后"
   },
   "chart": {
     "unknown": "未知"

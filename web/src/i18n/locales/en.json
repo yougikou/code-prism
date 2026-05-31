@@ -45,7 +45,8 @@
   "table": {
     "label": "Label",
     "value": "Value",
-    "group": "Group"
+    "group": "Group",
+    "beforeAfter": "Before→After"
   },
   "chart": {
     "unknown": "Unknown"

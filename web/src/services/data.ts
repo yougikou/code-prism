@@ -2,6 +2,7 @@
 export interface AggregationResult {
   label: string;
   value: number;
+  value_before?: number;
   tech_stack?: string;
   category?: string;
   change_type?: string;

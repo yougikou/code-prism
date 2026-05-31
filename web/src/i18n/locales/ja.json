@@ -45,7 +45,8 @@
   "table": {
     "label": "ラベル",
     "value": "値",
-    "group": "グループ"
+    "group": "グループ",
+    "beforeAfter": "変更前→変更後"
   },
   "chart": {
     "unknown": "不明"

@@ -76,6 +76,7 @@ const Dashboard = () => {
   interface LeafItem {
     label: string;
     value: number;
+    value_before?: number;
     group?: string;
     analyzerId?: string;
   }
@@ -483,7 +484,19 @@ const Dashboard = () => {
 
   // 1. Horizontal Bar (Row)
   const getBarRowOption = (_title: string, data: AggregationResult[], color: string) => ({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params: any[]) => {
+        if (!params || params.length === 0) return '';
+        const p = params[0];
+        const d = data[p.dataIndex];
+        if (viewMode === 'diff') {
+          return `<strong>${d.label}</strong><br/>${Math.round(d.value_before ?? 0).toLocaleString()} → <strong>${Math.round(d.value).toLocaleString()}</strong>`;
+        }
+        return `<strong>${d.label}</strong><br/>${Math.round(d.value).toLocaleString()}`;
+      }
+    },
     xAxis: {
       type: 'value',
       splitLine: { show: true, lineStyle: { color: splitLineColor } },
@@ -501,23 +514,51 @@ const Dashboard = () => {
       inverse: true
     },
     series: [{
-      data: data.map(d => Math.round(d.value)),
+      data: data.map(d => ({
+        value: Math.round(d.value),
+        valueBefore: d.value_before != null ? Math.round(d.value_before) : null,
+      })),
       type: 'bar',
       itemStyle: { color: color, borderRadius: [0, 4, 4, 0] },
-      label: { show: true, position: 'right', color: labelColor, formatter: (params: { value: number }) => Math.round(params.value).toLocaleString() }
+      label: {
+        show: true, position: 'right', color: labelColor,
+        formatter: (params: any) => {
+          const raw = params.data;
+          if (viewMode === 'diff') {
+            return `{before|${(raw.valueBefore ?? 0).toLocaleString()} → }{after|${raw.value.toLocaleString()}}`;
+          }
+          return `{after|${raw.value.toLocaleString()}}`;
+        },
+        rich: {
+          before: { color: labelColor, fontSize: 12, opacity: 0.7 },
+          after: { color: labelColor, fontSize: 12, fontWeight: 'bold' }
+        }
+      }
     }],
     grid: { left: 10, right: 40, top: 10, bottom: 20, containLabel: true }
   });
 
   // 2. Vertical Bar (Col)
   const getBarColOption = (_title: string, data: AggregationResult[], color: string) => ({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params: any[]) => {
+        if (!params || params.length === 0) return '';
+        const p = params[0];
+        const d = data[p.dataIndex];
+        if (viewMode === 'diff') {
+          return `<strong>${d.label}</strong><br/>${Math.round(d.value_before ?? 0).toLocaleString()} → <strong>${Math.round(d.value).toLocaleString()}</strong>`;
+        }
+        return `<strong>${d.label}</strong><br/>${Math.round(d.value).toLocaleString()}`;
+      }
+    },
     xAxis: {
       type: 'category',
       data: data.map(d => d.label.split('/').pop()),
       axisLabel: {
         color: textColor,
-        rotate: 30, // Rotate labels if many
+        rotate: 30,
         interval: 0
       }
     },
@@ -527,10 +568,26 @@ const Dashboard = () => {
       axisLabel: { color: textColor }
     },
     series: [{
-      data: data.map(d => Math.round(d.value)),
+      data: data.map(d => ({
+        value: Math.round(d.value),
+        valueBefore: d.value_before != null ? Math.round(d.value_before) : null,
+      })),
       type: 'bar',
       itemStyle: { color: color, borderRadius: [4, 4, 0, 0] },
-      label: { show: true, position: 'top', color: labelColor, formatter: (params: { value: number }) => Math.round(params.value).toLocaleString() }
+      label: {
+        show: true, position: 'top', color: labelColor,
+        formatter: (params: any) => {
+          const raw = params.data;
+          if (viewMode === 'diff') {
+            return `{before|${(raw.valueBefore ?? 0).toLocaleString()} → }{after|${raw.value.toLocaleString()}}`;
+          }
+          return `{after|${raw.value.toLocaleString()}}`;
+        },
+        rich: {
+          before: { color: labelColor, fontSize: 11, opacity: 0.7 },
+          after: { color: labelColor, fontSize: 11, fontWeight: 'bold' }
+        }
+      }
     }],
     grid: { left: 10, right: 10, top: 30, bottom: 10, containLabel: true }
   });
@@ -542,8 +599,13 @@ const Dashboard = () => {
     return {
       tooltip: {
         trigger: 'item',
-        formatter: (params: { name: string; value: number; percent: number }) =>
-          `${params.name}: ${Math.round(params.value).toLocaleString()} (${params.percent.toFixed(1)}%)`
+        formatter: (params: { name: string; value: number; percent: number; dataIndex: number }) => {
+          const d = data[params.dataIndex];
+          if (viewMode === 'diff') {
+            return `${params.name}: ${Math.round(d.value_before ?? 0).toLocaleString()} → <strong>${Math.round(params.value).toLocaleString()}</strong> (${params.percent.toFixed(1)}%)`;
+          }
+          return `${params.name}: ${Math.round(params.value).toLocaleString()} (${params.percent.toFixed(1)}%)`;
+        }
       },
       legend: {
         type: itemCount > 6 ? 'scroll' : 'plain',
@@ -604,7 +666,18 @@ const Dashboard = () => {
 
   // 4. Line Chart
   const getLineOption = (_title: string, data: AggregationResult[], color: string) => ({
-    tooltip: { trigger: 'axis' },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: any[]) => {
+        if (!params || params.length === 0) return '';
+        const p = params[0];
+        const d = data[p.dataIndex];
+        if (viewMode === 'diff') {
+          return `<strong>${d.label}</strong><br/>${Math.round(d.value_before ?? 0).toLocaleString()} → <strong>${Math.round(d.value).toLocaleString()}</strong>`;
+        }
+        return `<strong>${d.label}</strong><br/>${Math.round(d.value).toLocaleString()}`;
+      }
+    },
     xAxis: {
       type: 'category',
       data: data.map(d => d.label),
@@ -636,7 +709,23 @@ const Dashboard = () => {
     const colors = ['#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4'];
 
     return {
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params: any[]) => {
+          if (!params || params.length === 0) return '';
+          const p = params[0];
+          const d = data[p.dataIndex];
+          let html = `<strong>${d.label}</strong><br/>`;
+          params.forEach((param: any) => {
+            html += `${param.marker} ${param.seriesName}: ${Math.round(param.value).toLocaleString()}<br/>`;
+          });
+          if (viewMode === 'diff') {
+            html += `<hr style="margin:4px 0"/><span>Before: ${Math.round(d.value_before ?? 0).toLocaleString()} → <strong>After: ${Math.round(d.value).toLocaleString()}</strong></span>`;
+          }
+          return html;
+        }
+      },
       legend: {
         data: categories,
         textStyle: { color: textColor },
@@ -847,7 +936,7 @@ const Dashboard = () => {
             ? `(${changeType})`
             : groupLabel || item.group_key || undefined;
 
-        result.push({ label: item.label, value: Math.round(item.value), group, analyzerId: item.analyzer_id });
+        result.push({ label: item.label, value: Math.round(item.value), value_before: item.value_before != null ? Math.round(item.value_before) : undefined, group, analyzerId: item.analyzer_id });
       }
     }
     return result;
@@ -1121,11 +1210,16 @@ const Dashboard = () => {
                   if (actualChartType === 'card') {
                     // Metric Card
                     const totalValue = data.reduce((acc, curr) => acc + curr.value, 0);
+                    const totalBefore = data.reduce((acc, curr) => acc + (curr.value_before ?? 0), 0);
+                    const hasBefore = viewMode === 'diff';
+                    const displayValue = hasBefore
+                      ? `${totalBefore.toLocaleString()} → ${totalValue.toLocaleString()}`
+                      : totalValue.toLocaleString();
                     content = (
                       <MetricCard
                         key={view.id}
                         title={title}
-                        value={totalValue.toLocaleString()}
+                        value={displayValue}
                         subValue={t('dashboard.totalValue')}
                         loading={loading}
                       />
@@ -1133,20 +1227,27 @@ const Dashboard = () => {
                   } else if (actualChartType === 'table') {
                     // Simple Table — sort by label alphabetically
                     const sortedData = [...data].sort((a, b) => a.label.localeCompare(b.label));
+                    const isDiff = viewMode === 'diff';
                     content = (
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm text-left text-slate-700 dark:text-slate-300">
                           <thead className="text-xs text-slate-600 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50">
                             <tr>
                               <th className="px-4 py-2">{t('table.label')}</th>
-                              <th className="px-4 py-2 text-right">{t('table.value')}</th>
+                              <th className="px-4 py-2 text-right whitespace-nowrap">{isDiff ? t('table.beforeAfter') || 'Before → After' : t('table.value')}</th>
                             </tr>
                           </thead>
                           <tbody>
                             {sortedData.map((d, i) => (
                               <tr key={i} className="border-b border-slate-200 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/20">
                                 <td className="px-4 py-2 font-medium">{d.label}</td>
-                                <td className="px-4 py-2 text-right">{Math.round(d.value).toLocaleString()}</td>
+                                <td className="px-4 py-2 text-right tabular-nums whitespace-nowrap">
+                                  {isDiff ? (
+                                    <>{Math.round(d.value_before ?? 0).toLocaleString()} → <strong>{Math.round(d.value).toLocaleString()}</strong></>
+                                  ) : (
+                                    Math.round(d.value).toLocaleString()
+                                  )}
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -1470,6 +1571,7 @@ const Dashboard = () => {
         open={childrenView.open}
         title={childrenView.title}
         items={childrenView.items}
+        viewMode={viewMode}
         onClose={() => setChildrenView({ open: false, title: '', items: [] })}
         onFileClick={(filePath, analyzerId) => handleFileClick(filePath, childrenView.title, analyzerId)}
       />
@@ -1558,7 +1660,7 @@ const Dashboard = () => {
                 {fullscreenView.type === 'card' && fullscreenView.value && (
                   <div className="flex items-center justify-center h-full">
                     <div className="text-center">
-                      <div className="text-7xl font-bold text-slate-800 dark:text-slate-200">{fullscreenView.value}</div>
+                      <div className="text-5xl font-bold text-slate-800 dark:text-slate-200 leading-relaxed">{fullscreenView.value}</div>
                       <div className="text-lg text-slate-500 dark:text-slate-400 mt-2">{fullscreenView.title}</div>
                     </div>
                   </div>
@@ -1569,7 +1671,7 @@ const Dashboard = () => {
                       <thead className="text-xs text-slate-600 dark:text-slate-400 uppercase bg-slate-100 dark:bg-slate-800/50 sticky top-0">
                         <tr>
                           <th className="px-4 py-2">Label</th>
-                          <th className="px-4 py-2 text-right">Value</th>
+                          <th className="px-4 py-2 text-right whitespace-nowrap">{viewMode === 'diff' ? 'Before → After' : 'Value'}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1578,7 +1680,13 @@ const Dashboard = () => {
                           .map((d, i) => (
                           <tr key={i} className="border-b border-slate-200 dark:border-slate-700/50">
                             <td className="px-4 py-2 font-medium">{d.label}</td>
-                            <td className="px-4 py-2 text-right">{Math.round(d.value).toLocaleString()}</td>
+                            <td className="px-4 py-2 text-right tabular-nums whitespace-nowrap">
+                              {viewMode === 'diff' ? (
+                                <>{Math.round(d.value_before ?? 0).toLocaleString()} → <strong>{Math.round(d.value).toLocaleString()}</strong></>
+                              ) : (
+                                Math.round(d.value).toLocaleString()
+                              )}
+                            </td>
                           </tr>
                         ))}
                       </tbody>

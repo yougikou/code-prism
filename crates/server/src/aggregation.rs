@@ -10,6 +10,9 @@ use utoipa::ToSchema;
 pub struct AggregationResult {
     pub label: String,
     pub value: f64,
+    /// Value before change (diff mode only, None for snapshot)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_before: Option<f64>,
     pub tech_stack: Option<String>,
     pub category: Option<String>,
     pub change_type: Option<String>,
@@ -67,7 +70,7 @@ impl TopNAggregator {
         let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
 
         let mut query = String::from(
-            "SELECT file_path, value_after, tech_stack, tags, change_type, analyzer_id
+            "SELECT file_path, value_after, value_before, tech_stack, tags, change_type, analyzer_id
              FROM metrics
              WHERE scan_id = ? AND value_after IS NOT NULL AND value_after > 0",
         );
@@ -140,6 +143,7 @@ impl TopNAggregator {
                 AggregationResult {
                     label: row.try_get::<String, _>("file_path").unwrap_or_default(),
                     value: row.try_get::<f64, _>("value_after").unwrap_or_default(),
+                    value_before: row.try_get::<Option<f64>, _>("value_before").unwrap_or_default(),
                     tech_stack: row
                         .try_get::<Option<String>, _>("tech_stack")
                         .unwrap_or_default(),
@@ -245,6 +249,16 @@ impl TopNAggregator {
             // Calculate aggregate value (SUM of immediate children values)
             let total_value: f64 = children.iter().map(|c| c.value).sum();
 
+            // Calculate aggregate value_before (SUM of children's value_before, if any)
+            let total_value_before: Option<f64> = {
+                let sum: f64 = children.iter().filter_map(|c| c.value_before).sum();
+                if children.iter().any(|c| c.value_before.is_some()) {
+                    Some(sum)
+                } else {
+                    None
+                }
+            };
+
             // Filter children if requested
             // Only strictly apply exclusion if we are at the bottom (no more grouping keys).
             // If there ARE remaining keys, 'children' are the sub-groups, which we almost certainly want to keep
@@ -258,6 +272,7 @@ impl TopNAggregator {
             let mut node = AggregationResult {
                 label: group_val.clone(),
                 value: total_value,
+                value_before: total_value_before,
                 tech_stack: None,
                 category: None,
                 change_type: None,
@@ -316,7 +331,7 @@ impl SumAggregator {
         let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
 
         let mut query = String::from(
-            "SELECT file_path, value_after, tech_stack, tags, change_type, analyzer_id
+            "SELECT file_path, value_after, value_before, tech_stack, tags, change_type, analyzer_id
              FROM metrics
              WHERE scan_id = ? AND value_after IS NOT NULL AND value_after > 0",
         );
@@ -385,6 +400,7 @@ impl SumAggregator {
                 AggregationResult {
                     label: row.try_get::<String, _>("file_path").unwrap_or_default(),
                     value: row.try_get::<f64, _>("value_after").unwrap_or_default(),
+                    value_before: row.try_get::<Option<f64>, _>("value_before").unwrap_or_default(),
                     tech_stack: row
                         .try_get::<Option<String>, _>("tech_stack")
                         .unwrap_or_default(),
@@ -432,9 +448,18 @@ impl SumAggregator {
                 // For now, let's keep consistency: returns items.
                 // If we strictly want SUM, we should probably output 1 row.
                 let total: f64 = results.iter().map(|r| r.value).sum();
+                let total_before: Option<f64> = {
+                    let sum: f64 = results.iter().filter_map(|r| r.value_before).sum();
+                    if results.iter().any(|r| r.value_before.is_some()) {
+                        Some(sum)
+                    } else {
+                        None
+                    }
+                };
                 results = vec![AggregationResult {
                     label: "Total".to_string(),
                     value: total,
+                    value_before: total_before,
                     tech_stack: None,
                     category: None,
                     change_type: None,
@@ -448,9 +473,18 @@ impl SumAggregator {
         } else {
             // Explicit default for Sum View: Single Total if no grouping is specified!
             let total: f64 = results.iter().map(|r| r.value).sum();
+            let total_before: Option<f64> = {
+                let sum: f64 = results.iter().filter_map(|r| r.value_before).sum();
+                if results.iter().any(|r| r.value_before.is_some()) {
+                    Some(sum)
+                } else {
+                    None
+                }
+            };
             results = vec![AggregationResult {
                 label: "Total".to_string(),
                 value: total,
+                value_before: total_before,
                 tech_stack: None,
                 category: None,
                 change_type: None,
@@ -625,6 +659,7 @@ impl StatAggregator {
                 AggregationResult {
                     label,
                     value: row.try_get::<f64, _>("stat_value").unwrap_or_default(),
+                    value_before: None,
                     tech_stack: row
                         .try_get::<Option<String>, _>("tech_stack")
                         .unwrap_or_default(),
@@ -779,6 +814,7 @@ impl StatAggregator {
                 AggregationResult {
                     label: key_parts.first().cloned().unwrap_or_default(),
                     value: stat_value,
+                    value_before: None,
                     tech_stack: None,
                     category: None,
                     change_type: None,
@@ -904,6 +940,7 @@ impl DistributionAggregator {
                 bucket_children[bucket_idx].push(AggregationResult {
                     label: file_path,
                     value,
+                    value_before: None,
                     tech_stack: None,
                     category: None,
                     change_type: None,
@@ -938,6 +975,7 @@ impl DistributionAggregator {
                 results.push(AggregationResult {
                     label,
                     value: children.len() as f64,
+                    value_before: None,
                     tech_stack: None,
                     category: None,
                     change_type: None,
@@ -983,6 +1021,7 @@ impl DistributionAggregator {
                 results.push(AggregationResult {
                     label,
                     value: *count as f64,
+                    value_before: None,
                     tech_stack: None,
                     category: None,
                     change_type: None,
