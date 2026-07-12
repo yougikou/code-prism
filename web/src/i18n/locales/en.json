@@ -197,7 +197,11 @@
       "delete": "Delete",
       "nameDuplicate": "An analyzer with this name already exists",
       "uncategorized": "(uncategorized)",
-      "usedBy": "Used by:"
+      "usedBy": "Used by:",
+      "singleFileAnalyzers": "Single-File Analyzers",
+      "crossFileAnalyzers": "Cross-File Analyzers",
+      "addCrossFile": "Add Cross-File",
+      "scriptPath": "Script"
     },
     "views": {
       "title": "View: {{id}}",
@@ -218,6 +222,7 @@
       "add": "Add View",
       "delete": "Delete",
       "showTrend": "Show Trend",
+      "detailView": "Detail View",
       "chartTypes": {
         "default": "Default",
         "bar_row": "Horizontal Bar",

@@ -208,11 +208,18 @@ impl Analyzer for ScriptAnalyzer {
                     return vec![];
                 }
                 Ok(_) => {
-                    // Parse Output
+                    // Parse Output — try standard metric format first, then
+                    // duplication block format (auto-detect at call time).
                     let raw_outputs: Vec<ScriptOutput> = match serde_json::from_str(&line) {
                         Ok(o) => o,
-                        Err(e) => {
-                            eprintln!("Failed to parse analyzer output: {}", e);
+                        Err(first_err) => {
+                            // Check if this is a duplication script (block output format).
+                            // If so, return empty metrics silently — duplication analyzers
+                            // are handled separately via the FileProcessor (cross-file) trait.
+                            if serde_json::from_str::<Vec<codeprism_core::ScriptContentBlock>>(&line).is_ok() {
+                                return vec![];
+                            }
+                            eprintln!("Failed to parse analyzer output: {}", first_err);
                             return vec![];
                         }
                     };

@@ -71,6 +71,9 @@ pub struct ViewConfig {
     // Trend chart field
     #[serde(default)]
     pub trend: bool,
+    /// Enable drill-down detail view for cross-file analysis charts.
+    #[serde(default)]
+    pub detail_view: bool,
 }
 
 fn default_columns() -> u32 {

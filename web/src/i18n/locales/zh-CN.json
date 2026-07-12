@@ -197,7 +197,11 @@
       "delete": "删除",
       "nameDuplicate": "同名分析器已存在",
       "uncategorized": "（未分类）",
-      "usedBy": "被引用："
+      "usedBy": "被引用：",
+      "singleFileAnalyzers": "单文件分析器",
+      "crossFileAnalyzers": "跨文件分析器",
+      "addCrossFile": "添加跨文件",
+      "scriptPath": "脚本路径"
     },
     "views": {
       "title": "视图：{{id}}",
@@ -218,6 +222,7 @@
       "add": "添加视图",
       "delete": "删除",
       "showTrend": "显示趋势",
+      "detailView": "详情视图",
       "chartTypes": {
         "default": "默认",
         "bar_row": "横向柱状图",

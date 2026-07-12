@@ -222,6 +222,7 @@ impl TopNAggregator {
                     .analyzer_id
                     .clone()
                     .unwrap_or_else(|| "Unknown".to_string()),
+                "file_path" => item.label.clone(),
                 "extension" => std::path::Path::new(&item.label)
                     .extension()
                     .and_then(|e| e.to_str())
@@ -580,7 +581,7 @@ impl StatAggregator {
 
         if let Some(ref group_by_str) = effective_group_by {
             const ALLOWED_GROUP_KEYS: &[&str] = &[
-                "tech_stack", "category", "change_type", "metric_key", "analyzer_id",
+                "tech_stack", "category", "change_type", "metric_key", "analyzer_id", "file_path",
             ];
             let all_keys: Vec<&str> = group_by_str
                 .split(',')
@@ -780,6 +781,7 @@ impl StatAggregator {
                         .cloned()
                         .unwrap_or_default(),
                     "analyzer_id" => analyzer_id.clone().unwrap_or_default(),
+                    "file_path" => file_path.clone(),
                     "extension" => std::path::Path::new(&file_path)
                         .extension()
                         .and_then(|e| e.to_str())

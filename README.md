@@ -121,6 +121,67 @@ This auto-discovers all `.py` files in `custom_analyzers/` and runs their test e
 - [`gosu_complexity.py`](custom_analyzers/gosu_complexity.py) — Cyclomatic complexity for Gosu language
 - [`java_complexity.py`](custom_analyzers/java_complexity.py) — Cyclomatic complexity for Java
 
+#### Cross-File (Duplication) Analyzers
+
+Cross-file analyzers detect patterns that span multiple files — most commonly **duplicate code blocks** (copy-paste detection). They use a **two-phase protocol** that extends the single-file Python script model:
+
+1. **`extract` phase** (per-file, same as regular Python analyzers but with `"action": "extract"`):
+   ```json
+   {"action": "extract", "file_path": "src/main.rs", "content": "fn main() { ... }"}
+   ```
+   Returns a JSON array of extracted blocks:
+   ```json
+   [{"block_size": 12, "line_start": 5, "line_end": 16, "block_content": "let x = 1;", "normalized_content": "let x=1;", "metric_key": "duplicate_block", "category": "duplication"}]
+   ```
+
+2. **`finalize` phase** (once after all files are scanned):
+   ```json
+   {"action": "finalize", "blocks": [
+     {"file_path": "a.rs", "group_key": "sha256...", "blob_data": "let x = 1;", "int_data1": 12, "int_data2": 5, "int_data3": 16, "str_data1": "A", "str_data2": "1"}
+   ]}
+   ```
+   Returns a JSON array of `FinalizeMatchResult` groups — only the groups that pass the script's own thresholds:
+   ```json
+   [{"block_hash": "sha256...", "block_content": "let x = 1;", "block_size": 12, "occurrences": [
+     {"file_path": "a.rs", "line_start": 5, "line_end": 16, "change_type": "A", "side": "1"},
+     {"file_path": "b.rs", "line_start": 10, "line_end": 21, "change_type": "A", "side": "1"}
+   ]}]
+   ```
+
+**Key difference from single-file analyzers**: Threshold logic lives **inside the Python script**, not in YAML:
+
+```python
+MIN_FILE_COUNT = 3   # Script-internal threshold
+MIN_BLOCK_COUNT = 3
+
+def finalize_blocks(blocks):
+    groups = {}
+    for b in blocks:
+        groups.setdefault(b.get('group_key'), []).append(b)
+    results = []
+    for h, entries in groups.items():
+        distinct_files = set(e.get('file_path') for e in entries)
+        if len(distinct_files) < MIN_FILE_COUNT or len(entries) < MIN_BLOCK_COUNT:
+            continue
+        # build & append FinalizeMatchResult
+    return results
+```
+
+YAML registration is minimal — only tags, no thresholds:
+```yaml
+custom_cross_file_analyzers:
+  duplicate_rust_fns:
+    tags:
+      metric: duplicate_block
+      category: duplication
+```
+
+**Available cross-file analyzers** (`custom_analyzers/`):
+- [`duplicate_rust_fns.py`](custom_analyzers/duplicate_rust_fns.py) — duplicate Rust function/method bodies
+- [`duplicate_python_defs.py`](custom_analyzers/duplicate_python_defs.py) — duplicate Python function bodies
+- [`duplicate_gosu_methods.py`](custom_analyzers/duplicate_gosu_methods.py) — duplicate Gosu method bodies
+- [`duplicate_xml_elements.py`](custom_analyzers/duplicate_xml_elements.py) — duplicate XML elements
+
 ### Match Detail Viewing
 
 When a regex, Python, or WASM analyzer produces match-level data, you can drill down from aggregated chart values to individual match locations:

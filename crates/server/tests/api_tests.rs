@@ -29,6 +29,7 @@ fn test_app_config_serialization() {
                     params: TopNParams { order: Default::default() },
                 },
                 trend: false,
+                detail_view: false,
             }],
             tech_stacks: vec![TechStackInfo { name: "Rust".to_string(), category: None }],
             columns: 4,
@@ -117,6 +118,7 @@ fn test_view_kind_serialization() {
             },
         },
         trend: false,
+        detail_view: false,
     };
 
     let json = serde_json::to_string(&sum_view).expect("Failed to serialize");

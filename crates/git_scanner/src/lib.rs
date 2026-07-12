@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use codeprism_analyzer::{
-    Analyzer, CharCountAnalyzer, FileCountAnalyzer, RegexAnalyzer, ScriptAnalyzer, WasmAnalyzer,
+    Analyzer, CharCountAnalyzer, FileCountAnalyzer, FileProcessor, RegexAnalyzer,
+    ScriptAnalyzer, ScriptCrossFileAnalyzer, WasmAnalyzer,
 };
+
+mod cross_file;
 
 use codeprism_database::Db;
 use git2::{Delta, ObjectType, Repository, Tree};
@@ -17,12 +20,16 @@ use std::sync::{Arc, Mutex};
 pub struct Scanner {
     db: Db,
     analyzers: HashMap<String, Box<dyn Analyzer>>,
+    cross_file_analyzers: HashMap<String, Box<dyn FileProcessor>>,
     config: Arc<CodePrismConfig>,
     scan_job_id: Option<i64>,
     // Scan summary tracking (accumulated during scan lifecycle)
     analyzer_load_errors: Vec<String>,
     analyzer_exec_count: HashMap<String, u64>,
     analyzer_error_details: HashMap<String, Vec<String>>,
+    // Cross-file analyzer execution tracking
+    cross_file_exec_count: HashMap<String, u64>,
+    cross_file_error_details: HashMap<String, Vec<String>>,
     // Track tag keys from this scan for auto-index creation
     seen_tag_keys: Mutex<HashSet<String>>,
 }
@@ -133,6 +140,15 @@ impl Scanner {
             }
         }
 
+        // Collect duplication analyzer configs (needed before step 4 to skip auto-discovery)
+        let all_dup_configs = {
+            let mut m = config.custom_cross_file_analyzers.clone();
+            for project in &config.projects {
+                m.extend(project.custom_cross_file_analyzers.clone());
+            }
+            m
+        };
+
         // 4. Auto-discover Python Analyzers in 'custom_analyzers/'
         if let Ok(entries) = std::fs::read_dir("custom_analyzers") {
             for entry in entries.filter_map(Result::ok) {
@@ -142,6 +158,12 @@ impl Scanner {
                         if ext == "py" {
                             if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                                 let analyzer_id = stem.to_string();
+
+                                // Skip scripts already loaded as duplication analyzers
+                                if all_dup_configs.contains_key(&analyzer_id) {
+                                    continue;
+                                }
+
                                 let full_path = path.to_string_lossy().to_string();
 
                                 // Check for overrides (search root then projects)
@@ -173,14 +195,38 @@ impl Scanner {
             }
         }
 
+        // 5. Load Cross-File Analyzers (extends Analyzer with FileProcessor)
+        let mut cross_file_analyzers: HashMap<String, Box<dyn FileProcessor>> =
+            HashMap::new();
+
+        for (name, dup_config) in &all_dup_configs {
+            let script_path = format!("custom_analyzers/{}.py", name);
+            if std::path::Path::new(&script_path).exists() {
+                let tag_overrides = dup_config.resolve_tags();
+                let da = ScriptCrossFileAnalyzer::new(name, tag_overrides);
+                cross_file_analyzers.insert(name.clone(), Box::new(da));
+                println!("Loaded cross-file analyzer: {}", name);
+            } else {
+                let msg = format!(
+                    "Cross-file analyzer '{}' script not found at '{}'",
+                    name, script_path
+                );
+                eprintln!("Warning: {}", msg);
+                load_errors.push(msg);
+            }
+        }
+
         Self {
             db,
             analyzers,
+            cross_file_analyzers,
             config: Arc::new(config),
             scan_job_id: None,
             analyzer_load_errors: load_errors,
             analyzer_exec_count: HashMap::new(),
             analyzer_error_details: HashMap::new(),
+            cross_file_exec_count: HashMap::new(),
+            cross_file_error_details: HashMap::new(),
             seen_tag_keys: Mutex::new(HashSet::new()),
         }
     }
@@ -320,10 +366,10 @@ impl Scanner {
                     }
 
                     // Run analyzers if content is available
-                    let (file_metrics, file_matches) = if let Some(c) = content {
+                    let (file_metrics, file_matches) = if let Some(ref c) = content {
                         self.analyze_file_content(
                             &path,
-                            &c,
+                            c,
                             "SNAPSHOT",
                             &change_type,
                             tech_stack.as_deref(),
@@ -345,9 +391,23 @@ impl Scanner {
                     .await?;
 
                     self.save_matches(scan_id, file_matches).await?;
+
+                    // Run cross-file analyzers — per-file block extraction
+                    if let Some(ref c) = content {
+                        self.run_cross_file_analyzers(scan_id, &path, c, None, &change_type, &project_config)
+                            .await?;
+                    }
                 }
             }
         }
+
+        // Cross-file analysis: run finalize on all registered analyzers
+        cross_file::finalize_all(
+            scan_id,
+            self.db.pool(),
+            &self.cross_file_analyzers,
+        )
+        .await?;
 
         pb.finish_with_message(format!(
             "Snapshot Scan Complete. Scanned {} files.",
@@ -517,10 +577,10 @@ impl Scanner {
 
                     // Diff Mode: Analyze both if available
                     let old_path_ref = old_path.as_deref().unwrap_or(&path);
-                    let (old_metrics, mut old_matches) = if let Some(c) = old_content {
+                    let (old_metrics, mut old_matches) = if let Some(ref c) = old_content {
                         self.analyze_file_content(
                             old_path_ref,
-                            &c,
+                            c,
                             "DIFF",
                             &change_type,
                             tech_stack.as_deref(),
@@ -530,10 +590,10 @@ impl Scanner {
                         (Vec::<codeprism_core::MetricEntry>::new(), Vec::<codeprism_core::MatchDetail>::new())
                     };
 
-                    let (new_metrics, mut new_matches) = if let Some(c) = content {
+                    let (new_metrics, mut new_matches) = if let Some(ref c) = content {
                         self.analyze_file_content(
                             &path,
-                            &c,
+                            c,
                             "DIFF",
                             &change_type,
                             tech_stack.as_deref(),
@@ -565,10 +625,28 @@ impl Scanner {
                     // Save matches for both old and new content
                     self.save_matches(scan_id, old_matches).await?;
                     self.save_matches(scan_id, new_matches).await?;
+
+                    // Run cross-file analyzers (DIFF: both sides)
+                    if let Some(ref c) = old_content {
+                        self.run_cross_file_analyzers(scan_id, old_path_ref, c, Some(0), &change_type, &project_config)
+                            .await?;
+                    }
+                    if let Some(ref c) = content {
+                        self.run_cross_file_analyzers(scan_id, &path, c, Some(1), &change_type, &project_config)
+                            .await?;
+                    }
                 }
             }
         }
         pb.finish_with_message("Diff Scan Complete");
+
+        // Cross-file analysis: run finalize on all registered analyzers
+        cross_file::finalize_all(
+            scan_id,
+            self.db.pool(),
+            &self.cross_file_analyzers,
+        )
+        .await?;
 
         self.update_progress(92, "Auto-creating indexes").await;
         // Auto-create expression indexes for newly seen tag keys
@@ -775,11 +853,17 @@ impl Scanner {
             .analyzer_error_details
             .values()
             .map(|v| v.len() as u64)
-            .sum();
+            .sum::<u64>()
+            + self
+                .cross_file_error_details
+                .values()
+                .map(|v| v.len() as u64)
+                .sum::<u64>();
 
         let load_errors_json = serde_json::to_string(&self.analyzer_load_errors)?;
 
-        let analyzer_stats: Vec<serde_json::Value> = self
+        // Regular analyzer stats
+        let mut analyzer_stats: Vec<serde_json::Value> = self
             .analyzers
             .keys()
             .map(|id| {
@@ -802,14 +886,45 @@ impl Scanner {
                 })
             })
             .collect();
+
+        // Append cross-file analyzer stats
+        for id in self.cross_file_analyzers.keys() {
+            let files = self.cross_file_exec_count.get(id).copied().unwrap_or(0);
+            let errors = self
+                .cross_file_error_details
+                .get(id)
+                .map(|v| v.len() as u64)
+                .unwrap_or(0);
+            let details = self
+                .cross_file_error_details
+                .get(id)
+                .cloned()
+                .unwrap_or_default();
+            analyzer_stats.push(serde_json::json!({
+                "analyzer_id": id,
+                "files_analyzed": files,
+                "execution_errors": errors,
+                "error_details": details,
+                "type": "cross_file",
+            }));
+        }
+
         let analyzer_stats_json = serde_json::to_string(&analyzer_stats)?;
 
-        let total_executions: u64 = self.analyzer_exec_count.values().sum();
+        let total_executions: u64 = self.analyzer_exec_count.values().sum::<u64>()
+            + self.cross_file_exec_count.values().sum::<u64>();
         let executed_count = self
             .analyzer_exec_count
             .values()
             .filter(|&&c| c > 0)
-            .count() as u64;
+            .count() as u64
+            + self
+                .cross_file_exec_count
+                .values()
+                .filter(|&&c| c > 0)
+                .count() as u64;
+
+        let total_load_count = self.analyzers.len() + self.cross_file_analyzers.len();
 
         sqlx::query(
             "INSERT INTO scan_summaries \
@@ -820,7 +935,7 @@ impl Scanner {
         )
         .bind(scan_id)
         .bind(total_files as i64)
-        .bind(self.analyzers.len() as i64)
+        .bind(total_load_count as i64)
         .bind(executed_count as i64)
         .bind(total_executions as i64)
         .bind(total_errors as i64)
@@ -1085,6 +1200,101 @@ impl Scanner {
             .bind(m.side.map(|v| v as i64))
             .bind(&m.context_before)
             .bind(&m.context_after)
+            .execute(self.db.pool())
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Run all registered cross-file analyzers on a file and save intermediate blocks.
+    async fn run_cross_file_analyzers(
+        &mut self,
+        scan_id: i64,
+        file_path: &str,
+        content: &str,
+        side: Option<i64>,
+        change_type: &str,
+        project_config: &codeprism_core::ProjectConfig,
+    ) -> Result<()> {
+        for (name, fp) in &self.cross_file_analyzers {
+            // Respect per-analyzer scan_mode / change_type filters
+            if let Some(cfg) = project_config.custom_cross_file_analyzers.get(name) {
+                if let Some(ref sm) = cfg.scan_mode {
+                    // scan_mode is passed as "SNAPSHOT" or "DIFF"
+                    let current_mode = if side.is_some() { "DIFF" } else { "SNAPSHOT" };
+                    if sm != "all" && sm != current_mode {
+                        continue;
+                    }
+                }
+                if let Some(ref ct) = cfg.change_type {
+                    if ct != "all" && ct != change_type {
+                        continue;
+                    }
+                }
+            }
+            *self.cross_file_exec_count.entry(name.clone()).or_insert(0) += 1;
+
+            // Extract blocks via FileProcessor
+            let result = std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| fp.extract_blocks(file_path, content)),
+            );
+
+            let mut blocks = match result {
+                Ok(b) => b,
+                Err(panic_info) => {
+                    let msg = panic_info
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| panic_info.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "unknown panic".to_string());
+                    eprintln!(
+                        "Cross-file analyzer '{}' panicked on '{}': {}",
+                        name, file_path, msg,
+                    );
+                    self.cross_file_error_details
+                        .entry(name.clone())
+                        .or_default()
+                        .push(format!("{}: {}", file_path, msg));
+                    continue;
+                }
+            };
+
+            // Annotate blocks with pipeline context
+            for block in &mut blocks {
+                block.analyzer_id = name.clone();
+                block.file_path = file_path.to_string();
+                block.str_data1 = Some(change_type.to_string());
+                block.str_data2 = side.map(|s| s.to_string());
+            }
+
+            self.save_intermediate_blocks(scan_id, blocks).await?;
+        }
+        Ok(())
+    }
+
+    /// Save intermediate blocks to the database for cross-file analysis.
+    async fn save_intermediate_blocks(
+        &self,
+        scan_id: i64,
+        blocks: Vec<codeprism_core::IntermediateBlock>,
+    ) -> Result<()> {
+        for block in blocks {
+            sqlx::query(
+                "INSERT INTO intermediate_blocks \
+                 (scan_id, analyzer_id, file_path, group_key, blob_data, \
+                  int_data1, int_data2, int_data3, str_data1, str_data2) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(scan_id)
+            .bind(&block.analyzer_id)
+            .bind(&block.file_path)
+            .bind(&block.group_key)
+            .bind(&block.blob_data)
+            .bind(block.int_data1)
+            .bind(block.int_data2)
+            .bind(block.int_data3)
+            .bind(&block.str_data1)
+            .bind(&block.str_data2)
             .execute(self.db.pool())
             .await?;
         }

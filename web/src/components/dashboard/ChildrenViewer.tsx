@@ -16,7 +16,7 @@ interface ChildrenViewerProps {
   items: LeafItem[];
   viewMode?: 'snapshot' | 'diff';
   onClose: () => void;
-  onFileClick?: (label: string, analyzerId?: string) => void;
+  onFileClick?: (label: string, analyzerId?: string, group?: string) => void;
 }
 
 export function ChildrenViewer({ open, title, items, viewMode, onClose, onFileClick }: ChildrenViewerProps) {
@@ -238,7 +238,7 @@ export function ChildrenViewer({ open, title, items, viewMode, onClose, onFileCl
                       {onFileClick ? (
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={e => { e.stopPropagation(); onFileClick(item.label, item.analyzerId); }}
+                            onClick={e => { e.stopPropagation(); onFileClick(item.label, item.analyzerId, item.group); }}
                             className="text-left hover:text-sky-600 dark:hover:text-sky-400 hover:underline transition-colors truncate"
                           >
                             {item.label}

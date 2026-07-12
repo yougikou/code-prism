@@ -564,6 +564,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sqlx",
  "wasi-common",
  "wasmtime",
  "wasmtime-wasi",
@@ -574,10 +575,12 @@ name = "codeprism-core"
 version = "0.1.0"
 dependencies = [
  "glob",
+ "hex",
  "indexmap",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "thiserror 2.0.17",
 ]
 

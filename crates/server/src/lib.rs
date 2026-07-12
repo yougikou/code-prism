@@ -19,7 +19,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::config::{AppConfig, ProjectAppConfig, SourceConfig, TopNParams, ViewConfig, ViewKind};
 use crate::routes::{
     AppState, get_scan_summary, get_view, get_scans, static_handler, execute_scan, get_scan_job, add_local_project,
-    list_unified_projects, create_project, delete_project, get_matches,
+    list_unified_projects, create_project, delete_project, get_matches, get_duplications,
 };
 use crate::git_routes::{clone_repo, list_branches, checkout_branch, pull_branch, list_commits, list_repos, delete_repo, extract_branches};
 
@@ -75,6 +75,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
                     trend: view_def.trend,
+                    detail_view: view_def.detail_view,
                     kind: ViewKind::TopN { source, params },
                 });
             }
@@ -96,6 +97,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
                     trend: view_def.trend,
+                    detail_view: view_def.detail_view,
                     kind: ViewKind::Sum { source },
                 });
             }
@@ -117,6 +119,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
                     trend: view_def.trend,
+                    detail_view: view_def.detail_view,
                     kind: ViewKind::Avg { source },
                 });
             }
@@ -138,6 +141,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
                     trend: view_def.trend,
+                    detail_view: view_def.detail_view,
                     kind: ViewKind::Min { source },
                 });
             }
@@ -159,6 +163,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
                     trend: view_def.trend,
+                    detail_view: view_def.detail_view,
                     kind: ViewKind::Max { source },
                 });
             }
@@ -184,6 +189,7 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
                     change_type_mode: view_def.change_type_mode.clone(),
                     width: view_def.width,
                     trend: view_def.trend,
+                    detail_view: view_def.detail_view,
                     kind: ViewKind::Distribution { source, params },
                 });
             }
@@ -300,6 +306,10 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, config_path: Strin
         .route(
             "/api/v1/projects/:project_name/scans/:scan_id/matches",
             get(get_matches),
+        )
+        .route(
+            "/api/v1/projects/:project_name/scans/:scan_id/duplications",
+            get(get_duplications),
         )
         // Trend endpoint
         .route(

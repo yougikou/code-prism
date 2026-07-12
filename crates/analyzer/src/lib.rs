@@ -1,4 +1,5 @@
-use codeprism_core::{MetricEntry, MatchDetail, TAG_CATEGORY, TAG_METRIC};
+use async_trait::async_trait;
+use codeprism_core::{IntermediateBlock, MetricEntry, MatchDetail, TAG_CATEGORY, TAG_METRIC};
 use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
 
@@ -21,6 +22,34 @@ pub trait Analyzer: Send + Sync {
     /// Set per-file context (change_type, scan_mode) before analyze().
     /// Default is no-op — override in analyzers that need per-file context.
     fn set_file_context(&self, _change_type: &str, _scan_mode: &str) {}
+    /// If this analyzer supports cross-file processing, return the FileProcessor interface.
+    /// Default returns None — override in analyzers that implement FileProcessor.
+    fn as_file_processor(&self) -> Option<&dyn FileProcessor> {
+        None
+    }
+}
+
+/// A cross-file analyzer that can extract intermediate blocks per file
+/// and perform global aggregation after all files are scanned.
+///
+/// This trait extends `Analyzer`. Implementations should override
+/// `as_file_processor()` on the `Analyzer` impl to return `Some(self)`.
+#[async_trait]
+pub trait FileProcessor: Analyzer + Send + Sync {
+    /// Extract cross-file analysis blocks from a single file.
+    /// The pipeline coordinator sets `analyzer_id` and `file_path` on each block
+    /// before saving to the database.
+    fn extract_blocks(&self, file_path: &str, content: &str) -> Vec<IntermediateBlock>;
+
+    /// Global aggregation callback after all files in the scan have been processed.
+    /// Implementations query `intermediate_blocks` for their `analyzer_id`,
+    /// perform the aggregation logic, write results to `metrics` and `matches` tables,
+    /// and clean up their intermediate data.
+    async fn finalize(
+        &self,
+        scan_id: i64,
+        pool: &sqlx::Pool<sqlx::Sqlite>,
+    ) -> anyhow::Result<()>;
 }
 
 mod wasm;
@@ -28,6 +57,9 @@ pub use wasm::WasmAnalyzer;
 
 mod script;
 pub use script::ScriptAnalyzer;
+
+mod script_cross_file;
+pub use script_cross_file::ScriptCrossFileAnalyzer;
 
 // 1. File Count Analyzer
 pub struct FileCountAnalyzer;

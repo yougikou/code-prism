@@ -77,6 +77,8 @@ pub struct ProjectConfig {
     pub columns: u32,
     #[serde(default)]
     pub aggregation_views: indexmap::IndexMap<String, AggregationView>,
+    #[serde(default)]
+    pub custom_cross_file_analyzers: HashMap<String, CrossFileAnalyzerConfig>,
 }
 
 impl Default for ProjectConfig {
@@ -91,6 +93,7 @@ impl Default for ProjectConfig {
             external_analyzers: HashMap::default(),
             columns: default_columns(),
             aggregation_views: indexmap::IndexMap::default(),
+            custom_cross_file_analyzers: HashMap::default(),
         }
     }
 }
@@ -124,6 +127,8 @@ pub struct CodePrismConfig {
     pub external_analyzers: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "indexmap::IndexMap::is_empty")]
     pub aggregation_views: indexmap::IndexMap<String, AggregationView>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub custom_cross_file_analyzers: HashMap<String, CrossFileAnalyzerConfig>,
 }
 
 impl CodePrismConfig {
@@ -144,6 +149,7 @@ impl CodePrismConfig {
                 external_analyzers: self.external_analyzers.clone(),
                 columns: 2,
                 aggregation_views: self.aggregation_views.clone(),
+                custom_cross_file_analyzers: self.custom_cross_file_analyzers.clone(),
             }]
         }
     }
@@ -376,6 +382,10 @@ pub struct AggregationView {
     // Trend chart field
     #[serde(default)]
     pub trend: bool,
+    /// Enable drill-down detail view for cross-file analysis charts.
+    /// When true, chart items are clickable and open a detail modal.
+    #[serde(default)]
+    pub detail_view: bool,
 }
 
 fn default_true() -> bool {
@@ -606,6 +616,35 @@ project_templates:
           metric: "complexity"
           category: "maintainability"
 
+    # Cross-file duplicate detection analyzers.
+    # Place Python scripts in custom_analyzers/ dir (e.g. duplicate_rust_fns.py).
+    #
+    # Protocol (two-phase):
+    #   1. extract — per-file: {"action":"extract","file_path":"...","content":"..."}
+    #      → script returns a JSON array of extracted blocks.
+    #   2. finalize — global: {"action":"finalize","blocks":[...]}
+    #      → script returns a JSON array of FinalizeMatchResult groups.
+    #
+    # Thresholds (min_file_count, min_block_count, etc.) are defined INSIDE each
+    # Python script — not in YAML. The framework simply passes blocks through and
+    # writes whatever the script reports as matches.
+    #
+    # Each script defines its own default metric_key/category; you can override
+    # them via tags below.
+    custom_cross_file_analyzers:
+      duplicate_rust_fns:
+        tags:
+          metric: duplicate_block
+          category: duplication
+      duplicate_python_defs:
+        tags:
+          metric: duplicate_block
+          category: duplication
+      duplicate_xml_elements:
+        tags:
+          metric: duplicate_block
+          category: duplication
+
     # Tech stack classification — files are categorized by extension
     tech_stacks:
       - name: "Rust"
@@ -707,6 +746,42 @@ project_templates:
             metric: "complexity"
           limit: 6
         chart_type: "radar"
+
+      # ── Duplication detection views ─────────────────────
+      # These use data from custom_cross_file_analyzers. Tags:
+      # category=duplication, metric=duplicate_block.
+      top_duplicate_funcs:
+        title: "Top 10 Duplicate Functions"
+        tech_stacks: ["All"]
+        detail_view: true
+        func:
+          type: "top_n"
+          order: "desc"
+          tag_filters:
+            category: "duplication"
+        group_by: ["analyzer_id", "file_path"]
+        chart_type: "bar_horizontal"
+
+      dup_block_size_distribution:
+        title: "Duplication Block Size Distribution"
+        tech_stacks: ["All"]
+        func:
+          type: "distribution"
+          tag_filters:
+            category: "duplication"
+          buckets: [50, 200, 500, 1000, 5000]
+        chart_type: "bar_col"
+
+      dup_by_analyzer:
+        title: "Duplicates by Analyzer"
+        tech_stacks: ["All"]
+        func:
+          type: "top_n"
+          order: "desc"
+          tag_filters:
+            category: "duplication"
+        group_by: ["analyzer_id"]
+        chart_type: "pie"
 "#
         .to_string()
     }
@@ -722,6 +797,7 @@ project_templates:
             valid_ids.extend(project.custom_regex_analyzers.keys().map(|s| s.as_str()));
             valid_ids.extend(project.custom_impl_analyzers.keys().map(|s| s.as_str()));
             valid_ids.extend(project.external_analyzers.keys().map(|s| s.as_str()));
+            valid_ids.extend(project.custom_cross_file_analyzers.keys().map(|s| s.as_str()));
             let valid_set: std::collections::HashSet<&str> =
                 valid_ids.iter().copied().collect();
 
@@ -802,12 +878,225 @@ project_templates:
                     }
                 }
             }
+
+            // Validate cross-file analyzer names
+            for (analyzer_id, _) in &project.custom_cross_file_analyzers {
+                if analyzer_id.is_empty() {
+                    errors.push(format!(
+                        "Cross-file analyzer in project '{}' has an empty name",
+                        project.name
+                    ));
+                }
+            }
         }
 
         if errors.is_empty() {
             Ok(())
         } else {
             Err(AppError::Config(errors.join("\n")))
+        }
+    }
+}
+
+/// Configuration for a cross-file analysis analyzer.
+///
+/// Cross-file analyzers use a two-phase protocol:
+///   1. **extract** — per-file: the script receives file content and returns blocks.
+///   2. **finalize** — global: the script receives ALL blocks and returns filtered
+///      match groups. Threshold logic (min_file_count, min_block_count, etc.) is
+///      owned by the Python script, not by this config.
+///
+/// This struct holds only framework-level settings: tags, scan_mode, change_type.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CrossFileAnalyzerConfig {
+    /// Tags for the analyzer results (merged on top of script output).
+    /// When set, these override whatever the Python script defines as defaults.
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
+    /// Old-style metric_key field (merged into tags as `metric` key).
+    /// Takes precedence over `tags.metric`.
+    #[serde(default)]
+    pub metric_key: Option<String>,
+    /// Old-style category field (merged into tags as `category` key).
+    /// Takes precedence over `tags.category`.
+    #[serde(default)]
+    pub category: Option<String>,
+    /// Human-readable description
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Scan modes this analyzer applies to: "all" (default), "snapshot", "diff"
+    #[serde(default)]
+    pub scan_mode: Option<String>,
+    /// Change types this analyzer applies to: "all" (default), "A", "M", "D"
+    #[serde(default)]
+    pub change_type: Option<String>,
+}
+
+impl CrossFileAnalyzerConfig {
+    /// Resolve tags by merging old metric_key/category with new tags field.
+    /// Old fields take precedence.
+    pub fn resolve_tags(&self) -> HashMap<String, String> {
+        let mut result = self.tags.clone();
+        if let Some(mk) = &self.metric_key {
+            result.insert(TAG_METRIC.to_string(), mk.clone());
+        }
+        if let Some(cat) = &self.category {
+            result.insert(TAG_CATEGORY.to_string(), cat.clone());
+        }
+        result
+    }
+}
+
+/// One aggregated match group returned by the Python script's `finalize` phase.
+///
+/// Each instance represents a group of intermediate blocks that passed the
+/// script's own threshold logic (e.g. appeared in ≥N files) and should be
+/// recorded as a duplicate match in the database.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinalizeMatchResult {
+    /// Hash identifying this block group (matches IntermediateBlock::group_key).
+    pub block_hash: String,
+    /// Display content of the duplicated block (e.g. the first occurrence's body).
+    pub block_content: String,
+    /// Size metric for display (e.g. lines of code, or a sentinel like -1 for XML).
+    pub block_size: i32,
+    /// Per-file occurrences that comprise this match group.
+    pub occurrences: Vec<FinalizeOccurrence>,
+}
+
+/// A single file-level occurrence within a `FinalizeMatchResult` match group.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinalizeOccurrence {
+    pub file_path: String,
+    #[serde(default)]
+    pub line_start: i32,
+    #[serde(default)]
+    pub line_end: i32,
+    /// Change type: "A" (Add), "M" (Modify), "D" (Delete), or None.
+    pub change_type: Option<String>,
+    /// Diff side: "0" (old) or "1" (new), or None for snapshot mode.
+    pub side: Option<String>,
+}
+
+/// A single content block extracted from a file for duplicate detection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentBlock {
+    pub block_hash: String,
+    pub block_size: i32,
+    pub line_start: i32,
+    pub line_end: i32,
+    /// The actual content text of this block (stored temporarily for match creation)
+    pub block_content: String,
+}
+
+/// A generic intermediate block for cross-file analysis pipelines.
+///
+/// Each analyzer type maps its own semantics onto the generic fields:
+///
+/// | 分析类型      | group_key    | blob_data      | int_data1    | int_data2   | int_data3  | str_data1     | str_data2 |
+/// |--------------|-------------|----------------|-------------|------------|-----------|--------------|----------|
+/// | 重复代码检测   | block_hash  | block_content  | block_size  | line_start | line_end   | change_type  | side     |
+/// | 跨文件引用统计 | import目标   | 导入语句       | 行号         | —          | —          | change_type  | —        |
+/// | TODO/FIXME   | 标签名       | 注释内容       | 行号         | —          | —          | change_type  | —        |
+///
+/// The `analyzer_id` and `file_path` fields are always populated by the pipeline,
+/// not by the analyzer's `extract_blocks()` implementation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntermediateBlock {
+    /// Set by the pipeline coordinator before saving — not by `extract_blocks()`.
+    #[serde(default)]
+    pub analyzer_id: String,
+    /// Set by the pipeline coordinator before saving — not by `extract_blocks()`.
+    #[serde(default)]
+    pub file_path: String,
+    /// Primary aggregation key (e.g. block_hash for duplication, import target for cross-ref)
+    pub group_key: String,
+    /// Text payload (e.g. block_content for duplication, import statement for cross-ref)
+    pub blob_data: Option<String>,
+    /// Generic integer field 1 (e.g. block_size, line_number)
+    pub int_data1: Option<i64>,
+    /// Generic integer field 2 (e.g. line_start, column)
+    pub int_data2: Option<i64>,
+    /// Generic integer field 3 (e.g. line_end)
+    pub int_data3: Option<i64>,
+    /// Generic string field 1 (e.g. change_type)
+    pub str_data1: Option<String>,
+    /// Generic string field 2 (e.g. side for diff mode: "0"=old, "1"=new)
+    pub str_data2: Option<String>,
+}
+
+impl IntermediateBlock {
+    /// Create an IntermediateBlock from duplication-style analysis data.
+    pub fn for_duplication(
+        group_key: String,
+        blob_data: Option<String>,
+        block_size: Option<i64>,
+        line_start: Option<i64>,
+        line_end: Option<i64>,
+    ) -> Self {
+        Self {
+            analyzer_id: String::new(),
+            file_path: String::new(),
+            group_key,
+            blob_data,
+            int_data1: block_size,
+            int_data2: line_start,
+            int_data3: line_end,
+            str_data1: None,
+            str_data2: None,
+        }
+    }
+}
+
+/// Intermediate block format from Python scripts (no hash — computed by framework).
+/// Scripts output this; the framework hashes block_content to produce ContentBlock.
+///
+/// When `normalized_content` is present, the hash is computed from it instead of
+/// from `block_content`. This allows scripts to supply a "normalized" version
+/// (comments+whitespace stripped) for exact-code dedup while keeping the original
+/// `block_content` for display. Scripts that don't need normalization just omit it.
+///
+/// Optional `metric_key`, `category`, `tags` let each Python script define its own
+/// default tagging (the "analyzer's internal settings"). The YAML config can override
+/// these via `custom_cross_file_analyzers.<name>.tags`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptContentBlock {
+    pub block_size: i32,
+    pub line_start: i32,
+    pub line_end: i32,
+    pub block_content: String,
+    /// Optional normalized version (e.g. whitespace+comments stripped) used for
+    /// hash computation so that the same effective code with different formatting
+    /// is detected as a duplicate. If absent, `block_content` is hashed instead.
+    #[serde(default)]
+    pub normalized_content: Option<String>,
+    /// Default metric_key defined by the script itself.
+    /// Overridable via YAML config's `tags.metric`.
+    #[serde(default)]
+    pub metric_key: Option<String>,
+    /// Default category defined by the script itself.
+    /// Overridable via YAML config's `tags.category`.
+    #[serde(default)]
+    pub category: Option<String>,
+    /// Default extra tags defined by the script itself.
+    /// Overridable via YAML config's `tags.*`.
+    #[serde(default)]
+    pub tags: Option<HashMap<String, String>>,
+}
+
+impl From<ScriptContentBlock> for ContentBlock {
+    fn from(s: ScriptContentBlock) -> Self {
+        use sha2::Digest;
+        // Hash from normalized_content when present (exact-code matching),
+        // fall back to block_content for backward compatibility.
+        let hash_source = s.normalized_content.as_ref().unwrap_or(&s.block_content);
+        let hash = hex::encode(sha2::Sha256::digest(hash_source.as_bytes()));
+        ContentBlock {
+            block_hash: hash,
+            block_size: s.block_size,
+            line_start: s.line_start,
+            line_end: s.line_end,
+            block_content: s.block_content,
         }
     }
 }

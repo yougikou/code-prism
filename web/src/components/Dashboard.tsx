@@ -9,7 +9,9 @@ import { MetricCard } from './widgets/MetricCard';
 import ChartRenderer from './ChartRenderer';
 import { ChildrenViewer } from './dashboard/ChildrenViewer';
 import { MatchDetailView } from './dashboard/MatchDetailView';
-import { fetchView, fetchScanSummary, fetchMatches, fetchTrend, type AggregationResult, type AppConfig, type ScanSummary, type MatchDetail, type TrendSeries, getDefaultProject } from '@/services/data';
+import { DetailViewPanel } from './dashboard/DetailViewPanel';
+import { AnalysisDetailModal } from './dashboard/AnalysisDetailModal';
+import { fetchView, fetchScanSummary, fetchMatches, fetchTrend, type AggregationResult, type AppConfig, type ScanSummary, type MatchDetail, type TrendSeries, type DuplicationInfo, getDefaultProject } from '@/services/data';
 import TrendRenderer from './widgets/TrendRenderer';
 import { TrendScanSelector } from './dashboard/TrendScanSelector';
 import { ChartSkeleton } from '@/components/ui/skeleton';
@@ -113,6 +115,18 @@ const Dashboard = () => {
     rawData?: AggregationResult[];
     rawTrendSeries?: TrendSeries[];
   }>({ open: false, title: '', type: 'chart' });
+
+  // Detail view panel state (for charts with detail_view: true)
+  const [detailViewPanel, setDetailViewPanel] = useState<{
+    open: boolean;
+    viewId: string;
+  }>({ open: false, viewId: '' });
+
+  // Duplication detail modal state
+  const [duplicationDetail, setDuplicationDetail] = useState<{
+    open: boolean;
+    duplication: DuplicationInfo | null;
+  }>({ open: false, duplication: null });
 
   // Sidebar State
   const [sidebarWidth, setSidebarWidth] = useState(280);
@@ -957,12 +971,14 @@ const Dashboard = () => {
     }
   };
 
-  const handleFileClick = async (filePath: string, viewTitle: string, analyzerId?: string, side?: boolean) => {
+  const handleFileClick = async (filePath: string, viewTitle: string, analyzerId?: string, side?: boolean, contentHash?: string) => {
     if (!selectedRunId) return;
     setMatchDetailView({ open: true, title: viewTitle, filePath, analyzerId, matches: [], total: 0, loading: true, side });
     try {
-      const params: { file_path: string; analyzer_id?: string; side?: number } = { file_path: filePath };
+      const params: { file_path?: string; analyzer_id?: string; content_hash?: string; side?: number } = {};
+      if (filePath) params.file_path = filePath;
       if (analyzerId) params.analyzer_id = analyzerId;
+      if (contentHash) params.content_hash = contentHash;
       if (side !== undefined) params.side = side ? 1 : 0;
       const res = await fetchMatches(currentProject, selectedRunId, params);
       setMatchDetailView(prev => ({ ...prev, matches: res.matches, total: res.total, loading: false }));
@@ -1010,15 +1026,17 @@ const Dashboard = () => {
 
           <div className="max-w-7xl mx-auto p-3 sm:p-4 lg:p-5 space-y-4 min-h-full">
 
-            <TechStackTabs
-              techStacks={availableTechStacks}
-              selectedStack={selectedTechStack}
-              onSelect={setSelectedTechStack}
-            />
+            <div className="flex items-center justify-between mb-3 border-b border-slate-200 dark:border-slate-700">
+              <TechStackTabs
+                techStacks={availableTechStacks}
+                selectedStack={selectedTechStack}
+                onSelect={(stack) => {
+                  setSelectedTechStack(stack);
+                }}
+              />
+            </div>
 
-            {/* Dynamic Widgets Grid */}
-            <div key={`${selectedTechStack}-${theme}`} className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
-              {activeViews.length === 0 ? (
+            {activeViews.length === 0 ? (
                 <div style={{ gridColumn: '1 / -1' }} className="flex flex-col items-center justify-center py-16 text-slate-500">
                   <div className="text-6xl mb-4 opacity-30">📊</div>
                   <p className="text-lg font-medium text-slate-500 dark:text-slate-400 mb-2">
@@ -1368,6 +1386,15 @@ const Dashboard = () => {
                                 <Maximize2 className="h-5 w-5" />
                               </button>
                             )}
+                            {view.detail_view && (
+                              <button
+                                onClick={() => setDetailViewPanel({ open: true, viewId: view.id })}
+                                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-emerald-500 transition-colors"
+                                title={t('dashboard.details', 'Details')}
+                              >
+                                <BarChart3 className="h-5 w-5" />
+                              </button>
+                            )}
                             <button
                               onClick={() => {
                                 setTrendActive(prev => ({ ...prev, [view.id]: true }));
@@ -1464,7 +1491,6 @@ const Dashboard = () => {
                   </Card>
                 );
               })}
-            </div>
 
             {/* Scan Execution Summary — only show on Summary tab */}
             {selectedRunId && selectedTechStack === 'Summary' && (
@@ -1561,7 +1587,6 @@ const Dashboard = () => {
                 </CardContent>
               </Card>
             )}
-
           </div>
         </main>
       </div>
@@ -1573,7 +1598,7 @@ const Dashboard = () => {
         items={childrenView.items}
         viewMode={viewMode}
         onClose={() => setChildrenView({ open: false, title: '', items: [] })}
-        onFileClick={(filePath, analyzerId) => handleFileClick(filePath, childrenView.title, analyzerId)}
+        onFileClick={(filePath, analyzerId, group) => handleFileClick(filePath, childrenView.title, analyzerId, undefined, group)}
       />
 
       {/* ─── Match Detail Modal ──────────────────────────────────── */}
@@ -1589,6 +1614,25 @@ const Dashboard = () => {
         onSideFilter={(side) => handleFileClick(matchDetailView.filePath, matchDetailView.title, matchDetailView.analyzerId, side)}
         onClose={closeMatchDetail}
         onBack={backToFileList}
+      />
+
+      {/* ─── Duplication Detail Modal ───────────────────────────── */}
+      <AnalysisDetailModal
+        open={duplicationDetail.open}
+        duplication={duplicationDetail.duplication}
+        viewMode={viewMode}
+        onClose={() => setDuplicationDetail({ open: false, duplication: null })}
+        onFileClick={(filePath, analyzerId, contentHash) =>
+          handleFileClick(filePath, 'Duplication Detail', analyzerId, undefined, contentHash)}
+      />
+
+      {/* Detail View Panel (for charts with detail_view: true) */}
+      <DetailViewPanel
+        open={detailViewPanel.open}
+        projectName={currentProject}
+        scanId={selectedRunId || ""}
+        onClose={() => setDetailViewPanel({ open: false, viewId: "" })}
+        onItemClick={(dup) => setDuplicationDetail({ open: true, duplication: dup })}
       />
 
       {/* ─── Fullscreen Chart Modal ──────────────────────────────── */}

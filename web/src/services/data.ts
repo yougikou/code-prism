@@ -70,6 +70,8 @@ export interface ViewConfig {
   };
   // Trend fields
   trend?: boolean;
+  // Enable drill-down detail view for cross-file analysis charts
+  detail_view?: boolean;
 }
 
 export interface TechStackInfo {
@@ -135,11 +137,12 @@ export interface MatchesResponse {
 export async function fetchMatches(
   projectName: string,
   scanId: number | string,
-  params: { file_path: string; analyzer_id?: string; side?: number; page?: number; page_size?: number }
+  params: { file_path?: string; analyzer_id?: string; content_hash?: string; side?: number; page?: number; page_size?: number }
 ): Promise<MatchesResponse> {
   const query = new URLSearchParams();
-  query.set('file_path', params.file_path);
+  if (params.file_path) query.set('file_path', params.file_path);
   if (params.analyzer_id) query.set('analyzer_id', params.analyzer_id);
+  if (params.content_hash) query.set('content_hash', params.content_hash);
   if (params.side !== undefined) query.set('side', String(params.side));
   if (params.page) query.set('page', String(params.page));
   if (params.page_size) query.set('page_size', String(params.page_size));
@@ -319,6 +322,15 @@ export interface ImplAnalyzerConfig {
   change_type?: 'all' | 'A' | 'M' | 'D';
 }
 
+export interface CrossFileAnalyzerDef {
+  metric_key?: string;
+  category?: string;
+  description?: string;
+  tags?: Record<string, string>;
+  scan_mode?: 'all' | 'snapshot' | 'diff';
+  change_type?: 'all' | 'A' | 'M' | 'D';
+}
+
 export interface AggregationFunc {
   type: 'top_n' | 'sum' | 'avg' | 'min' | 'max' | 'distribution';
   analyzer_id?: string[];
@@ -339,6 +351,7 @@ export interface AggregationView {
   func: AggregationFunc;
   // Trend fields
   trend?: boolean;
+  detail_view?: boolean;
 }
 
 export interface FullProjectConfig {
@@ -349,6 +362,7 @@ export interface FullProjectConfig {
   custom_regex_analyzers: Record<string, CustomAnalyzerDef>;
   custom_impl_analyzers: Record<string, ImplAnalyzerConfig>;
   external_analyzers: Record<string, string>;
+  custom_cross_file_analyzers: Record<string, CrossFileAnalyzerDef>;
   aggregation_views: Record<string, AggregationView>;
 }
 
@@ -604,6 +618,53 @@ export async function fetchScanJob(jobId: number): Promise<ScanJobResponse> {
     throw new Error(err.error || 'Failed to fetch scan job');
   }
   return res.json();
+}
+
+// ─── Duplication API Types & Fetch ──────────────────────────────
+
+export interface DuplicationFileInfo {
+  path: string;
+  scope: string | null;
+  value_before: number;
+  value_after: number;
+}
+
+export interface DuplicationInfo {
+  analyzer_id: string;
+  content_hash: string;
+  block_content: string;
+  block_size: number;
+  occurrence_count: number;
+  files: DuplicationFileInfo[];
+}
+
+export interface DuplicationsResponse {
+  duplications: DuplicationInfo[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export async function fetchDuplications(
+  projectName: string,
+  scanId: number | string,
+  params?: { page?: number; page_size?: number; min_occurrences?: number; analyzer_id?: string }
+): Promise<DuplicationsResponse> {
+  try {
+    const query = new URLSearchParams();
+    if (params?.page) query.set('page', String(params.page));
+    if (params?.page_size) query.set('page_size', String(params.page_size));
+    if (params?.min_occurrences) query.set('min_occurrences', String(params.min_occurrences));
+    if (params?.analyzer_id) query.set('analyzer_id', params.analyzer_id);
+    const qs = query.toString();
+    const url = `/api/v1/projects/${encodeURIComponent(projectName)}/scans/${scanId}/duplications${qs ? '?' + qs : ''}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Failed to fetch duplications');
+    return await res.json();
+  } catch (error) {
+    console.error('Error fetching duplications:', error);
+    return { duplications: [], total: 0, page: 1, page_size: 20 };
+  }
 }
 
 // ─── Scan Execution Summary ─────────────────────────────────────────

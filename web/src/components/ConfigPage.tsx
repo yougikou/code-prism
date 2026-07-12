@@ -181,8 +181,12 @@ function TechStacksEditor({ config, onChange }: {
     for (const key of Object.keys(config.custom_regex_analyzers || {})) ids.add(key)
     for (const key of Object.keys(config.custom_impl_analyzers || {})) ids.add(key)
     for (const key of Object.keys(config.external_analyzers || {})) ids.add(key)
+    for (const key of Object.keys(config.custom_cross_file_analyzers || {})) {
+      ids.add(key)
+      ids.add(key + '_aggregated')
+    }
     return Array.from(ids).sort()
-  }, [config.custom_regex_analyzers, config.custom_impl_analyzers, config.external_analyzers])
+  }, [config.custom_regex_analyzers, config.custom_impl_analyzers, config.external_analyzers, config.custom_cross_file_analyzers])
 
   const updateStack = <K extends keyof FullTechStack>(index: number, field: K, value: FullTechStack[K]) => {
     if (field === 'name') {
@@ -458,6 +462,7 @@ function AnalyzersEditor({ config, onChange }: {
     for (const key of Object.keys(config.custom_regex_analyzers || {})) { if (!excludeNames.includes(key)) names.add(key) }
     for (const key of Object.keys(config.custom_impl_analyzers || {})) { if (!excludeNames.includes(key)) names.add(key) }
     for (const key of Object.keys(config.external_analyzers || {})) { if (!excludeNames.includes(key)) names.add(key) }
+    for (const key of Object.keys(config.custom_cross_file_analyzers || {})) { if (!excludeNames.includes(key)) names.add(key) }
     return names
   }
 
@@ -527,6 +532,14 @@ function AnalyzersEditor({ config, onChange }: {
     onChange({
       ...config,
       custom_impl_analyzers: { ...config.custom_impl_analyzers, [key]: {} },
+    })
+  }
+
+  const addCf = () => {
+    const key = `new_cf_${Date.now()}`
+    onChange({
+      ...config,
+      custom_cross_file_analyzers: { ...config.custom_cross_file_analyzers, [key]: {} },
     })
   }
 
@@ -750,9 +763,14 @@ function AnalyzersEditor({ config, onChange }: {
         })
       )}
 
-      {renderCard('impl', 'config.analyzers.implAnalyzers', 'config.analyzers.addImpl', addImpl,
-        Object.keys(config.custom_impl_analyzers || {}).length,
-        Object.entries(config.custom_impl_analyzers).map(([name, analyzer], index) => {
+      {renderCard('impl', 'config.analyzers.implAnalyzers', '', () => { },
+        Object.keys(config.custom_impl_analyzers || {}).length + Object.keys(config.custom_cross_file_analyzers || {}).length,
+        <>
+        {/* Sub-section: Single-File Analyzers */}
+        <div className="col-span-10 mb-2">
+          <p className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t('config.analyzers.singleFileAnalyzers') || 'Single-File Analyzers'}</p>
+        </div>
+        {Object.entries(config.custom_impl_analyzers).map(([name, analyzer], index) => {
           const displayName = editValues[`impl:${name}`] ?? name
           const error = nameErrors[`impl:${name}`]
           return (
@@ -791,7 +809,109 @@ function AnalyzersEditor({ config, onChange }: {
             </div>
           </div>
           )
-        })
+        })}
+
+        <div className="col-span-10">
+          <button onClick={addImpl} className="text-xs px-3 py-1.5 rounded-md bg-sky-500 text-white hover:bg-sky-600 transition-colors">
+            + {t('config.analyzers.addImpl')}
+          </button>
+        </div>
+
+        {/* Sub-section: Cross-File Analyzers */}
+        <div className="col-span-10 mt-4 mb-2 pt-3 border-t border-slate-200 dark:border-slate-700">
+          <p className="text-xs font-semibold text-slate-600 dark:text-slate-400">{t('config.analyzers.crossFileAnalyzers') || 'Cross-File Analyzers'}</p>
+        </div>
+        {Object.entries(config.custom_cross_file_analyzers || {}).map(([name, analyzer], index) => {
+          const displayName = editValues[`cf:${name}`] ?? name
+          const error = nameErrors[`cf:${name}`]
+          const updateCfStr = (field: string, value: string | undefined) => {
+            const analyzers = { ...config.custom_cross_file_analyzers }
+            analyzers[name] = { ...analyzers[name], [field]: value || undefined }
+            onChange({ ...config, custom_cross_file_analyzers: analyzers })
+          }
+          const removeCf = () => {
+            const analyzers = { ...config.custom_cross_file_analyzers }
+            delete analyzers[name]
+            // Also remove references in tech stacks
+            const stacks = config.tech_stacks.map(stack => ({
+              ...stack,
+              analyzers: stack.analyzers.filter(a => a !== name),
+            }))
+            onChange({ ...config, custom_cross_file_analyzers: analyzers, tech_stacks: stacks })
+          }
+          const renameCf = (oldName: string, newName: string) => {
+            if (oldName === newName || !newName.trim()) return
+            if (getAllAnalyzerNames([oldName]).has(newName)) {
+              setNameErrors(prev => ({ ...prev, [`cf:${oldName}`]: t('config.analyzers.nameDuplicate') }))
+              return
+            }
+            setNameErrors(prev => { const next = { ...prev }; delete next[`cf:${oldName}`]; return next })
+            const analyzers = { ...config.custom_cross_file_analyzers }
+            analyzers[newName] = analyzers[oldName]
+            delete analyzers[oldName]
+
+            // Cascade: update analyzer references in tech stacks and aggregation views
+            const stacks = config.tech_stacks.map(stack => ({
+              ...stack,
+              analyzers: stack.analyzers.map(a => a === oldName ? newName : a),
+            }))
+            const views = Object.fromEntries(
+              Object.entries(config.aggregation_views).map(([id, view]) => [
+                id,
+                {
+                  ...view,
+                  func: {
+                    ...view.func,
+                    analyzer_id: view.func.analyzer_id?.map(a => a === oldName ? newName : a),
+                  },
+                },
+              ])
+            )
+            onChange({ ...config, custom_cross_file_analyzers: analyzers, tech_stacks: stacks, aggregation_views: views })
+          }
+          return (
+          <div key={`cf-${index}`} className="flex items-start gap-2 p-3 border rounded-lg dark:border-slate-700">
+            <div className="flex-1 grid grid-cols-10 gap-2">
+              <div className="col-span-2 flex flex-col gap-0.5">
+                <input type="text" value={displayName}
+                  onChange={e => setEditValues(prev => ({ ...prev, [`cf:${name}`]: e.target.value }))}
+                  onFocus={() => setNameErrors(prev => { const n = { ...prev }; delete n[`cf:${name}`]; return n })}
+                  onBlur={() => {
+                    const val = editValues[`cf:${name}`]
+                    if (val !== undefined) {
+                      setEditValues(prev => { const n = { ...prev }; delete n[`cf:${name}`]; return n })
+                      renameCf(name, val)
+                    }
+                  }}
+                  placeholder="Analyzer name"
+                  className="w-full px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500"
+                />
+                {error && <span className="text-red-500 text-[10px] leading-tight">{error}</span>}
+              </div>
+              <input type="text" value={analyzer.metric_key || ''} onChange={e => updateCfStr('metric_key', e.target.value)} placeholder="Metric key" className="col-span-2 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+              <input type="text" value={analyzer.category || ''} onChange={e => updateCfStr('category', e.target.value)} placeholder="Category" className="col-span-2 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+              <input type="text" value={analyzer.description || ''} onChange={e => updateCfStr('description', e.target.value)} placeholder="Description" className="col-span-4 px-2 py-1 text-xs border rounded bg-white dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300 outline-none focus:ring-1 focus:ring-sky-500" />
+              <div className="col-span-10 flex items-center justify-between mt-1">
+                {analyzerRefMap[name]?.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1">
+                    <span className="text-[10px] text-slate-400 font-medium">{t('config.analyzers.usedBy')}</span>
+                    {analyzerRefMap[name].map(sn => (
+                      <span key={sn} className="px-1.5 py-0.5 text-[10px] rounded bg-sky-50 dark:bg-sky-900/20 text-sky-600 dark:text-sky-400 border border-sky-200 dark:border-sky-800">{sn}</span>
+                    ))}
+                  </div>
+                )}
+                <button onClick={removeCf} className="ml-auto text-red-500 hover:text-red-700 p-0.5" title="Remove"><Trash2 size={12} /></button>
+              </div>
+            </div>
+          </div>
+          )
+        })}
+        <div className="col-span-10">
+          <button onClick={addCf} className="text-xs px-3 py-1.5 rounded-md bg-sky-500 text-white hover:bg-sky-600 transition-colors">
+            + {t('config.analyzers.addCrossFile')}
+          </button>
+        </div>
+        </>
       )}
 
       {renderCard('external', 'config.analyzers.externalAnalyzers', 'config.analyzers.addExternal', addExternal,
@@ -833,6 +953,7 @@ function AnalyzersEditor({ config, onChange }: {
           )
         })
       )}
+
     </div>
   )
 }
@@ -859,7 +980,7 @@ const CHANGE_TYPE_MODES = [
   { value: 'switchable', label: 'config.views.changeTypeModes.switchable' },
 ]
 
-const GROUP_BY_OPTIONS = ['tech_stack', 'category', 'metric_key', 'analyzer_id', 'extension']
+const GROUP_BY_OPTIONS = ['tech_stack', 'category', 'metric_key', 'analyzer_id', 'extension', 'file_path']
 
 const FUNC_TYPES = [
   { value: 'top_n', label: 'config.views.funcTypes.top_n' },
@@ -919,8 +1040,12 @@ function ViewsEditor({ config, onChange }: {
     for (const key of Object.keys(config.custom_regex_analyzers || {})) ids.add(key)
     for (const key of Object.keys(config.custom_impl_analyzers || {})) ids.add(key)
     for (const key of Object.keys(config.external_analyzers || {})) ids.add(key)
+    for (const key of Object.keys(config.custom_cross_file_analyzers || {})) {
+      ids.add(key)
+      ids.add(key + '_aggregated')
+    }
     return Array.from(ids).sort()
-  }, [config.custom_regex_analyzers, config.custom_impl_analyzers, config.external_analyzers])
+  }, [config.custom_regex_analyzers, config.custom_impl_analyzers, config.external_analyzers, config.custom_cross_file_analyzers])
 
   const updateView = (id: string, field: string, value: string | number | boolean | string[] | undefined) => {
     const views = { ...config.aggregation_views }
@@ -1198,6 +1323,14 @@ function ViewsEditor({ config, onChange }: {
                     <div className="w-9 h-5 bg-slate-300 dark:bg-slate-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-sky-500 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
                   </label>
                 </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">{t('config.views.detailView', 'Detail View')}</label>
+                  <label className="relative inline-flex items-center cursor-pointer mt-2">
+                    <input type="checkbox" checked={view.detail_view === true} onChange={e => updateView(id, 'detail_view', e.target.checked || undefined)}
+                      className="sr-only peer" />
+                    <div className="w-9 h-5 bg-slate-300 dark:bg-slate-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-sky-500 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
+                  </label>
+                </div>
               </div>
             </div>
             {view.func.type === 'distribution' && (
@@ -1286,6 +1419,7 @@ export default function ConfigPage() {
     checkNames(Object.keys(config.custom_regex_analyzers || {}))
     checkNames(Object.keys(config.custom_impl_analyzers || {}))
     checkNames(Object.keys(config.external_analyzers || {}))
+    checkNames(Object.keys(config.custom_cross_file_analyzers || {}))
     if (duplicateNames.length > 0) {
       const dupMsg = `${t('config.analyzers.nameDuplicate')}: ${duplicateNames.join(', ')}`
       setMessage({ type: 'error', text: dupMsg })
@@ -1792,7 +1926,9 @@ function TemplateManagementModal({ onClose, t }: {
                   </CardHeader>
                   <CardContent>
                     <p className="text-xs text-slate-500">
-                      {cfg.tech_stacks.length} {t('templates.techStacks')} · {Object.keys(cfg.custom_regex_analyzers).length} {t('templates.regexAnalyzers')} · {Object.keys(cfg.aggregation_views).length} {t('templates.views')}
+                      {cfg.tech_stacks.length} {t('templates.techStacks')} · {Object.keys(cfg.custom_regex_analyzers || {}).length} {t('templates.regexAnalyzers')} · {Object.keys(cfg.aggregation_views || {}).length} {t('templates.views')}{Object.keys(cfg.custom_cross_file_analyzers || {}).length > 0 && (
+                        <> · {Object.keys(cfg.custom_cross_file_analyzers).length} {t('templates.crossFileAnalyzers')}</>
+                      )}
                     </p>
                     {cfg.tech_stacks.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1">

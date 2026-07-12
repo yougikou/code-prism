@@ -418,6 +418,7 @@ export default function ExecutePage() {
                 custom_regex_analyzers: {},
                 custom_impl_analyzers: {},
                 external_analyzers: {},
+                custom_cross_file_analyzers: {},
                 aggregation_views: {},
               }
               await updateProjectConfig(projectName, defaultConfig)
@@ -472,6 +473,7 @@ export default function ExecutePage() {
                 custom_regex_analyzers: {},
                 custom_impl_analyzers: {},
                 external_analyzers: {},
+                custom_cross_file_analyzers: {},
                 aggregation_views: {},
               }
               await updateProjectConfig(projectName, defaultConfig)
