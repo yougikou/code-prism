@@ -5,12 +5,21 @@ use std::collections::HashMap;
 pub const TAG_METRIC: &str = "metric";
 pub const TAG_CATEGORY: &str = "category";
 
+/// Stable SHA-256 hash for exact match content stored in `match_contents`.
+/// Analyzer-specific normalization belongs in a finding key, not this hash.
+pub fn hash_match_content(content: &str) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(content.as_bytes()))
+}
+
 /// A single match detail record produced by an analyzer (e.g., a regex match location).
 /// Does not carry tags — tag info is available via the analyzer config referenced by `analyzer_id`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchDetail {
     pub file_path: String,
     pub line_number: u32,
+    #[serde(default)]
+    pub line_end: Option<u32>,
     pub column_start: Option<u32>,
     pub column_end: Option<u32>,
     pub matched_text: String,
@@ -251,8 +260,15 @@ where
         fn visit_none<E: de::Error>(self) -> Result<Vec<String>, E> {
             Ok(vec![])
         }
-        fn visit_seq<A: de::SeqAccess<'de>>(self, seq: A) -> Result<Vec<String>, A::Error> {
-            de::Deserialize::deserialize(de::value::SeqAccessDeserializer::new(seq))
+        fn visit_string<E: de::Error>(self, v: String) -> Result<Vec<String>, E> {
+            Ok(vec![v])
+        }
+        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<String>, A::Error> {
+            let mut values = Vec::new();
+            while let Some(value) = seq.next_element::<String>()? {
+                values.push(value);
+            }
+            Ok(values)
         }
     }
     deserializer.deserialize_any(StringOrVec)
@@ -748,8 +764,8 @@ project_templates:
         chart_type: "radar"
 
       # ── Duplication detection views ─────────────────────
-      # These use data from custom_cross_file_analyzers. Tags:
-      # category=duplication, metric=duplicate_block.
+      # Cross-file analyzers emit generic metrics: finding_count,
+      # occurrence_count, affected_file_count, and affected_line_count.
       top_duplicate_funcs:
         title: "Top 10 Duplicate Functions"
         tech_stacks: ["All"]
@@ -759,6 +775,7 @@ project_templates:
           order: "desc"
           tag_filters:
             category: "duplication"
+            metric: "occurrence_count"
         group_by: ["analyzer_id", "file_path"]
         chart_type: "bar_horizontal"
 
@@ -769,6 +786,7 @@ project_templates:
           type: "distribution"
           tag_filters:
             category: "duplication"
+            metric: "affected_line_count"
           buckets: [50, 200, 500, 1000, 5000]
         chart_type: "bar_col"
 
@@ -780,6 +798,7 @@ project_templates:
           order: "desc"
           tag_filters:
             category: "duplication"
+            metric: "finding_count"
         group_by: ["analyzer_id"]
         chart_type: "pie"
 "#
@@ -1119,4 +1138,111 @@ pub enum AppError {
     Config(String),
     #[error("Unknown error: {0}")]
     Unknown(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn analyzer_ids(func: AggregationFunc) -> Vec<String> {
+        match func {
+            AggregationFunc::TopN { analyzer_id, .. }
+            | AggregationFunc::Sum { analyzer_id, .. }
+            | AggregationFunc::Avg { analyzer_id, .. }
+            | AggregationFunc::Min { analyzer_id, .. }
+            | AggregationFunc::Max { analyzer_id, .. }
+            | AggregationFunc::Distribution { analyzer_id, .. } => analyzer_id,
+        }
+    }
+
+    #[test]
+    fn aggregation_analyzer_id_accepts_legacy_string() {
+        let func: AggregationFunc =
+            serde_yaml::from_str("type: sum\nanalyzer_id: duplicate_rust_fns_aggregated\n")
+                .unwrap();
+
+        assert_eq!(
+            analyzer_ids(func),
+            vec!["duplicate_rust_fns_aggregated".to_string()]
+        );
+    }
+
+    #[test]
+    fn aggregation_analyzer_id_accepts_empty_and_multiple_values() {
+        let empty: AggregationFunc = serde_yaml::from_str("type: sum\nanalyzer_id: []\n").unwrap();
+        assert!(analyzer_ids(empty).is_empty());
+
+        let multiple: AggregationFunc = serde_yaml::from_str(
+            "type: top_n\n\
+             analyzer_id:\n\
+               - duplicate_rust_fns_aggregated\n\
+               - duplicate_python_defs_aggregated\n\
+             order: desc\n",
+        )
+        .unwrap();
+        assert_eq!(
+            analyzer_ids(multiple),
+            vec![
+                "duplicate_rust_fns_aggregated".to_string(),
+                "duplicate_python_defs_aggregated".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn multi_analyzer_grouped_view_parses_and_round_trips() {
+        let yaml = r#"
+projects:
+  - name: grouped-analysis
+    aggregation_views:
+      duplicates_by_analyzer:
+        title: Duplicates by Analyzer
+        group_by: [analyzer_id]
+        func:
+          type: sum
+          analyzer_id:
+            - duplicate_rust_fns_aggregated
+            - duplicate_python_defs_aggregated
+          tag_filters:
+            category: duplication
+"#;
+
+        let config: CodePrismConfig = serde_yaml::from_str(yaml).unwrap();
+        let project = &config.projects[0];
+        let view = &project.aggregation_views["duplicates_by_analyzer"];
+        assert_eq!(view.group_by, vec!["analyzer_id"]);
+        assert_eq!(
+            analyzer_ids(view.func.clone()),
+            vec![
+                "duplicate_rust_fns_aggregated".to_string(),
+                "duplicate_python_defs_aggregated".to_string(),
+            ]
+        );
+
+        let serialized = serde_yaml::to_string(&config).unwrap();
+        let reparsed: CodePrismConfig = serde_yaml::from_str(&serialized).unwrap();
+        assert_eq!(
+            analyzer_ids(
+                reparsed.projects[0].aggregation_views["duplicates_by_analyzer"]
+                    .func
+                    .clone()
+            ),
+            vec![
+                "duplicate_rust_fns_aggregated".to_string(),
+                "duplicate_python_defs_aggregated".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn generated_template_is_parseable() {
+        let template = CodePrismConfig::generate_template();
+        serde_yaml::from_str::<CodePrismConfig>(&template).unwrap();
+    }
+
+    #[test]
+    fn sample_config_is_parseable() {
+        let sample = include_str!("../../../codeprism.sample.yaml");
+        serde_yaml::from_str::<CodePrismConfig>(sample).unwrap();
+    }
 }

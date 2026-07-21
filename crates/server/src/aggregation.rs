@@ -70,7 +70,7 @@ impl TopNAggregator {
         let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
 
         let mut query = String::from(
-            "SELECT file_path, value_after, value_before, tech_stack, tags, change_type, analyzer_id
+            "SELECT file_path, value_after, value_before, tech_stack, tags, change_type, analyzer_id, finding_key
              FROM metrics
              WHERE scan_id = ? AND value_after IS NOT NULL AND value_after > 0",
         );
@@ -154,7 +154,9 @@ impl TopNAggregator {
                         .try_get::<Option<String>, _>("analyzer_id")
                         .unwrap_or_default(),
                     children: None,
-                    group_key: None,
+                    group_key: row
+                        .try_get::<Option<String>, _>("finding_key")
+                        .unwrap_or_default(),
                     category: None,
                     metric_key: None,
                     tags: None,
@@ -223,6 +225,10 @@ impl TopNAggregator {
                     .clone()
                     .unwrap_or_else(|| "Unknown".to_string()),
                 "file_path" => item.label.clone(),
+                "finding_key" => item
+                    .group_key
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
                 "extension" => std::path::Path::new(&item.label)
                     .extension()
                     .and_then(|e| e.to_str())
@@ -332,7 +338,7 @@ impl SumAggregator {
         let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
 
         let mut query = String::from(
-            "SELECT file_path, value_after, value_before, tech_stack, tags, change_type, analyzer_id
+            "SELECT file_path, value_after, value_before, tech_stack, tags, change_type, analyzer_id, finding_key
              FROM metrics
              WHERE scan_id = ? AND value_after IS NOT NULL AND value_after > 0",
         );
@@ -412,7 +418,9 @@ impl SumAggregator {
                         .try_get::<Option<String>, _>("analyzer_id")
                         .unwrap_or_default(),
                     children: None,
-                    group_key: None,
+                    group_key: row
+                        .try_get::<Option<String>, _>("finding_key")
+                        .unwrap_or_default(),
                     category: None,
                     metric_key: None,
                     tags: None,
@@ -535,7 +543,7 @@ impl StatAggregator {
         let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
 
         let mut query = format!(
-            "SELECT {}(value_after) as stat_value, tech_stack, tags, change_type, analyzer_id
+            "SELECT {}(value_after) as stat_value, tech_stack, tags, change_type, analyzer_id, finding_key
              FROM metrics
              WHERE scan_id = ?",
             stat_fn
@@ -581,7 +589,7 @@ impl StatAggregator {
 
         if let Some(ref group_by_str) = effective_group_by {
             const ALLOWED_GROUP_KEYS: &[&str] = &[
-                "tech_stack", "category", "change_type", "metric_key", "analyzer_id", "file_path",
+                "tech_stack", "category", "change_type", "metric_key", "analyzer_id", "file_path", "finding_key",
             ];
             let all_keys: Vec<&str> = group_by_str
                 .split(',')
@@ -650,7 +658,14 @@ impl StatAggregator {
             .into_iter()
             .map(|row| {
                 let tags_json: String = row.try_get("tags").unwrap_or_default();
-                let label = if effective_group_by.is_some() {
+                let label = if effective_group_by
+                    .as_deref()
+                    .is_some_and(|keys| keys.split(',').any(|key| key.trim() == "finding_key"))
+                {
+                    row.try_get::<Option<String>, _>("finding_key")
+                        .unwrap_or_default()
+                        .unwrap_or_else(|| "Unknown".to_string())
+                } else if effective_group_by.is_some() {
                     row.try_get::<Option<String>, _>("tech_stack")
                         .unwrap_or_default()
                         .unwrap_or_else(|| "Unknown".to_string())
@@ -671,7 +686,9 @@ impl StatAggregator {
                         .try_get::<Option<String>, _>("analyzer_id")
                         .unwrap_or_default(),
                     children: None,
-                    group_key: None,
+                    group_key: row
+                        .try_get::<Option<String>, _>("finding_key")
+                        .unwrap_or_default(),
                     category: None,
                     metric_key: None,
                     tags: None,
@@ -695,7 +712,7 @@ impl StatAggregator {
         stat_type: StatType,
     ) -> Result<Vec<AggregationResult>> {
         let mut query = String::from(
-            "SELECT value_after, file_path, tech_stack, tags, change_type, analyzer_id
+            "SELECT value_after, file_path, tech_stack, tags, change_type, analyzer_id, finding_key
              FROM metrics
              WHERE scan_id = ?",
         );
@@ -766,6 +783,7 @@ impl StatAggregator {
             let tech_stack: Option<String> = row.try_get("tech_stack").unwrap_or_default();
             let change_type: Option<String> = row.try_get("change_type").unwrap_or_default();
             let analyzer_id: Option<String> = row.try_get("analyzer_id").unwrap_or_default();
+            let finding_key: Option<String> = row.try_get("finding_key").unwrap_or_default();
 
             let mut key_parts = Vec::with_capacity(group_keys.len());
             for key in group_keys {
@@ -781,6 +799,7 @@ impl StatAggregator {
                         .cloned()
                         .unwrap_or_default(),
                     "analyzer_id" => analyzer_id.clone().unwrap_or_default(),
+                    "finding_key" => finding_key.clone().unwrap_or_default(),
                     "file_path" => file_path.clone(),
                     "extension" => std::path::Path::new(&file_path)
                         .extension()
