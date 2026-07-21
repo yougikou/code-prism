@@ -2,15 +2,15 @@ use crate::aggregation::{AggregationResult, TopNAggregator, ViewFilters};
 use crate::config::{AppConfig, ViewConfig, ViewKind};
 use crate::git_cache::GitCache;
 use axum::{
-    extract::{Path, Query, State, Json as AxumJson},
-    response::{IntoResponse, Json, Response},
+    extract::{Json as AxumJson, Path, Query, State},
     http::StatusCode,
+    response::{IntoResponse, Json, Response},
 };
+use codeprism_core::{CodePrismConfig, MatchDetail};
 use codeprism_database::Db;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use serde_json;
 use std::sync::{Arc, RwLock};
-use codeprism_core::{CodePrismConfig, MatchDetail};
 
 use codeprism_scanner::Scanner;
 
@@ -118,52 +118,60 @@ pub async fn list_unified_projects(State(state): State<AppState>) -> impl IntoRe
 
     // Start with config projects
     for p in &core_config.projects {
-        project_map.insert(p.name.clone(), UnifiedProjectInfo {
-            name: p.name.clone(),
-            has_config: true,
-            config_repo_path: p.repo_path.clone(),
-            has_cached_repo: false,
-            cached_repo_id: None,
-            cached_repo_branch: None,
-            total_scans: 0,
-            last_scan_time: None,
-            scan_modes: vec![],
-        });
+        project_map.insert(
+            p.name.clone(),
+            UnifiedProjectInfo {
+                name: p.name.clone(),
+                has_config: true,
+                config_repo_path: p.repo_path.clone(),
+                has_cached_repo: false,
+                cached_repo_id: None,
+                cached_repo_branch: None,
+                total_scans: 0,
+                last_scan_time: None,
+                scan_modes: vec![],
+            },
+        );
     }
 
     // Merge DB scan data
     for (name, total_scans, last_scan_time, scan_modes) in &db_rows {
-        let entry = project_map.entry(name.clone()).or_insert(UnifiedProjectInfo {
-            name: name.clone(),
-            has_config: false,
-            config_repo_path: None,
-            has_cached_repo: false,
-            cached_repo_id: None,
-            cached_repo_branch: None,
-            total_scans: 0,
-            last_scan_time: None,
-            scan_modes: vec![],
-        });
+        let entry = project_map
+            .entry(name.clone())
+            .or_insert(UnifiedProjectInfo {
+                name: name.clone(),
+                has_config: false,
+                config_repo_path: None,
+                has_cached_repo: false,
+                cached_repo_id: None,
+                cached_repo_branch: None,
+                total_scans: 0,
+                last_scan_time: None,
+                scan_modes: vec![],
+            });
         entry.total_scans = *total_scans;
         entry.last_scan_time = last_scan_time.clone();
-        entry.scan_modes = scan_modes.as_ref()
+        entry.scan_modes = scan_modes
+            .as_ref()
             .map(|s| s.split(',').map(|m| m.to_string()).collect())
             .unwrap_or_default();
     }
 
     // Merge git cache
     for (name, (repo_id, branch)) in &git_repos {
-        let entry = project_map.entry(name.clone()).or_insert(UnifiedProjectInfo {
-            name: name.clone(),
-            has_config: false,
-            config_repo_path: None,
-            has_cached_repo: false,
-            cached_repo_id: Some(repo_id.clone()),
-            cached_repo_branch: Some(branch.clone()),
-            total_scans: 0,
-            last_scan_time: None,
-            scan_modes: vec![],
-        });
+        let entry = project_map
+            .entry(name.clone())
+            .or_insert(UnifiedProjectInfo {
+                name: name.clone(),
+                has_config: false,
+                config_repo_path: None,
+                has_cached_repo: false,
+                cached_repo_id: Some(repo_id.clone()),
+                cached_repo_branch: Some(branch.clone()),
+                total_scans: 0,
+                last_scan_time: None,
+                scan_modes: vec![],
+            });
         entry.has_cached_repo = true;
         entry.cached_repo_id = Some(repo_id.clone());
         entry.cached_repo_branch = Some(branch.clone());
@@ -188,22 +196,40 @@ pub async fn create_project(
 ) -> impl IntoResponse {
     let name = req.name.trim().to_string();
     if name.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Project name is required"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Project name is required"})),
+        )
+            .into_response();
     }
 
     let yaml_content = match std::fs::read_to_string(&state.config_path) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to read config: {}", e)}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to read config: {}", e)})),
+            )
+                .into_response();
+        }
     };
 
-    let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content) {
+    let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content)
+    {
         Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to parse config: {}", e)}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to parse config: {}", e)})),
+            )
+                .into_response();
+        }
     };
 
     // Idempotent: if project already exists in config, just return OK
     if core_config.projects.iter().any(|p| p.name == name) {
-        return Json(serde_json::json!({"status": "ok", "message": "Project already exists"})).into_response();
+        return Json(serde_json::json!({"status": "ok", "message": "Project already exists"}))
+            .into_response();
     }
 
     core_config.projects.push(codeprism_core::ProjectConfig {
@@ -214,16 +240,30 @@ pub async fn create_project(
     // Atomic write: tmp + rename
     let yaml_str = match serde_yaml::to_string(&core_config) {
         Ok(s) => s,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to serialize config: {}", e)}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to serialize config: {}", e)})),
+            )
+                .into_response();
+        }
     };
     let tmp_path = format!("{}.tmp", state.config_path);
     if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
         let _ = std::fs::remove_file(&tmp_path);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to write config: {}", e)}))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to write config: {}", e)})),
+        )
+            .into_response();
     }
     if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
         let _ = std::fs::remove_file(&tmp_path);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to save config: {}", e)}))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to save config: {}", e)})),
+        )
+            .into_response();
     }
 
     // Rebuild in-memory state (same pattern as update_project_config)
@@ -232,7 +272,14 @@ pub async fn create_project(
     let mut project_app_configs = Vec::new();
     for project in &projects_config {
         let views = crate::convert_project_views(project);
-        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project.tech_stacks.iter().map(|ts| crate::config::TechStackInfo { name: ts.name.clone(), category: ts.category.clone() }).collect();
+        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project
+            .tech_stacks
+            .iter()
+            .map(|ts| crate::config::TechStackInfo {
+                name: ts.name.clone(),
+                category: ts.category.clone(),
+            })
+            .collect();
         tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
@@ -241,9 +288,12 @@ pub async fn create_project(
             columns: project.columns,
         });
     }
-    *state.config.write().unwrap() = crate::config::AppConfig { projects: project_app_configs };
+    *state.config.write().unwrap() = crate::config::AppConfig {
+        projects: project_app_configs,
+    };
 
-    Json(serde_json::json!({"status": "ok", "message": format!("Project '{}' created", name)})).into_response()
+    Json(serde_json::json!({"status": "ok", "message": format!("Project '{}' created", name)}))
+        .into_response()
 }
 
 /// DELETE /api/v1/projects/{project_name} — full project deletion (config + DB + repo files)
@@ -263,19 +313,43 @@ pub async fn delete_project(
     for pid in &project_ids {
         sqlx::query("DELETE FROM scan_summaries WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
             .bind(pid).execute(pool).await.ok();
-        sqlx::query("DELETE FROM matches WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
-            .bind(pid).execute(pool).await.ok();
-        sqlx::query("DELETE FROM metrics WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
-            .bind(pid).execute(pool).await.ok();
-        sqlx::query("DELETE FROM file_changes WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
-            .bind(pid).execute(pool).await.ok();
+        sqlx::query(
+            "DELETE FROM matches WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)",
+        )
+        .bind(pid)
+        .execute(pool)
+        .await
+        .ok();
+        sqlx::query(
+            "DELETE FROM metrics WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)",
+        )
+        .bind(pid)
+        .execute(pool)
+        .await
+        .ok();
+        sqlx::query(
+            "DELETE FROM file_changes WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)",
+        )
+        .bind(pid)
+        .execute(pool)
+        .await
+        .ok();
         sqlx::query("DELETE FROM scans WHERE project_id = ?")
-            .bind(pid).execute(pool).await.ok();
+            .bind(pid)
+            .execute(pool)
+            .await
+            .ok();
     }
     sqlx::query("DELETE FROM scan_jobs WHERE project_name = ?")
-        .bind(&project_name).execute(pool).await.ok();
+        .bind(&project_name)
+        .execute(pool)
+        .await
+        .ok();
     sqlx::query("DELETE FROM projects WHERE name = ?")
-        .bind(&project_name).execute(pool).await.ok();
+        .bind(&project_name)
+        .execute(pool)
+        .await
+        .ok();
     sqlx::query(
         "DELETE FROM match_contents \
          WHERE NOT EXISTS (SELECT 1 FROM matches WHERE matches.content_id = match_contents.id) \
@@ -300,27 +374,54 @@ pub async fn delete_project(
     // 3. Remove project config from YAML
     let yaml_content = match std::fs::read_to_string(&state.config_path) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to read config: {}", e)}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to read config: {}", e)})),
+            )
+                .into_response();
+        }
     };
-    let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content) {
+    let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content)
+    {
         Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to parse config: {}", e)}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to parse config: {}", e)})),
+            )
+                .into_response();
+        }
     };
     core_config.projects.retain(|p| p.name != project_name);
 
     // Atomic write
     let yaml_str = match serde_yaml::to_string(&core_config) {
         Ok(s) => s,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to serialize config: {}", e)}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to serialize config: {}", e)})),
+            )
+                .into_response();
+        }
     };
     let tmp_path = format!("{}.tmp", state.config_path);
     if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
         let _ = std::fs::remove_file(&tmp_path);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to write config: {}", e)}))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to write config: {}", e)})),
+        )
+            .into_response();
     }
     if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
         let _ = std::fs::remove_file(&tmp_path);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to save config: {}", e)}))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to save config: {}", e)})),
+        )
+            .into_response();
     }
 
     // Rebuild in-memory state
@@ -329,7 +430,14 @@ pub async fn delete_project(
     let mut project_app_configs = Vec::new();
     for project in &projects_config {
         let views = crate::convert_project_views(project);
-        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project.tech_stacks.iter().map(|ts| crate::config::TechStackInfo { name: ts.name.clone(), category: ts.category.clone() }).collect();
+        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project
+            .tech_stacks
+            .iter()
+            .map(|ts| crate::config::TechStackInfo {
+                name: ts.name.clone(),
+                category: ts.category.clone(),
+            })
+            .collect();
         tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
@@ -338,7 +446,9 @@ pub async fn delete_project(
             columns: project.columns,
         });
     }
-    *state.config.write().unwrap() = crate::config::AppConfig { projects: project_app_configs };
+    *state.config.write().unwrap() = crate::config::AppConfig {
+        projects: project_app_configs,
+    };
 
     Json(serde_json::json!({"status": "ok", "message": format!("Project '{}' deleted", project_name)})).into_response()
 }
@@ -356,26 +466,39 @@ pub async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
         ORDER BY last_scan_time DESC
     "#;
 
-    match sqlx::query_as::<_, (i64, String, String, String, Option<String>, i64, Option<String>)>(query)
-        .fetch_all(state.db.pool())
-        .await
+    match sqlx::query_as::<
+        _,
+        (
+            i64,
+            String,
+            String,
+            String,
+            Option<String>,
+            i64,
+            Option<String>,
+        ),
+    >(query)
+    .fetch_all(state.db.pool())
+    .await
     {
         Ok(rows) => {
             let projects: Vec<ProjectInfo> = rows
                 .into_iter()
-                .map(|(id, name, repo_path, created_at, scan_modes, total_scans, last_scan_time)| {
-                    ProjectInfo {
-                        id,
-                        name,
-                        repo_path,
-                        created_at,
-                        scan_modes: scan_modes
-                            .map(|s| s.split(',').map(|m| m.to_string()).collect())
-                            .unwrap_or_default(),
-                        total_scans,
-                        last_scan_time,
-                    }
-                })
+                .map(
+                    |(id, name, repo_path, created_at, scan_modes, total_scans, last_scan_time)| {
+                        ProjectInfo {
+                            id,
+                            name,
+                            repo_path,
+                            created_at,
+                            scan_modes: scan_modes
+                                .map(|s| s.split(',').map(|m| m.to_string()).collect())
+                                .unwrap_or_default(),
+                            total_scans,
+                            last_scan_time,
+                        }
+                    },
+                )
                 .collect();
             Json(projects).into_response()
         }
@@ -655,14 +778,13 @@ pub async fn get_matches(
     if let Some(finding_key) = finding_key {
         // Cross-file finding mode: return every real occurrence for this finding.
 
-        let mut count_sql = String::from(
-            "SELECT COUNT(*) FROM matches WHERE scan_id = ? AND finding_key = ?"
-        );
+        let mut count_sql =
+            String::from("SELECT COUNT(*) FROM matches WHERE scan_id = ? AND finding_key = ?");
         let mut rows_sql = String::from(
             "SELECT m.file_path, m.line_start, m.line_end, m.column_start, m.column_end, c.content, \
                     m.side, m.context_before, m.context_after, m.analyzer_id \
              FROM matches m JOIN match_contents c ON c.id = m.content_id \
-             WHERE m.scan_id = ? AND m.finding_key = ?"
+             WHERE m.scan_id = ? AND m.finding_key = ?",
         );
 
         if params.analyzer_id.is_some() {
@@ -672,7 +794,9 @@ pub async fn get_matches(
         rows_sql.push_str(" ORDER BY m.file_path, m.side, m.line_start, m.id LIMIT ? OFFSET ?");
 
         let total: i64 = {
-            let mut q = sqlx::query_scalar(&count_sql).bind(scan_id).bind(finding_key);
+            let mut q = sqlx::query_scalar(&count_sql)
+                .bind(scan_id)
+                .bind(finding_key);
             if let Some(ref aid) = params.analyzer_id {
                 q = q.bind(aid);
             }
@@ -682,9 +806,23 @@ pub async fn get_matches(
             }
         };
 
-        let mut query = sqlx::query_as::<_, (String, i32, Option<i32>, Option<i32>, Option<i32>, String, Option<i32>, Option<String>, Option<String>, String)>(&rows_sql)
-            .bind(scan_id)
-            .bind(finding_key);
+        let mut query = sqlx::query_as::<
+            _,
+            (
+                String,
+                i32,
+                Option<i32>,
+                Option<i32>,
+                Option<i32>,
+                String,
+                Option<i32>,
+                Option<String>,
+                Option<String>,
+                String,
+            ),
+        >(&rows_sql)
+        .bind(scan_id)
+        .bind(finding_key);
         if let Some(ref aid) = params.analyzer_id {
             query = query.bind(aid);
         }
@@ -693,43 +831,73 @@ pub async fn get_matches(
         let matches: Vec<MatchDetail> = match query.fetch_all(state.db.pool()).await {
             Ok(rows) => rows
                 .into_iter()
-                .map(|(fp, ls, le, cs, ce, content, sd, cb, ca, aid)| MatchDetail {
-                    file_path: fp,
-                    line_number: ls as u32,
-                    line_end: le.map(|v| v as u32),
-                    column_start: cs.map(|v| v as u32),
-                    column_end: ce.map(|v| v as u32),
-                    matched_text: content,
-                    side: sd.map(|v| v != 0),
-                    context_before: cb,
-                    context_after: ca,
-                    analyzer_id: aid,
-                })
+                .map(
+                    |(fp, ls, le, cs, ce, content, sd, cb, ca, aid)| MatchDetail {
+                        file_path: fp,
+                        line_number: ls as u32,
+                        line_end: le.map(|v| v as u32),
+                        column_start: cs.map(|v| v as u32),
+                        column_end: ce.map(|v| v as u32),
+                        matched_text: content,
+                        side: sd.map(|v| v != 0),
+                        context_before: cb,
+                        context_after: ca,
+                        analyzer_id: aid,
+                    },
+                )
                 .collect(),
             Err(e) => {
                 eprintln!("DB error fetching matches: {}", e);
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(MatchesResponse {
-                    scan_id, total: 0, page, page_size, matches: vec![],
-                })).into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(MatchesResponse {
+                        scan_id,
+                        total: 0,
+                        page,
+                        page_size,
+                        matches: vec![],
+                    }),
+                )
+                    .into_response();
             }
         };
 
-        return Json(MatchesResponse { scan_id, total, page, page_size, matches }).into_response();
+        return Json(MatchesResponse {
+            scan_id,
+            total,
+            page,
+            page_size,
+            matches,
+        })
+        .into_response();
     }
 
     // File-path mode (original behavior)
     let file_path = match &params.file_path {
         Some(fp) => fp.clone(),
-        None => return (StatusCode::BAD_REQUEST, Json(MatchesResponse {
-            scan_id, total: 0, page, page_size, matches: vec![],
-        })).into_response(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(MatchesResponse {
+                    scan_id,
+                    total: 0,
+                    page,
+                    page_size,
+                    matches: vec![],
+                }),
+            )
+                .into_response();
+        }
     };
 
-    let mut count_sql = "SELECT COUNT(*) FROM matches WHERE scan_id = ? AND file_path = ?".to_string();
-    let mut rows_sql = "SELECT m.file_path, m.line_start, m.line_end, m.column_start, m.column_end, c.content, \
+    let mut count_sql =
+        "SELECT COUNT(*) FROM matches WHERE scan_id = ? AND file_path = ?".to_string();
+    let mut rows_sql =
+        "SELECT m.file_path, m.line_start, m.line_end, m.column_start, m.column_end, c.content, \
                                m.side, m.context_before, m.context_after, m.analyzer_id \
                         FROM matches m JOIN match_contents c ON c.id = m.content_id \
-                        WHERE m.scan_id = ? AND m.file_path = ?".to_string();
+                        WHERE m.scan_id = ? AND m.file_path = ?"
+            .to_string();
 
     if params.analyzer_id.is_some() {
         count_sql.push_str(" AND analyzer_id = ?");
@@ -742,7 +910,9 @@ pub async fn get_matches(
     rows_sql.push_str(" ORDER BY m.line_start ASC LIMIT ? OFFSET ?");
 
     let total: i64 = {
-        let mut q = sqlx::query_scalar(&count_sql).bind(scan_id).bind(&file_path);
+        let mut q = sqlx::query_scalar(&count_sql)
+            .bind(scan_id)
+            .bind(&file_path);
         if let Some(ref aid) = params.analyzer_id {
             q = q.bind(aid);
         }
@@ -755,9 +925,23 @@ pub async fn get_matches(
         }
     };
 
-    let mut query = sqlx::query_as::<_, (String, i32, Option<i32>, Option<i32>, Option<i32>, String, Option<i32>, Option<String>, Option<String>, String)>(&rows_sql)
-        .bind(scan_id)
-        .bind(&file_path);
+    let mut query = sqlx::query_as::<
+        _,
+        (
+            String,
+            i32,
+            Option<i32>,
+            Option<i32>,
+            Option<i32>,
+            String,
+            Option<i32>,
+            Option<String>,
+            Option<String>,
+            String,
+        ),
+    >(&rows_sql)
+    .bind(scan_id)
+    .bind(&file_path);
     if let Some(ref aid) = params.analyzer_id {
         query = query.bind(aid);
     }
@@ -769,18 +953,20 @@ pub async fn get_matches(
     let matches: Vec<MatchDetail> = match query.fetch_all(state.db.pool()).await {
         Ok(rows) => rows
             .into_iter()
-            .map(|(fp, ls, le, cs, ce, content, sd, cb, ca, aid)| MatchDetail {
-                file_path: fp,
-                line_number: ls as u32,
-                line_end: le.map(|v| v as u32),
-                column_start: cs.map(|v| v as u32),
-                column_end: ce.map(|v| v as u32),
-                matched_text: content,
-                side: sd.map(|v| v != 0),
-                context_before: cb,
-                context_after: ca,
-                analyzer_id: aid,
-            })
+            .map(
+                |(fp, ls, le, cs, ce, content, sd, cb, ca, aid)| MatchDetail {
+                    file_path: fp,
+                    line_number: ls as u32,
+                    line_end: le.map(|v| v as u32),
+                    column_start: cs.map(|v| v as u32),
+                    column_end: ce.map(|v| v as u32),
+                    matched_text: content,
+                    side: sd.map(|v| v != 0),
+                    context_before: cb,
+                    context_after: ca,
+                    analyzer_id: aid,
+                },
+            )
             .collect(),
         Err(e) => {
             eprintln!("DB error fetching matches: {}", e);
@@ -788,7 +974,14 @@ pub async fn get_matches(
         }
     };
 
-    Json(MatchesResponse { scan_id, total, page, page_size, matches }).into_response()
+    Json(MatchesResponse {
+        scan_id,
+        total,
+        page,
+        page_size,
+        matches,
+    })
+    .into_response()
 }
 
 // ─── Cross-file findings API ────────────────────────────────────
@@ -846,7 +1039,7 @@ pub async fn get_findings(
     Query(params): Query<FindingsQuery>,
 ) -> impl IntoResponse {
     let page = params.page.unwrap_or(1).max(1);
-    let page_size = params.page_size.unwrap_or(20).min(100).max(1);
+    let page_size = params.page_size.unwrap_or(20).clamp(1, 100);
     let offset = ((page - 1) * page_size) as i64;
     let min_occurrences = params.min_occurrences.unwrap_or(2) as i64;
 
@@ -874,8 +1067,7 @@ pub async fn get_findings(
     .await
     .unwrap_or(0);
 
-    let groups_sql =
-        "SELECT m.finding_key, m.analyzer_id, MIN(m.content_id), COUNT(*), \
+    let groups_sql = "SELECT m.finding_key, m.analyzer_id, MIN(m.content_id), COUNT(*), \
                 COUNT(DISTINCT m.file_path), MAX(c.line_count) \
          FROM matches m JOIN match_contents c ON c.id = m.content_id \
          WHERE m.scan_id = ? AND m.finding_key IS NOT NULL \
@@ -921,7 +1113,13 @@ pub async fn get_findings(
 
     let content_ids: Vec<i64> = groups.iter().map(|(_, _, id, _, _, _)| *id).collect();
     let content_placeholders: String = (0..content_ids.len())
-        .map(|i| if i == 0 { "?".to_string() } else { ", ?".to_string() })
+        .map(|i| {
+            if i == 0 {
+                "?".to_string()
+            } else {
+                ", ?".to_string()
+            }
+        })
         .collect();
     let content_sql = format!(
         "SELECT id, content FROM match_contents WHERE id IN ({})",
@@ -938,9 +1136,18 @@ pub async fn get_findings(
         .into_iter()
         .collect();
 
-    let finding_keys: Vec<String> = groups.iter().map(|(key, _, _, _, _, _)| key.clone()).collect();
+    let finding_keys: Vec<String> = groups
+        .iter()
+        .map(|(key, _, _, _, _, _)| key.clone())
+        .collect();
     let key_placeholders: String = (0..finding_keys.len())
-        .map(|i| if i == 0 { "?".to_string() } else { ", ?".to_string() })
+        .map(|i| {
+            if i == 0 {
+                "?".to_string()
+            } else {
+                ", ?".to_string()
+            }
+        })
         .collect();
     let file_sql = format!(
         "SELECT analyzer_id, finding_key, file_path, MIN(line_start), MAX(line_end), \
@@ -950,8 +1157,11 @@ pub async fn get_findings(
          GROUP BY analyzer_id, finding_key, file_path",
         key_placeholders
     );
-    let mut file_query = sqlx::query_as::<_, (String, String, String, Option<i64>, Option<i64>, i64, i64)>(&file_sql)
-        .bind(scan_id);
+    let mut file_query = sqlx::query_as::<
+        _,
+        (String, String, String, Option<i64>, Option<i64>, i64, i64),
+    >(&file_sql)
+    .bind(scan_id);
     for key in &finding_keys {
         file_query = file_query.bind(key);
     }
@@ -973,9 +1183,8 @@ pub async fn get_findings(
     let mut files_by_finding: std::collections::HashMap<(String, String), Vec<FindingFileInfo>> =
         std::collections::HashMap::new();
     for (analyzer_id, finding_key, path, line_start, line_end, before, after) in file_records {
-        let scope = line_start.map(|start| {
-            format!("{}:{}-{}", analyzer_id, start, line_end.unwrap_or(start))
-        });
+        let scope = line_start
+            .map(|start| format!("{}:{}-{}", analyzer_id, start, line_end.unwrap_or(start)));
         files_by_finding
             .entry((analyzer_id, finding_key))
             .or_default()
@@ -989,25 +1198,27 @@ pub async fn get_findings(
 
     let findings: Vec<FindingInfo> = groups
         .into_iter()
-        .map(|(finding_key, analyzer_id, content_id, occurrence_count, file_count, line_count)| {
-            let block_content = content_by_id.get(&content_id).cloned().unwrap_or_default();
-            let file_infos = files_by_finding
-                .remove(&(analyzer_id.clone(), finding_key.clone()))
-                .unwrap_or_default();
+        .map(
+            |(finding_key, analyzer_id, content_id, occurrence_count, file_count, line_count)| {
+                let block_content = content_by_id.get(&content_id).cloned().unwrap_or_default();
+                let file_infos = files_by_finding
+                    .remove(&(analyzer_id.clone(), finding_key.clone()))
+                    .unwrap_or_default();
 
-            FindingInfo {
-                analyzer_id,
-                finding_key: finding_key.clone(),
-                content: block_content.clone(),
-                affected_line_count: line_count as usize,
-                content_hash: finding_key,
-                block_content,
-                block_size: line_count as i32,
-                occurrence_count: occurrence_count as usize,
-                affected_file_count: file_count as usize,
-                files: file_infos,
-            }
-        })
+                FindingInfo {
+                    analyzer_id,
+                    finding_key: finding_key.clone(),
+                    content: block_content.clone(),
+                    affected_line_count: line_count as usize,
+                    content_hash: finding_key,
+                    block_content,
+                    block_size: line_count as i32,
+                    occurrence_count: occurrence_count as usize,
+                    affected_file_count: file_count as usize,
+                    files: file_infos,
+                }
+            },
+        )
         .collect();
 
     Json(FindingsResponse {
@@ -1067,7 +1278,7 @@ pub async fn get_view(
         // We currently only support TopN
         match &config.kind {
             ViewKind::TopN { .. } => {
-                match TopNAggregator::execute(&state.db.pool(), scan_id, &config, &filters).await {
+                match TopNAggregator::execute(state.db.pool(), scan_id, &config, &filters).await {
                     Ok(items) => Json(ViewResponse {
                         view_id: view_id.clone(),
                         items,
@@ -1085,7 +1296,7 @@ pub async fn get_view(
             }
             ViewKind::Sum { .. } => {
                 match crate::aggregation::SumAggregator::execute(
-                    &state.db.pool(),
+                    state.db.pool(),
                     scan_id,
                     &config,
                     &filters,
@@ -1109,7 +1320,7 @@ pub async fn get_view(
             }
             ViewKind::Avg { .. } => {
                 match crate::aggregation::StatAggregator::execute(
-                    &state.db.pool(),
+                    state.db.pool(),
                     scan_id,
                     &config,
                     &filters,
@@ -1134,7 +1345,7 @@ pub async fn get_view(
             }
             ViewKind::Min { .. } => {
                 match crate::aggregation::StatAggregator::execute(
-                    &state.db.pool(),
+                    state.db.pool(),
                     scan_id,
                     &config,
                     &filters,
@@ -1159,7 +1370,7 @@ pub async fn get_view(
             }
             ViewKind::Max { .. } => {
                 match crate::aggregation::StatAggregator::execute(
-                    &state.db.pool(),
+                    state.db.pool(),
                     scan_id,
                     &config,
                     &filters,
@@ -1184,7 +1395,7 @@ pub async fn get_view(
             }
             ViewKind::Distribution { .. } => {
                 match crate::aggregation::DistributionAggregator::execute(
-                    &state.db.pool(),
+                    state.db.pool(),
                     scan_id,
                     &config,
                     &filters,
@@ -1280,13 +1491,14 @@ pub async fn get_trend(
     }
 
     // Parse optional scan_ids (comma-separated)
-    let parsed_scan_ids: Option<Vec<i64>> = query
-        .scan_ids
-        .as_ref()
-        .map(|s| s.split(',').filter_map(|id| id.trim().parse::<i64>().ok()).collect());
+    let parsed_scan_ids: Option<Vec<i64>> = query.scan_ids.as_ref().map(|s| {
+        s.split(',')
+            .filter_map(|id| id.trim().parse::<i64>().ok())
+            .collect()
+    });
 
     let mode = query.mode.as_str();
-    let limit = query.limit.max(1).min(100);
+    let limit = query.limit.clamp(1, 100);
 
     let view_filters = ViewFilters {
         tech_stack: query.tech_stack.as_deref().map(String::from),
@@ -1298,15 +1510,17 @@ pub async fn get_trend(
 
     match crate::aggregation::TrendAggregator::execute(
         state.db.pool(),
-        &project_name,
-        &view_config,
-        mode,
-        limit,
-        query.base_commit.as_deref(),
-        parsed_scan_ids.as_deref(),
-        query.from,
-        query.to,
-        &view_filters,
+        crate::aggregation::TrendQuery {
+            project_name: &project_name,
+            view_config: &view_config,
+            mode,
+            limit,
+            base_commit: query.base_commit.as_deref(),
+            scan_ids: parsed_scan_ids.as_deref(),
+            from: query.from,
+            to: query.to,
+            view_filters: &view_filters,
+        },
     )
     .await
     {
@@ -1432,7 +1646,11 @@ pub async fn get_full_project_config(
     let core_config = state.core_config.read().unwrap();
     match core_config.projects.iter().find(|p| p.name == project_name) {
         Some(config) => Json(config).into_response(),
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Project not found"}))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response(),
     }
 }
 
@@ -1443,7 +1661,11 @@ pub async fn update_project_config(
     AxumJson(mut updated_config): AxumJson<codeprism_core::ProjectConfig>,
 ) -> impl IntoResponse {
     if updated_config.name != project_name {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Project name in path must match body"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Project name in path must match body"})),
+        )
+            .into_response();
     }
 
     // Validate no duplicate analyzer names across all categories
@@ -1473,22 +1695,38 @@ pub async fn update_project_config(
     // Read current YAML file
     let yaml_content = match std::fs::read_to_string(&state.config_path) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to read config file: {}", e)}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to read config file: {}", e)})),
+            )
+                .into_response();
+        }
     };
 
-    let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content) {
+    let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content)
+    {
         Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to parse config file: {}", e)}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to parse config file: {}", e)})),
+            )
+                .into_response();
+        }
     };
 
     // Upsert: replace existing project or append new one
-    let pos = core_config.projects.iter().position(|p| p.name == project_name);
+    let pos = core_config
+        .projects
+        .iter()
+        .position(|p| p.name == project_name);
 
     // Preserve existing repo_path if update doesn't provide one
-    if updated_config.repo_path.is_none() {
-        if let Some(pos) = pos {
-            updated_config.repo_path = core_config.projects[pos].repo_path.clone();
-        }
+    if updated_config.repo_path.is_none()
+        && let Some(pos) = pos
+    {
+        updated_config.repo_path = core_config.projects[pos].repo_path.clone();
     }
 
     if let Some(pos) = pos {
@@ -1500,17 +1738,31 @@ pub async fn update_project_config(
     // Write YAML atomically: tmp file + rename
     let yaml_str = match serde_yaml::to_string(&core_config) {
         Ok(s) => s,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to serialize config: {}", e)}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to serialize config: {}", e)})),
+            )
+                .into_response();
+        }
     };
 
     let tmp_path = format!("{}.tmp", state.config_path);
     if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
         let _ = std::fs::remove_file(&tmp_path);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to write config: {}", e)}))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to write config: {}", e)})),
+        )
+            .into_response();
     }
     if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
         let _ = std::fs::remove_file(&tmp_path);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to save config: {}", e)}))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to save config: {}", e)})),
+        )
+            .into_response();
     }
 
     // Rebuild in-memory AppConfig (UI subset)
@@ -1518,7 +1770,14 @@ pub async fn update_project_config(
     let mut project_app_configs = Vec::new();
     for project in &projects_config {
         let views = crate::convert_project_views(project);
-        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project.tech_stacks.iter().map(|ts| crate::config::TechStackInfo { name: ts.name.clone(), category: ts.category.clone() }).collect();
+        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project
+            .tech_stacks
+            .iter()
+            .map(|ts| crate::config::TechStackInfo {
+                name: ts.name.clone(),
+                category: ts.category.clone(),
+            })
+            .collect();
         tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
@@ -1527,13 +1786,16 @@ pub async fn update_project_config(
             columns: project.columns,
         });
     }
-    let new_app_config = crate::config::AppConfig { projects: project_app_configs };
+    let new_app_config = crate::config::AppConfig {
+        projects: project_app_configs,
+    };
 
     // Update in-memory state
     *state.config.write().unwrap() = new_app_config;
     *state.core_config.write().unwrap() = core_config;
 
-    Json(serde_json::json!({"status": "ok", "message": "Configuration saved successfully"})).into_response()
+    Json(serde_json::json!({"status": "ok", "message": "Configuration saved successfully"}))
+        .into_response()
 }
 
 /// POST /api/v1/projects/add-local — register a local git repository as a project
@@ -1542,20 +1804,36 @@ pub async fn add_local_project(
     AxumJson(req): AxumJson<AddLocalProjectRequest>,
 ) -> Response {
     if req.name.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Project name is required"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Project name is required"})),
+        )
+            .into_response();
     }
     if req.path.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Path is required"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Path is required"})),
+        )
+            .into_response();
     }
 
     let repo_path = std::path::Path::new(&req.path);
 
     // Validate path exists
     if !repo_path.exists() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("Path does not exist: {}", req.path)}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("Path does not exist: {}", req.path)})),
+        )
+            .into_response();
     }
     if !repo_path.is_dir() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("Path is not a directory: {}", req.path)}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("Path is not a directory: {}", req.path)})),
+        )
+            .into_response();
     }
 
     // Resolve to canonical/absolute path
@@ -1572,22 +1850,47 @@ pub async fn add_local_project(
     // Open repo and extract branches
     let repo = match git2::Repository::open(&canonical_path) {
         Ok(r) => r,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to open repository: {}", e)}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to open repository: {}", e)})),
+            )
+                .into_response();
+        }
     };
     let (branches, current_branch) = match crate::git_routes::extract_branches(&repo) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to read branches: {}", e)}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to read branches: {}", e)})),
+            )
+                .into_response();
+        }
     };
 
     // Write project config with repo_path to YAML
     let yaml_content = match std::fs::read_to_string(&state.config_path) {
         Ok(c) => c,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to read config file"}))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to read config file"})),
+            )
+                .into_response();
+        }
     };
 
-    let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content) {
+    let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content)
+    {
         Ok(c) => c,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to parse config file"}))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to parse config file"})),
+            )
+                .into_response();
+        }
     };
 
     // Upsert project config with repo_path
@@ -1605,16 +1908,30 @@ pub async fn add_local_project(
     // Atomic write: tmp + rename
     let yaml_str = match serde_yaml::to_string(&core_config) {
         Ok(s) => s,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to serialize config"}))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to serialize config"})),
+            )
+                .into_response();
+        }
     };
     let tmp_path = format!("{}.tmp", state.config_path);
     if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
         let _ = std::fs::remove_file(&tmp_path);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to write config: {}", e)}))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to write config: {}", e)})),
+        )
+            .into_response();
     }
     if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
         let _ = std::fs::remove_file(&tmp_path);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to save config: {}", e)}))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to save config: {}", e)})),
+        )
+            .into_response();
     }
 
     // Generate repo_id and add to GitCache
@@ -1635,7 +1952,14 @@ pub async fn add_local_project(
     let mut project_app_configs = Vec::new();
     for project in &projects_config {
         let views = crate::convert_project_views(project);
-        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project.tech_stacks.iter().map(|ts| crate::config::TechStackInfo { name: ts.name.clone(), category: ts.category.clone() }).collect();
+        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project
+            .tech_stacks
+            .iter()
+            .map(|ts| crate::config::TechStackInfo {
+                name: ts.name.clone(),
+                category: ts.category.clone(),
+            })
+            .collect();
         tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
@@ -1644,23 +1968,43 @@ pub async fn add_local_project(
             columns: project.columns,
         });
     }
-    *state.config.write().unwrap() = crate::config::AppConfig { projects: project_app_configs };
+    *state.config.write().unwrap() = crate::config::AppConfig {
+        projects: project_app_configs,
+    };
 
-    (StatusCode::OK, Json(AddLocalProjectResponse { repo_id, branches, current_branch })).into_response()
+    (
+        StatusCode::OK,
+        Json(AddLocalProjectResponse {
+            repo_id,
+            branches,
+            current_branch,
+        }),
+    )
+        .into_response()
 }
 
 /// POST /api/v1/config/reload — reload config from YAML file on disk
-pub async fn reload_config(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn reload_config(State(state): State<AppState>) -> impl IntoResponse {
     let yaml_content = match std::fs::read_to_string(&state.config_path) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to read config: {}", e)}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to read config: {}", e)})),
+            )
+                .into_response();
+        }
     };
 
     let core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("Failed to parse config: {}", e)}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to parse config: {}", e)})),
+            )
+                .into_response();
+        }
     };
 
     // Rebuild AppConfig (UI subset)
@@ -1668,7 +2012,14 @@ pub async fn reload_config(
     let mut project_app_configs = Vec::new();
     for project in &projects_config {
         let views = crate::convert_project_views(project);
-        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project.tech_stacks.iter().map(|ts| crate::config::TechStackInfo { name: ts.name.clone(), category: ts.category.clone() }).collect();
+        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project
+            .tech_stacks
+            .iter()
+            .map(|ts| crate::config::TechStackInfo {
+                name: ts.name.clone(),
+                category: ts.category.clone(),
+            })
+            .collect();
         tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
@@ -1677,13 +2028,16 @@ pub async fn reload_config(
             columns: project.columns,
         });
     }
-    let new_app_config = crate::config::AppConfig { projects: project_app_configs };
+    let new_app_config = crate::config::AppConfig {
+        projects: project_app_configs,
+    };
 
     // Update in-memory state
     *state.config.write().unwrap() = new_app_config;
     *state.core_config.write().unwrap() = core_config;
 
-    Json(serde_json::json!({"status": "ok", "message": "Configuration reloaded successfully"})).into_response()
+    Json(serde_json::json!({"status": "ok", "message": "Configuration reloaded successfully"}))
+        .into_response()
 }
 
 #[utoipa::path(
@@ -1758,7 +2112,8 @@ pub async fn execute_scan(
                         scan_id: 0,
                         project_name: String::new(),
                         status: "error".to_string(),
-                        message: "Repository not found in cache. Please clone it first.".to_string(),
+                        message: "Repository not found in cache. Please clone it first."
+                            .to_string(),
                     }),
                 )
                     .into_response();
@@ -1840,7 +2195,7 @@ pub async fn execute_scan(
     let project_name_clone = project_name.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        let temp_dir = std::env::temp_dir().join(format!("codeprism-{}", uuid::Uuid::new_v4().to_string()));
+        let temp_dir = std::env::temp_dir().join(format!("codeprism-{}", uuid::Uuid::new_v4()));
         let temp_dir_str = match temp_dir.to_str() {
             Some(path) => path.to_string(),
             None => return Err("Failed to create temp directory".to_string()),
@@ -1848,11 +2203,11 @@ pub async fn execute_scan(
 
         match git2::Repository::clone(&git_url, &temp_dir_str) {
             Ok(repo) => {
-                if let Some(br) = &branch {
-                    if let Err(e) = repo.set_head(&format!("refs/heads/{}", br)) {
-                        let _ = std::fs::remove_dir_all(&temp_dir_str);
-                        return Err(format!("Failed to checkout branch {}: {}", br, e));
-                    }
+                if let Some(br) = &branch
+                    && let Err(e) = repo.set_head(&format!("refs/heads/{}", br))
+                {
+                    let _ = std::fs::remove_dir_all(&temp_dir_str);
+                    return Err(format!("Failed to checkout branch {}: {}", br, e));
                 }
                 Ok((temp_dir_str, project_name_clone))
             }

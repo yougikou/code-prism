@@ -21,7 +21,7 @@ function firstMeaningfulLine(code: string, maxLen = 80): string {
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
-    if (/^[{}\[\]()#\s/*]+$/.test(line)) continue;
+    if (/^[{}[\]()#\s/*]+$/.test(line)) continue;
     return line.length > maxLen ? line.slice(0, maxLen) + '…' : line;
   }
   return '(empty block)';

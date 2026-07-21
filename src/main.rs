@@ -3,6 +3,21 @@ use clap::{Parser, Subcommand, ValueEnum};
 use codeprism_database::Db;
 use codeprism_scanner::Scanner;
 
+fn detect_python_interpreter() -> Option<&'static str> {
+    let candidates: &[&str] = if cfg!(windows) {
+        &["python", "python3", "py"]
+    } else {
+        &["python3", "python"]
+    };
+
+    candidates.iter().copied().find(|candidate| {
+        std::process::Command::new(candidate)
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+    })
+}
+
 #[derive(Parser)]
 #[command(name = "codeprism")]
 #[command(about = "Code Prism CLI", long_about = None)]
@@ -61,7 +76,6 @@ enum Commands {
     /// Validate configuration file
     CheckConfig,
     /// Run tests for custom analyzers
-    /// Run tests for custom analyzers
     TestAnalyzers,
     /// Start the API server
     Serve {
@@ -82,11 +96,11 @@ fn resolve_db_url(config: &codeprism_core::CodePrismConfig, config_path: &str) -
     // If it's a sqlite URL with a relative path, resolve against the config file's directory
     if let Some(path) = url.strip_prefix("sqlite:") {
         let db_path = std::path::Path::new(path);
-        if db_path.is_relative() {
-            if let Some(config_dir) = std::path::Path::new(config_path).parent() {
-                let abs_path = config_dir.join(path);
-                return format!("sqlite:{}", abs_path.display());
-            }
+        if db_path.is_relative()
+            && let Some(config_dir) = std::path::Path::new(config_path).parent()
+        {
+            let abs_path = config_dir.join(path);
+            return format!("sqlite:{}", abs_path.display());
         }
     }
     url
@@ -206,16 +220,22 @@ async fn main() -> Result<()> {
         }
         Commands::TestAnalyzers => {
             println!("Testing custom Python analyzers in 'custom_analyzers/'...");
+            let python = detect_python_interpreter().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Python 3 interpreter not found; expected python3, python, or py in PATH"
+                )
+            })?;
             let dir = std::path::Path::new("custom_analyzers");
             if !dir.exists() {
                 println!("Directory 'custom_analyzers' not found.");
                 return Ok(());
             }
 
+            let mut failures = 0usize;
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.filter_map(Result::ok) {
                     let path = entry.path();
-                    if path.is_file() && path.extension().map_or(false, |e| e == "py") {
+                    if path.is_file() && path.extension().is_some_and(|e| e == "py") {
                         let name = path
                             .file_stem()
                             .map(|s| s.to_string_lossy())
@@ -223,7 +243,7 @@ async fn main() -> Result<()> {
                         println!("\nExample: {}", name);
                         println!("---------------------------------------------------");
 
-                        let status = std::process::Command::new("python")
+                        let status = std::process::Command::new(python)
                             .arg(&path)
                             .arg("test")
                             .status();
@@ -234,12 +254,19 @@ async fn main() -> Result<()> {
                                     println!("{} [PASS]", name);
                                 } else {
                                     println!("{} [FAIL] (Exit code: {:?})", name, s.code());
+                                    failures += 1;
                                 }
                             }
-                            Err(e) => println!("Failed to execute test: {}", e),
+                            Err(e) => {
+                                println!("Failed to execute test: {}", e);
+                                failures += 1;
+                            }
                         }
                     }
                 }
+            }
+            if failures > 0 {
+                anyhow::bail!("{} custom analyzer test(s) failed", failures);
             }
         }
         Commands::Serve { port } => {

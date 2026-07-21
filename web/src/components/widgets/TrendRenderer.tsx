@@ -12,6 +12,12 @@ interface TrendRendererProps {
 
 const CHART_COLORS = ['#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#14b8a6'];
 
+interface TrendTooltipParam {
+  data: [number, number];
+  marker: string;
+  seriesName: string;
+}
+
 const TrendRenderer = React.memo(({ series, theme = 'dark', height = '300px', xAxisMin, xAxisMax }: TrendRendererProps) => {
   const textColor = theme === 'dark' ? '#94a3b8' : '#475569';
   const splitLineColor = theme === 'dark' ? '#334155' : '#e2e8f0';
@@ -19,12 +25,12 @@ const TrendRenderer = React.memo(({ series, theme = 'dark', height = '300px', xA
   const options = {
     tooltip: {
       trigger: 'axis' as const,
-      formatter: (params: any[]) => {
+      formatter: (params: TrendTooltipParam[]) => {
         if (!params || params.length === 0) return '';
         const first = params[0];
         const date = new Date(first.data[0]).toLocaleDateString();
         let html = `<strong>${date}</strong><br/>`;
-        params.forEach((p: any) => {
+        params.forEach(p => {
           html += `${p.marker} ${p.seriesName}: ${Number(p.data[1]).toLocaleString()}<br/>`;
         });
         return html;

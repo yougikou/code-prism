@@ -66,10 +66,14 @@ jobs:
 
       - name: Build (native)
         if: ${{ !matrix.cross }}
+        env:
+          CODEPRISM_SKIP_WEB_BUILD: '1'
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build (cross)
         if: matrix.cross
+        env:
+          CODEPRISM_SKIP_WEB_BUILD: '1'
         run: |
           cargo install cross --git https://github.com/cross-rs/cross
           cross build --release --target ${{ matrix.target }}

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { useApp } from '@/contexts/AppContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToast } from '@/components/ui/toast'
@@ -18,6 +19,13 @@ import {
   type UnifiedProjectInfo,
 } from '@/services/data'
 import { Settings, BookTemplate, Trash2, Database, GitBranch, ChevronDown, ChevronRight, RefreshCw, Save, Download, Undo2, Copy } from 'lucide-react'
+
+function nextAvailableKey(prefix: string, existing: Record<string, unknown> | undefined): string {
+  const keys = existing ?? {}
+  let index = 1
+  while (`${prefix}_${index}` in keys) index += 1
+  return `${prefix}_${index}`
+}
 
 // ─── Tag Input ──────────────────────────────────────────────────────────────
 
@@ -475,7 +483,7 @@ function AnalyzersEditor({ config, onChange }: {
   }
 
   const addRegex = () => {
-    const key = `new_regex_${Date.now()}`
+    const key = nextAvailableKey('new_regex', config.custom_regex_analyzers)
     onChange({
       ...config,
       custom_regex_analyzers: { ...config.custom_regex_analyzers, [key]: { pattern: '', metric_key: '' } },
@@ -589,7 +597,7 @@ function AnalyzersEditor({ config, onChange }: {
   }
 
   const addExternal = () => {
-    const key = `new_external_${Date.now()}`
+    const key = nextAvailableKey('new_external', config.external_analyzers)
     onChange({ ...config, external_analyzers: { ...config.external_analyzers, [key]: '' } })
   }
 
@@ -1707,7 +1715,8 @@ export default function ConfigPage() {
                     onClick={async () => {
                       setCopySaving(p.name)
                       try {
-                        const { repo_path: _, ...configWithoutRepo } = config
+                        const configWithoutRepo = { ...config }
+                        delete configWithoutRepo.repo_path
                         await updateProjectConfig(p.name, { ...configWithoutRepo, name: p.name })
                         const copyMsg = `${t('config.copySuccess') || 'Config copied to'} "${p.name}"`
                         setMessage({ type: 'success', text: copyMsg })
@@ -1760,7 +1769,7 @@ function ProjectManagementModal({ projectList, currentProject, onSelect, onCreat
   onCreateConfig: (name: string) => Promise<void>
   onDelete: (name: string) => Promise<void>
   onClose: () => void
-  t: (key: string, opts?: any) => string
+  t: TFunction
 }) {
   const [deleting, setDeleting] = useState<string | null>(null)
   const [creating, setCreating] = useState<string | null>(null)
@@ -1854,7 +1863,7 @@ function ProjectManagementModal({ projectList, currentProject, onSelect, onCreat
 
 function TemplateManagementModal({ onClose, t }: {
   onClose: () => void
-  t: (key: string, opts?: any) => string
+  t: TFunction
 }) {
   const [templateList, setTemplateList] = useState<Record<string, FullProjectConfig>>({})
   const [loading, setLoading] = useState(true)

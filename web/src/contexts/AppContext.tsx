@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- provider and hook form one public context API */
 import React, { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { fetchUnifiedProjects, type TechStackInfo, type UnifiedProjectInfo } from '../services/data';
 
@@ -81,6 +82,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Load unified projects on mount and whenever configVersion changes
   useEffect(() => {
+    // This is an asynchronous external-data refresh, intentionally triggered by config changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadUnifiedProjects();
   }, [configVersion, loadUnifiedProjects]);
 

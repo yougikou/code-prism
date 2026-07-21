@@ -229,15 +229,11 @@ pub struct ImplAnalyzerConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum SortOrder {
     Asc,
+    #[default]
     Desc,
-}
-
-impl Default for SortOrder {
-    fn default() -> Self {
-        SortOrder::Desc
-    }
 }
 
 pub fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -350,7 +346,12 @@ impl CustomAnalyzerDef {
                 tags.insert(TAG_METRIC.to_string(), "matches".to_string());
                 tags
             }
-            CustomAnalyzerDef::Config { metric_key, category, tags, .. } => {
+            CustomAnalyzerDef::Config {
+                metric_key,
+                category,
+                tags,
+                ..
+            } => {
                 let mut result = tags.clone();
                 result.insert(TAG_METRIC.to_string(), metric_key.clone());
                 if let Some(cat) = category {
@@ -439,18 +440,18 @@ impl ProjectConfig {
             if !stack.paths.is_empty() {
                 let mut matched = false;
                 for pattern in &stack.paths {
-                    if let Ok(glob) = glob::Pattern::new(pattern) {
-                        if glob.matches_with(
+                    if let Ok(glob) = glob::Pattern::new(pattern)
+                        && glob.matches_with(
                             path,
                             glob::MatchOptions {
                                 case_sensitive: false,
                                 require_literal_separator: true,
                                 require_literal_leading_dot: false,
                             },
-                        ) {
-                            matched = true;
-                            break;
-                        }
+                        )
+                    {
+                        matched = true;
+                        break;
                     }
                 }
 
@@ -463,18 +464,18 @@ impl ProjectConfig {
             if !stack.excludes.is_empty() {
                 let mut excluded = false;
                 for pattern in &stack.excludes {
-                    if let Ok(glob) = glob::Pattern::new(pattern) {
-                        if glob.matches_with(
+                    if let Ok(glob) = glob::Pattern::new(pattern)
+                        && glob.matches_with(
                             path,
                             glob::MatchOptions {
                                 require_literal_separator: true,
                                 case_sensitive: false,
                                 require_literal_leading_dot: false,
                             },
-                        ) {
-                            excluded = true;
-                            break;
-                        }
+                        )
+                    {
+                        excluded = true;
+                        break;
                     }
                 }
 
@@ -505,17 +506,17 @@ impl ProjectConfig {
 
             if !stack.paths.is_empty() {
                 for pattern in &stack.paths {
-                    if let Ok(glob) = glob::Pattern::new(pattern) {
-                        if glob.matches_with(
+                    if let Ok(glob) = glob::Pattern::new(pattern)
+                        && glob.matches_with(
                             path,
                             glob::MatchOptions {
                                 require_literal_separator: true,
                                 case_sensitive: false,
                                 require_literal_leading_dot: false,
                             },
-                        ) {
-                            return false; // Explicitly included -> Not excluded
-                        }
+                        )
+                    {
+                        return false; // Explicitly included -> Not excluded
                     }
                 }
             }
@@ -523,17 +524,17 @@ impl ProjectConfig {
 
         // 2. Check Global Excludes (Project-specific in this case)
         for pattern in &self.global_excludes {
-            if let Ok(glob) = glob::Pattern::new(pattern) {
-                if glob.matches_with(
+            if let Ok(glob) = glob::Pattern::new(pattern)
+                && glob.matches_with(
                     path,
                     glob::MatchOptions {
                         require_literal_separator: true,
                         case_sensitive: false,
                         require_literal_leading_dot: false,
                     },
-                ) {
-                    return true;
-                }
+                )
+            {
+                return true;
             }
         }
 
@@ -816,9 +817,13 @@ project_templates:
             valid_ids.extend(project.custom_regex_analyzers.keys().map(|s| s.as_str()));
             valid_ids.extend(project.custom_impl_analyzers.keys().map(|s| s.as_str()));
             valid_ids.extend(project.external_analyzers.keys().map(|s| s.as_str()));
-            valid_ids.extend(project.custom_cross_file_analyzers.keys().map(|s| s.as_str()));
-            let valid_set: std::collections::HashSet<&str> =
-                valid_ids.iter().copied().collect();
+            valid_ids.extend(
+                project
+                    .custom_cross_file_analyzers
+                    .keys()
+                    .map(|s| s.as_str()),
+            );
+            let valid_set: std::collections::HashSet<&str> = valid_ids.iter().copied().collect();
 
             for stack in &project.tech_stacks {
                 if stack.name.is_empty() {
@@ -826,10 +831,7 @@ project_templates:
                     continue;
                 }
                 if stack.extensions.is_empty() {
-                    errors.push(format!(
-                        "Tech stack '{}' has no extensions",
-                        stack.name
-                    ));
+                    errors.push(format!("Tech stack '{}' has no extensions", stack.name));
                 }
 
                 // Check that referenced analyzer IDs exist
@@ -859,13 +861,11 @@ project_templates:
                 // Validate func-specific fields
                 match &view.func {
                     AggregationFunc::TopN { .. } => {}
-                    AggregationFunc::Distribution { buckets, .. } => {
-                        if buckets.is_empty() {
-                            errors.push(format!(
-                                "Distribution view '{}' in project '{}' has no buckets defined",
-                                view_id, project.name
-                            ));
-                        }
+                    AggregationFunc::Distribution { buckets, .. } if buckets.is_empty() => {
+                        errors.push(format!(
+                            "Distribution view '{}' in project '{}' has no buckets defined",
+                            view_id, project.name
+                        ));
                     }
                     _ => {}
                 }
@@ -873,11 +873,18 @@ project_templates:
                 // Validate chart_type if set
                 if let Some(chart_type) = &view.chart_type {
                     const VALID_CHART_TYPES: &[&str] = &[
-                        "card", "table",
-                        "bar_row", "bar_horizontal",
-                        "bar_col", "bar_vertical",
-                        "pie", "line", "stacked_bar",
-                        "heatmap", "radar", "gauge",
+                        "card",
+                        "table",
+                        "bar_row",
+                        "bar_horizontal",
+                        "bar_col",
+                        "bar_vertical",
+                        "pie",
+                        "line",
+                        "stacked_bar",
+                        "heatmap",
+                        "radar",
+                        "gauge",
                     ];
                     if !VALID_CHART_TYPES.contains(&chart_type.as_str()) {
                         errors.push(format!(
@@ -888,18 +895,19 @@ project_templates:
                 }
 
                 // Validate change_type_mode if set
-                if let Some(ctm) = &view.change_type_mode {
-                    if ctm != "all" && ctm != "switchable" {
-                        errors.push(format!(
+                if let Some(ctm) = &view.change_type_mode
+                    && ctm != "all"
+                    && ctm != "switchable"
+                {
+                    errors.push(format!(
                             "Aggregation view '{}' in project '{}' has invalid change_type_mode '{}' (expected 'all' or 'switchable')",
                             view_id, project.name, ctm
                         ));
-                    }
                 }
             }
 
             // Validate cross-file analyzer names
-            for (analyzer_id, _) in &project.custom_cross_file_analyzers {
+            for analyzer_id in project.custom_cross_file_analyzers.keys() {
                 if analyzer_id.is_empty() {
                     errors.push(format!(
                         "Cross-file analyzer in project '{}' has an empty name",

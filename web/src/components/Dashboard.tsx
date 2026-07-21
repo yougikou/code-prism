@@ -6,12 +6,12 @@ import { TechStackTabs } from './dashboard/TechStackTabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { MetricCard } from './widgets/MetricCard';
 
-import ChartRenderer from './ChartRenderer';
+import ChartRenderer, { type ChartOptions } from './ChartRenderer';
 import { ChildrenViewer } from './dashboard/ChildrenViewer';
 import { MatchDetailView } from './dashboard/MatchDetailView';
 import { DetailViewPanel } from './dashboard/DetailViewPanel';
 import { AnalysisDetailModal } from './dashboard/AnalysisDetailModal';
-import { fetchView, fetchScanSummary, fetchMatches, fetchTrend, type AggregationResult, type AppConfig, type ScanSummary, type MatchDetail, type TrendSeries, type DuplicationInfo, getDefaultProject } from '@/services/data';
+import { fetchConfig, fetchRuns, fetchView, fetchScanSummary, fetchMatches, fetchTrend, type AggregationResult, type AppConfig, type ScanSummary, type MatchDetail, type TrendSeries, type DuplicationInfo, type FetchTrendOptions, type Run, type ViewConfig, getDefaultProject } from '@/services/data';
 import TrendRenderer from './widgets/TrendRenderer';
 import { TrendScanSelector } from './dashboard/TrendScanSelector';
 import { ChartSkeleton } from '@/components/ui/skeleton';
@@ -31,6 +31,29 @@ const TIME_RANGE_PRESETS: Record<string, number> = {
 
 const TIME_RANGE_KEYS = ['1m', '2m', '3m', '6m', '9m', '12m', '2y', '3y', '5y'] as const;
 
+interface DashboardRun {
+  id: string;
+  hash: string;
+  date: string;
+  scan_mode?: Run['scan_mode'];
+  commit_timestamp?: number;
+  base_commit_hash?: string;
+}
+
+interface AxisTooltipParam {
+  dataIndex: number;
+  marker: string;
+  seriesName: string;
+  value: number;
+}
+
+interface BarLabelParam {
+  data: {
+    value: number;
+    valueBefore?: number | null;
+  };
+}
+
 const Dashboard = () => {
   const { t } = useTranslation();
   const {
@@ -46,16 +69,16 @@ const Dashboard = () => {
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   // Derive all project names from the unified project list
 
-  const [viewsConfig, setViewsConfig] = useState<any[]>([]);
-  const [activeViews, setActiveViews] = useState<any[]>([]);
+  const [viewsConfig, setViewsConfig] = useState<ViewConfig[]>([]);
+  const [activeViews, setActiveViews] = useState<ViewConfig[]>([]);
   const [viewDataMap, setViewDataMap] = useState<Record<string, AggregationResult[]>>({});
   const [loading, setLoading] = useState(true);
-  const [runs, setRuns] = useState<any[]>([]);
+  const [runs, setRuns] = useState<DashboardRun[]>([]);
   const [scanSummary, setScanSummary] = useState<ScanSummary | null>(null);
   // Track change_type filter per view (for switchable mode)
   const [changeTypeFilters, setChangeTypeFilters] = useState<Record<string, string>>({});
   // Trend state
-  const [trendViews, setTrendViews] = useState<any[]>([]);
+  const [trendViews, setTrendViews] = useState<ViewConfig[]>([]);
   const [trendDataMap, setTrendDataMap] = useState<Record<string, TrendSeries[]>>({});
   // Ad-hoc trend mode: each view can be toggled to show trend instead of normal chart: each view can be toggled to show trend instead of normal chart
   const [trendActive, setTrendActive] = useState<Record<string, boolean>>({});
@@ -105,7 +128,7 @@ const Dashboard = () => {
     open: boolean;
     title: string;
     type: 'chart' | 'card' | 'table' | 'trend';
-    options?: any;
+    options?: ChartOptions;
     value?: string;
     data?: AggregationResult[];
     trendSeries?: TrendSeries[];
@@ -135,7 +158,7 @@ const Dashboard = () => {
   // Fetch Config
   useEffect(() => {
     const loadConfig = async () => {
-      const config = await import('@/services/data').then(m => m.fetchConfig());
+      const config = await fetchConfig();
       setAppConfig(config);
 
       // Use unified project list from context for determining available names
@@ -164,7 +187,7 @@ const Dashboard = () => {
       }
     };
     loadConfig();
-  }, [currentProject, configVersion]);
+  }, [currentProject, configVersion, projectList, selectedTechStack, setAvailableTechStacks, setProject, setSelectedTechStack]);
 
   // Update config when currentProject changes
   useEffect(() => {
@@ -184,12 +207,12 @@ const Dashboard = () => {
       }
       // Note: selectedRunId is handled by the fetchRuns effect
     }
-  }, [currentProject, appConfig, projectList]);
+  }, [currentProject, appConfig, projectList, setAvailableTechStacks, setSelectedTechStack]);
 
   // Filter Active Views based on selection
   useEffect(() => {
     // Helper: Check if a view is a "global" view (should appear on Summary tab)
-    const isGlobalView = (v: any) =>
+    const isGlobalView = (v: ViewConfig) =>
       !v.tech_stacks || v.tech_stacks.length === 0 || v.tech_stacks.includes('All');
 
     const filtered = selectedTechStack === 'Summary'
@@ -198,11 +221,11 @@ const Dashboard = () => {
 
     // All views stay in activeViews; trend mode is controlled by trendActive state
     setActiveViews(filtered);
-    setTrendViews(filtered.filter((v: any) => v.trend));
+    setTrendViews(filtered.filter(v => v.trend));
     // Auto-activate trend mode for views configured with trend: true
     setTrendActive(prev => {
       const next = { ...prev };
-      filtered.filter((v: any) => v.trend).forEach((v: any) => { next[v.id] = true; });
+      filtered.filter(v => v.trend).forEach(v => { next[v.id] = true; });
       return next;
     });
   }, [selectedTechStack, viewsConfig]);
@@ -227,7 +250,7 @@ const Dashboard = () => {
     let isActive = true;
 
     const loadRuns = async () => {
-      const data = await import('@/services/data').then(m => m.fetchRuns(currentProject, viewMode === 'snapshot' ? 'SNAPSHOT' : 'DIFF'));
+      const data = await fetchRuns(currentProject, viewMode === 'snapshot' ? 'SNAPSHOT' : 'DIFF');
 
       if (!isActive) return;
 
@@ -252,7 +275,7 @@ const Dashboard = () => {
     return () => {
       isActive = false;
     };
-  }, [viewMode, currentProject]);
+  }, [viewMode, currentProject, setSelectedRunId]);
 
   // Fetch View Data - Initial load and global changes (run, tech stack, active views)
   useEffect(() => {
@@ -345,7 +368,7 @@ const Dashboard = () => {
     let isActive = true;
 
     const loadTrends = async () => {
-      const newMap: Record<string, TrendSeries[]> = { ...trendDataMap };
+      const updates: Record<string, TrendSeries[]> = {};
 
       for (const viewId of activeTrendViewIds) {
         const view = [...activeViews, ...trendViews].find(v => v.id === viewId);
@@ -369,7 +392,7 @@ const Dashboard = () => {
         setTrendLoadingMap(prev => ({ ...prev, [viewId]: true }));
 
         try {
-          const options: any = {};
+          const options: FetchTrendOptions = {};
           if (trendCustomScanIds[viewId] && trendCustomScanIds[viewId].length > 0) {
             options.scanIds = trendCustomScanIds[viewId];
           } else {
@@ -378,7 +401,6 @@ const Dashboard = () => {
             const days = TIME_RANGE_PRESETS[trendTimeRange] || 90;
             const fromTs = now - days * 86400;
 
-            const { fetchRuns } = await import('@/services/data');
             const scanMode = viewMode === 'snapshot' ? 'SNAPSHOT' : 'DIFF';
             const allScans = await fetchRuns(currentProject, scanMode);
 
@@ -425,7 +447,7 @@ const Dashboard = () => {
           }
           const result = await fetchTrend(currentProject, viewId, options);
           if (!isActive) return;
-          newMap[viewId] = result.series;
+          updates[viewId] = result.series;
           prevTrendParamsRef.current[viewId] = paramStr; // Record successful fetch params
         } catch (e) {
           console.error(`Error fetching trend for ${viewId}:`, e);
@@ -434,13 +456,15 @@ const Dashboard = () => {
         }
       }
 
-      if (isActive) setTrendDataMap(newMap);
+      if (isActive && Object.keys(updates).length > 0) {
+        setTrendDataMap(previous => ({ ...previous, ...updates }));
+      }
     };
 
     loadTrends();
 
     return () => { isActive = false; };
-  }, [currentProject, viewMode, selectedRunId, trendActive, trendCustomScanIds, activeViews, trendViews, runs, changeTypeFilters, trendTimeRange]);
+  }, [currentProject, viewMode, selectedRunId, selectedTechStack, trendActive, trendCustomScanIds, activeViews, trendViews, runs, changeTypeFilters, trendTimeRange]);
 
   // Track previous change_type filters using ref to avoid re-render cycles
   const prevChangeTypeFilters = useRef<Record<string, string>>({});
@@ -488,7 +512,7 @@ const Dashboard = () => {
     return () => {
       isActive = false;
     };
-  }, [changeTypeFilters, selectedRunId, activeViews, selectedTechStack]);
+  }, [changeTypeFilters, selectedRunId, activeViews, selectedTechStack, currentProject]);
 
   // --- Chart Option Generators ---
 
@@ -501,7 +525,7 @@ const Dashboard = () => {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      formatter: (params: any[]) => {
+      formatter: (params: AxisTooltipParam[]) => {
         if (!params || params.length === 0) return '';
         const p = params[0];
         const d = data[p.dataIndex];
@@ -536,7 +560,7 @@ const Dashboard = () => {
       itemStyle: { color: color, borderRadius: [0, 4, 4, 0] },
       label: {
         show: true, position: 'right', color: labelColor,
-        formatter: (params: any) => {
+        formatter: (params: BarLabelParam) => {
           const raw = params.data;
           if (viewMode === 'diff') {
             return `{before|${(raw.valueBefore ?? 0).toLocaleString()} → }{after|${raw.value.toLocaleString()}}`;
@@ -557,7 +581,7 @@ const Dashboard = () => {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      formatter: (params: any[]) => {
+      formatter: (params: AxisTooltipParam[]) => {
         if (!params || params.length === 0) return '';
         const p = params[0];
         const d = data[p.dataIndex];
@@ -590,7 +614,7 @@ const Dashboard = () => {
       itemStyle: { color: color, borderRadius: [4, 4, 0, 0] },
       label: {
         show: true, position: 'top', color: labelColor,
-        formatter: (params: any) => {
+        formatter: (params: BarLabelParam) => {
           const raw = params.data;
           if (viewMode === 'diff') {
             return `{before|${(raw.valueBefore ?? 0).toLocaleString()} → }{after|${raw.value.toLocaleString()}}`;
@@ -682,7 +706,7 @@ const Dashboard = () => {
   const getLineOption = (_title: string, data: AggregationResult[], color: string) => ({
     tooltip: {
       trigger: 'axis',
-      formatter: (params: any[]) => {
+      formatter: (params: AxisTooltipParam[]) => {
         if (!params || params.length === 0) return '';
         const p = params[0];
         const d = data[p.dataIndex];
@@ -726,12 +750,12 @@ const Dashboard = () => {
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
-        formatter: (params: any[]) => {
+        formatter: (params: AxisTooltipParam[]) => {
           if (!params || params.length === 0) return '';
           const p = params[0];
           const d = data[p.dataIndex];
           let html = `<strong>${d.label}</strong><br/>`;
-          params.forEach((param: any) => {
+          params.forEach(param => {
             html += `${param.marker} ${param.seriesName}: ${Math.round(param.value).toLocaleString()}<br/>`;
           });
           if (viewMode === 'diff') {
@@ -956,7 +980,7 @@ const Dashboard = () => {
     return result;
   };
 
-  const openChildrenView = (view: any, viewTitle: string) => {
+  const openChildrenView = (view: ViewConfig, viewTitle: string) => {
     const rawData = viewDataMap[view.id] || [];
     const groupByFields: string[] = [];
     if (view.group_by) {
