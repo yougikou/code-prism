@@ -2,10 +2,10 @@
 //!
 //! These tests verify the server endpoints work correctly.
 
+use codeprism_server::aggregation::{SumAggregator, ViewFilters};
 use codeprism_server::config::{
     AppConfig, ProjectAppConfig, SourceConfig, TechStackInfo, TopNParams, ViewConfig, ViewKind,
 };
-use codeprism_server::aggregation::{SumAggregator, ViewFilters};
 
 /// Test that AppConfig can be serialized to JSON correctly
 #[test]
@@ -27,12 +27,17 @@ fn test_app_config_serialization() {
                         analyzer_id: vec!["char_count".to_string()],
                         tag_filters: std::collections::HashMap::new(),
                     },
-                    params: TopNParams { order: Default::default() },
+                    params: TopNParams {
+                        order: Default::default(),
+                    },
                 },
                 trend: false,
                 detail_view: false,
             }],
-            tech_stacks: vec![TechStackInfo { name: "Rust".to_string(), category: None }],
+            tech_stacks: vec![TechStackInfo {
+                name: "Rust".to_string(),
+                category: None,
+            }],
             columns: 4,
         }],
     };
@@ -54,13 +59,19 @@ fn test_app_config_helpers() {
             ProjectAppConfig {
                 name: "project_a".to_string(),
                 views: vec![],
-                tech_stacks: vec![TechStackInfo { name: "Rust".to_string(), category: None }],
+                tech_stacks: vec![TechStackInfo {
+                    name: "Rust".to_string(),
+                    category: None,
+                }],
                 columns: 4,
             },
             ProjectAppConfig {
                 name: "project_b".to_string(),
                 views: vec![],
-                tech_stacks: vec![TechStackInfo { name: "Python".to_string(), category: None }],
+                tech_stacks: vec![TechStackInfo {
+                    name: "Python".to_string(),
+                    category: None,
+                }],
                 columns: 4,
             },
         ],
@@ -91,7 +102,10 @@ fn test_single_project_mode() {
         projects: vec![ProjectAppConfig {
             name: "only_project".to_string(),
             views: vec![],
-            tech_stacks: vec![TechStackInfo { name: "Rust".to_string(), category: None }],
+            tech_stacks: vec![TechStackInfo {
+                name: "Rust".to_string(),
+                category: None,
+            }],
             columns: 4,
         }],
     };

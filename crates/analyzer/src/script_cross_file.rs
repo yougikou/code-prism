@@ -1,8 +1,8 @@
 use crate::{Analyzer, FileProcessor};
 use async_trait::async_trait;
 use codeprism_core::{
-    ContentBlock, FinalizeMatchResult, FinalizeOccurrence, IntermediateBlock,
-    ScriptContentBlock, TAG_CATEGORY, TAG_METRIC,
+    ContentBlock, FinalizeMatchResult, FinalizeOccurrence, IntermediateBlock, ScriptContentBlock,
+    TAG_CATEGORY, TAG_METRIC,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -125,10 +125,9 @@ impl ScriptCrossFileAnalyzer {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
+                && output.success()
             {
-                if output.success() {
-                    return Ok(cmd.to_string());
-                }
+                return Ok(cmd.to_string());
             }
         }
 
@@ -147,7 +146,7 @@ impl ScriptCrossFileAnalyzer {
             };
 
             let mut child = Command::new(&interpreter)
-                .arg(&self.script_path())
+                .arg(self.script_path())
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
@@ -172,10 +171,10 @@ impl ScriptCrossFileAnalyzer {
     }
 
     fn reset_process(&self) {
-        if let Ok(mut guard) = self.process.lock() {
-            if guard.is_some() {
-                *guard = None;
-            }
+        if let Ok(mut guard) = self.process.lock()
+            && guard.is_some()
+        {
+            *guard = None;
         }
     }
 
@@ -225,8 +224,7 @@ impl ScriptCrossFileAnalyzer {
                     return None;
                 }
 
-                let script_blocks: Vec<ScriptContentBlock> =
-                    serde_json::from_str(&line).ok()?;
+                let script_blocks: Vec<ScriptContentBlock> = serde_json::from_str(&line).ok()?;
 
                 // Capture script's default tags from the first block on first call
                 if let Some(first) = script_blocks.first() {
@@ -240,10 +238,7 @@ impl ScriptCrossFileAnalyzer {
                     }
                 }
 
-                let blocks = script_blocks
-                    .into_iter()
-                    .map(ContentBlock::from)
-                    .collect();
+                let blocks = script_blocks.into_iter().map(ContentBlock::from).collect();
 
                 Some((handle, blocks))
             })();
@@ -348,7 +343,10 @@ impl ScriptCrossFileAnalyzer {
                 Err(format!("Script timed out after {}s", IO_TIMEOUT.as_secs()))
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                eprintln!("Cross-file analyzer '{}' thread crashed during finalize.", aid);
+                eprintln!(
+                    "Cross-file analyzer '{}' thread crashed during finalize.",
+                    aid
+                );
                 Err("Script thread crashed".to_string())
             }
         }
@@ -386,8 +384,8 @@ impl FileProcessor for ScriptCrossFileAnalyzer {
         content_blocks
             .into_iter()
             .map(|cb| IntermediateBlock {
-                analyzer_id: String::new(),  // filled by pipeline
-                file_path: String::new(),    // filled by pipeline
+                analyzer_id: String::new(), // filled by pipeline
+                file_path: String::new(),   // filled by pipeline
                 group_key: cb.block_hash,
                 blob_data: Some(cb.block_content),
                 int_data1: Some(cb.block_size as i64),
@@ -399,11 +397,7 @@ impl FileProcessor for ScriptCrossFileAnalyzer {
             .collect()
     }
 
-    async fn finalize(
-        &self,
-        scan_id: i64,
-        pool: &sqlx::Pool<sqlx::Sqlite>,
-    ) -> anyhow::Result<()> {
+    async fn finalize(&self, scan_id: i64, pool: &sqlx::Pool<sqlx::Sqlite>) -> anyhow::Result<()> {
         // 1. Fetch intermediate blocks for this analyzer
         let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<i64>, Option<i64>, Option<i64>, Option<String>, Option<String>)>(
             "SELECT file_path, group_key, blob_data, int_data1, int_data2, int_data3, str_data1, str_data2 \
@@ -421,29 +415,27 @@ impl FileProcessor for ScriptCrossFileAnalyzer {
         // 2. Build block data for Python script
         let blocks: Vec<BlockData> = rows
             .iter()
-            .map(
-                |(fp, gk, bd, i1, i2, i3, s1, s2)| BlockData {
-                    file_path: fp.clone(),
-                    group_key: gk.clone(),
-                    blob_data: bd.clone(),
-                    int_data1: *i1,
-                    int_data2: *i2,
-                    int_data3: *i3,
-                    str_data1: s1.clone(),
-                    str_data2: s2.clone(),
-                },
-            )
+            .map(|(fp, gk, bd, i1, i2, i3, s1, s2)| BlockData {
+                file_path: fp.clone(),
+                group_key: gk.clone(),
+                blob_data: bd.clone(),
+                int_data1: *i1,
+                int_data2: *i2,
+                int_data3: *i3,
+                str_data1: s1.clone(),
+                str_data2: s2.clone(),
+            })
             .collect();
 
         // 3. Send to Python script for aggregation
-        let response = self.send_finalize(blocks).map_err(|e| {
-            anyhow::anyhow!("Finalize failed for '{}': {}", self.id, e)
-        })?;
+        let response = self
+            .send_finalize(blocks)
+            .map_err(|e| anyhow::anyhow!("Finalize failed for '{}': {}", self.id, e))?;
 
         // 4. Parse results — the script owns threshold logic and returns only
         //    groups that passed (e.g. min_file_count, min_block_count, etc.)
-        let match_results: Vec<FinalizeMatchResult> = serde_json::from_str(&response)
-            .map_err(|e| {
+        let match_results: Vec<FinalizeMatchResult> =
+            serde_json::from_str(&response).map_err(|e| {
                 anyhow::anyhow!(
                     "Failed to parse finalize response from '{}': {}",
                     self.id,
@@ -453,13 +445,11 @@ impl FileProcessor for ScriptCrossFileAnalyzer {
 
         if match_results.is_empty() {
             // Clean up intermediate blocks even with no matches
-            sqlx::query(
-                "DELETE FROM intermediate_blocks WHERE scan_id = ? AND analyzer_id = ?",
-            )
-            .bind(scan_id)
-            .bind(&self.id)
-            .execute(pool)
-            .await?;
+            sqlx::query("DELETE FROM intermediate_blocks WHERE scan_id = ? AND analyzer_id = ?")
+                .bind(scan_id)
+                .bind(&self.id)
+                .execute(pool)
+                .await?;
             return Ok(());
         }
 
@@ -584,14 +574,18 @@ impl FileProcessor for ScriptCrossFileAnalyzer {
                 let before_lines = file_entries
                     .iter()
                     .filter(|occurrence| occurrence.side.as_deref() == Some("0"))
-                    .map(|occurrence| (occurrence.line_end - occurrence.line_start + 1).max(0) as f64)
+                    .map(|occurrence| {
+                        (occurrence.line_end - occurrence.line_start + 1).max(0) as f64
+                    })
                     .sum::<f64>();
                 let after_lines = file_entries
                     .iter()
                     .filter(|occurrence| {
                         occurrence.side.is_none() || occurrence.side.as_deref() == Some("1")
                     })
-                    .map(|occurrence| (occurrence.line_end - occurrence.line_start + 1).max(0) as f64)
+                    .map(|occurrence| {
+                        (occurrence.line_end - occurrence.line_start + 1).max(0) as f64
+                    })
                     .sum::<f64>();
 
                 let base_metric = tags

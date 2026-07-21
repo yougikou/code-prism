@@ -29,7 +29,9 @@ pub struct AggregationResult {
 impl AggregationResult {
     /// Parse tags from a JSON string and set tags + legacy metric_key/category fields.
     fn with_tags(mut self, tags_json: &str) -> Self {
-        if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, String>>(tags_json) {
+        if let Ok(map) =
+            serde_json::from_str::<std::collections::HashMap<String, String>>(tags_json)
+        {
             self.tags = Some(map.clone());
             if let Some(v) = map.get(codeprism_core::TAG_METRIC) {
                 self.metric_key = Some(v.clone());
@@ -67,7 +69,8 @@ impl TopNAggregator {
             _ => return Ok(vec![]), // Should not reach here if routed correctly
         };
 
-        let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
+        let source_tag_filters: Vec<(String, String)> =
+            source.tag_filters.clone().into_iter().collect();
 
         let mut query = String::from(
             "SELECT file_path, value_after, value_before, tech_stack, tags, change_type, analyzer_id, finding_key
@@ -86,8 +89,12 @@ impl TopNAggregator {
             }
         }
         if !source.analyzer_id.is_empty() {
-            let placeholders: Vec<String> = source.analyzer_id.iter().map(|_| "?".to_string()).collect();
-            query.push_str(&format!(" AND analyzer_id IN ({})", placeholders.join(", ")));
+            let placeholders: Vec<String> =
+                source.analyzer_id.iter().map(|_| "?".to_string()).collect();
+            query.push_str(&format!(
+                " AND analyzer_id IN ({})",
+                placeholders.join(", ")
+            ));
         }
 
         // Apply dynamic filters (from request params)
@@ -143,7 +150,9 @@ impl TopNAggregator {
                 AggregationResult {
                     label: row.try_get::<String, _>("file_path").unwrap_or_default(),
                     value: row.try_get::<f64, _>("value_after").unwrap_or_default(),
-                    value_before: row.try_get::<Option<f64>, _>("value_before").unwrap_or_default(),
+                    value_before: row
+                        .try_get::<Option<f64>, _>("value_before")
+                        .unwrap_or_default(),
                     tech_stack: row
                         .try_get::<Option<String>, _>("tech_stack")
                         .unwrap_or_default(),
@@ -335,7 +344,8 @@ impl SumAggregator {
         // If we use the same query as TopN but w/o LIMIT, we get all rows.
         // Then we can group or just sum everything.
 
-        let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
+        let source_tag_filters: Vec<(String, String)> =
+            source.tag_filters.clone().into_iter().collect();
 
         let mut query = String::from(
             "SELECT file_path, value_after, value_before, tech_stack, tags, change_type, analyzer_id, finding_key
@@ -354,8 +364,12 @@ impl SumAggregator {
             }
         }
         if !source.analyzer_id.is_empty() {
-            let placeholders: Vec<String> = source.analyzer_id.iter().map(|_| "?".to_string()).collect();
-            query.push_str(&format!(" AND analyzer_id IN ({})", placeholders.join(", ")));
+            let placeholders: Vec<String> =
+                source.analyzer_id.iter().map(|_| "?".to_string()).collect();
+            query.push_str(&format!(
+                " AND analyzer_id IN ({})",
+                placeholders.join(", ")
+            ));
         }
 
         // Apply dynamic filters (from request params)
@@ -407,7 +421,9 @@ impl SumAggregator {
                 AggregationResult {
                     label: row.try_get::<String, _>("file_path").unwrap_or_default(),
                     value: row.try_get::<f64, _>("value_after").unwrap_or_default(),
-                    value_before: row.try_get::<Option<f64>, _>("value_before").unwrap_or_default(),
+                    value_before: row
+                        .try_get::<Option<f64>, _>("value_before")
+                        .unwrap_or_default(),
                     tech_stack: row
                         .try_get::<Option<String>, _>("tech_stack")
                         .unwrap_or_default(),
@@ -540,7 +556,8 @@ impl StatAggregator {
             StatType::Max => "MAX",
         };
 
-        let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
+        let source_tag_filters: Vec<(String, String)> =
+            source.tag_filters.clone().into_iter().collect();
 
         let mut query = format!(
             "SELECT {}(value_after) as stat_value, tech_stack, tags, change_type, analyzer_id, finding_key
@@ -560,8 +577,12 @@ impl StatAggregator {
             }
         }
         if !source.analyzer_id.is_empty() {
-            let placeholders: Vec<String> = source.analyzer_id.iter().map(|_| "?".to_string()).collect();
-            query.push_str(&format!(" AND analyzer_id IN ({})", placeholders.join(", ")));
+            let placeholders: Vec<String> =
+                source.analyzer_id.iter().map(|_| "?".to_string()).collect();
+            query.push_str(&format!(
+                " AND analyzer_id IN ({})",
+                placeholders.join(", ")
+            ));
         }
 
         // Dynamic filters
@@ -589,14 +610,20 @@ impl StatAggregator {
 
         if let Some(ref group_by_str) = effective_group_by {
             const ALLOWED_GROUP_KEYS: &[&str] = &[
-                "tech_stack", "category", "change_type", "metric_key", "analyzer_id", "file_path", "finding_key",
+                "tech_stack",
+                "category",
+                "change_type",
+                "metric_key",
+                "analyzer_id",
+                "file_path",
+                "finding_key",
             ];
             let all_keys: Vec<&str> = group_by_str
                 .split(',')
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .collect();
-            let has_extension = all_keys.iter().any(|k| *k == "extension");
+            let has_extension = all_keys.contains(&"extension");
 
             if has_extension {
                 return Self::execute_rust_grouping(
@@ -618,11 +645,14 @@ impl StatAggregator {
                 .collect();
             if !keys.is_empty() {
                 // Build GROUP BY with json_extract for tag-based keys
-                let group_parts: Vec<String> = keys.iter().map(|k| match *k {
-                    "category" => "json_extract(tags, '$.category')".to_string(),
-                    "metric_key" => "json_extract(tags, '$.metric')".to_string(),
-                    other => other.to_string(),
-                }).collect();
+                let group_parts: Vec<String> = keys
+                    .iter()
+                    .map(|k| match *k {
+                        "category" => "json_extract(tags, '$.category')".to_string(),
+                        "metric_key" => "json_extract(tags, '$.metric')".to_string(),
+                        other => other.to_string(),
+                    })
+                    .collect();
                 query.push_str(" GROUP BY ");
                 query.push_str(&group_parts.join(", "));
             }
@@ -728,9 +758,14 @@ impl StatAggregator {
             }
         }
         if !source_analyzer_ids.is_empty() {
-            let placeholders: Vec<String> =
-                source_analyzer_ids.iter().map(|_| "?".to_string()).collect();
-            query.push_str(&format!(" AND analyzer_id IN ({})", placeholders.join(", ")));
+            let placeholders: Vec<String> = source_analyzer_ids
+                .iter()
+                .map(|_| "?".to_string())
+                .collect();
+            query.push_str(&format!(
+                " AND analyzer_id IN ({})",
+                placeholders.join(", ")
+            ));
         }
 
         // Dynamic filters
@@ -806,10 +841,9 @@ impl StatAggregator {
                         .and_then(|e| e.to_str())
                         .map(|e| e.to_string())
                         .unwrap_or_default(),
-                    k if k.starts_with("tag:") => tags_map
-                        .get(&k[4..])
-                        .cloned()
-                        .unwrap_or_default(),
+                    k if k.starts_with("tag:") => {
+                        tags_map.get(&k[4..]).cloned().unwrap_or_default()
+                    }
                     _ => "Other".to_string(),
                 };
                 key_parts.push(val);
@@ -823,13 +857,8 @@ impl StatAggregator {
             .map(|(key_parts, values)| {
                 let stat_value = match stat_type {
                     StatType::Avg => values.iter().sum::<f64>() / values.len() as f64,
-                    StatType::Min => {
-                        values.iter().cloned().fold(f64::INFINITY, f64::min)
-                    }
-                    StatType::Max => values
-                        .iter()
-                        .cloned()
-                        .fold(f64::NEG_INFINITY, f64::max),
+                    StatType::Min => values.iter().cloned().fold(f64::INFINITY, f64::min),
+                    StatType::Max => values.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
                 };
 
                 AggregationResult {
@@ -874,7 +903,8 @@ impl DistributionAggregator {
             _ => return Ok(vec![]),
         };
 
-        let source_tag_filters: Vec<(String, String)> = source.tag_filters.clone().into_iter().collect();
+        let source_tag_filters: Vec<(String, String)> =
+            source.tag_filters.clone().into_iter().collect();
 
         // Fetch all values (include file_path when children are requested)
         let mut select_clause = String::from("SELECT value_after, tech_stack, analyzer_id");
@@ -894,8 +924,12 @@ impl DistributionAggregator {
             }
         }
         if !source.analyzer_id.is_empty() {
-            let placeholders: Vec<String> = source.analyzer_id.iter().map(|_| "?".to_string()).collect();
-            query.push_str(&format!(" AND analyzer_id IN ({})", placeholders.join(", ")));
+            let placeholders: Vec<String> =
+                source.analyzer_id.iter().map(|_| "?".to_string()).collect();
+            query.push_str(&format!(
+                " AND analyzer_id IN ({})",
+                placeholders.join(", ")
+            ));
         }
 
         // Dynamic filters
@@ -1087,19 +1121,33 @@ pub struct TrendResponse {
 
 pub struct TrendAggregator;
 
+pub struct TrendQuery<'a> {
+    pub project_name: &'a str,
+    pub view_config: &'a ViewConfig,
+    pub mode: &'a str,
+    pub limit: u32,
+    pub base_commit: Option<&'a str>,
+    pub scan_ids: Option<&'a [i64]>,
+    pub from: Option<i64>,
+    pub to: Option<i64>,
+    pub view_filters: &'a ViewFilters,
+}
+
+type TrendSeriesKey = (String, Option<String>, Option<String>, Option<String>);
+
 impl TrendAggregator {
-    pub async fn execute(
-        pool: &SqlitePool,
-        project_name: &str,
-        view_config: &ViewConfig,
-        mode: &str,
-        limit: u32,
-        base_commit: Option<&str>,
-        scan_ids: Option<&[i64]>,
-        from: Option<i64>,
-        to: Option<i64>,
-        view_filters: &ViewFilters,
-    ) -> Result<TrendResponse> {
+    pub async fn execute(pool: &SqlitePool, query: TrendQuery<'_>) -> Result<TrendResponse> {
+        let TrendQuery {
+            project_name,
+            view_config,
+            mode,
+            limit,
+            base_commit,
+            scan_ids,
+            from,
+            to,
+            view_filters,
+        } = query;
         // 1. Query scans ordered by commit_timestamp
         let scans: Vec<(i64, i64)> = if let Some(ids) = scan_ids {
             if ids.is_empty() {
@@ -1134,7 +1182,7 @@ impl TrendAggregator {
                  JOIN projects p ON s.project_id = p.id
                  WHERE p.name = ? AND s.scan_mode = ?
                    AND s.commit_timestamp >= ? AND s.commit_timestamp <= ?
-                   AND s.commit_timestamp IS NOT NULL"
+                   AND s.commit_timestamp IS NOT NULL",
             );
             range_query.push_str(&base_condition);
             range_query.push_str(" ORDER BY s.commit_timestamp ASC");
@@ -1154,7 +1202,7 @@ impl TrendAggregator {
                 "SELECT s.id, s.commit_timestamp FROM scans s
                  JOIN projects p ON s.project_id = p.id
                  WHERE p.name = ? AND s.scan_mode = ?
-                   AND s.commit_timestamp < ? AND s.commit_timestamp IS NOT NULL"
+                   AND s.commit_timestamp < ? AND s.commit_timestamp IS NOT NULL",
             );
             baseline_query.push_str(&base_condition);
             baseline_query.push_str(" ORDER BY s.commit_timestamp DESC LIMIT 1");
@@ -1178,7 +1226,7 @@ impl TrendAggregator {
             let mut scan_query = String::from(
                 "SELECT s.id, s.commit_timestamp FROM scans s
                  JOIN projects p ON s.project_id = p.id
-                 WHERE p.name = ? AND s.scan_mode = ? AND s.commit_timestamp IS NOT NULL"
+                 WHERE p.name = ? AND s.scan_mode = ? AND s.commit_timestamp IS NOT NULL",
             );
             if base_commit.is_some() {
                 scan_query.push_str(" AND s.base_commit_hash = ?");
@@ -1208,27 +1256,30 @@ impl TrendAggregator {
         let filters = view_filters;
 
         // Key: (label, metric_key, category, analyzer_id)
-        let mut series_map: HashMap<(String, Option<String>, Option<String>, Option<String>), Vec<TrendDataPoint>> = HashMap::new();
+        let mut series_map: HashMap<TrendSeriesKey, Vec<TrendDataPoint>> = HashMap::new();
 
         for (scan_id, timestamp) in &scans {
             let results = match &view_config.kind {
                 ViewKind::TopN { .. } => {
-                    TopNAggregator::execute(pool, *scan_id, view_config, &filters).await?
+                    TopNAggregator::execute(pool, *scan_id, view_config, filters).await?
                 }
                 ViewKind::Sum { .. } => {
-                    SumAggregator::execute(pool, *scan_id, view_config, &filters).await?
+                    SumAggregator::execute(pool, *scan_id, view_config, filters).await?
                 }
                 ViewKind::Avg { .. } => {
-                    StatAggregator::execute(pool, *scan_id, view_config, &filters, StatType::Avg).await?
+                    StatAggregator::execute(pool, *scan_id, view_config, filters, StatType::Avg)
+                        .await?
                 }
                 ViewKind::Min { .. } => {
-                    StatAggregator::execute(pool, *scan_id, view_config, &filters, StatType::Min).await?
+                    StatAggregator::execute(pool, *scan_id, view_config, filters, StatType::Min)
+                        .await?
                 }
                 ViewKind::Max { .. } => {
-                    StatAggregator::execute(pool, *scan_id, view_config, &filters, StatType::Max).await?
+                    StatAggregator::execute(pool, *scan_id, view_config, filters, StatType::Max)
+                        .await?
                 }
                 ViewKind::Distribution { .. } => {
-                    DistributionAggregator::execute(pool, *scan_id, view_config, &filters).await?
+                    DistributionAggregator::execute(pool, *scan_id, view_config, filters).await?
                 }
             };
 
@@ -1239,13 +1290,10 @@ impl TrendAggregator {
                     item.category.clone(),
                     item.analyzer_id.clone(),
                 );
-                series_map
-                    .entry(key)
-                    .or_default()
-                    .push(TrendDataPoint {
-                        timestamp: *timestamp,
-                        value: item.value,
-                    });
+                series_map.entry(key).or_default().push(TrendDataPoint {
+                    timestamp: *timestamp,
+                    value: item.value,
+                });
             }
         }
 

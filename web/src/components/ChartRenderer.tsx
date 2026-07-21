@@ -1,8 +1,13 @@
 import React from 'react';
 import ReactECharts from 'echarts-for-react';
 
+export interface ChartOptions {
+  tooltip?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 interface ChartRendererProps {
-  options: any;
+  options: ChartOptions;
   height?: string;
   className?: string;
   theme?: 'light' | 'dark';

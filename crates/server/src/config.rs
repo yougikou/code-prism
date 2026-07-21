@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use codeprism_core::SortOrder;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
@@ -113,7 +113,10 @@ pub enum ViewKind {
 
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
 pub struct SourceConfig {
-    #[serde(default, deserialize_with = "codeprism_core::deserialize_string_or_vec")]
+    #[serde(
+        default,
+        deserialize_with = "codeprism_core::deserialize_string_or_vec"
+    )]
     pub analyzer_id: Vec<String>,
     /// Tag key-value filters
     #[serde(default)]

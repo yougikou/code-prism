@@ -48,10 +48,10 @@ impl GitCache {
         if let Some(parent) = self.storage_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        if let Ok(repos) = self.repos.lock() {
-            if let Ok(file) = std::fs::File::create(&self.storage_path) {
-                let _ = serde_json::to_writer(file, &*repos);
-            }
+        if let Ok(repos) = self.repos.lock()
+            && let Ok(file) = std::fs::File::create(&self.storage_path)
+        {
+            let _ = serde_json::to_writer(file, &*repos);
         }
     }
 

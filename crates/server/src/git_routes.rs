@@ -1,9 +1,9 @@
 use crate::routes::AppState;
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use git2::Repository;
 use serde::{Deserialize, Serialize};
@@ -94,10 +94,15 @@ pub(crate) fn extract_branches(repo: &Repository) -> Result<(Vec<BranchInfo>, St
     let mut current_branch = String::new();
 
     let head = repo.head().ok();
-    let head_shorthand = head.as_ref().and_then(|h| h.shorthand()).map(|s| s.to_string());
+    let head_shorthand = head
+        .as_ref()
+        .and_then(|h| h.shorthand())
+        .map(|s| s.to_string());
 
     // Collect local branches
-    let local_iter = repo.branches(Some(git2::BranchType::Local)).map_err(|e| e.message().to_string())?;
+    let local_iter = repo
+        .branches(Some(git2::BranchType::Local))
+        .map_err(|e| e.message().to_string())?;
     for branch_result in local_iter {
         let (branch, _) = branch_result.map_err(|e| e.message().to_string())?;
         let name = branch
@@ -116,11 +121,17 @@ pub(crate) fn extract_branches(repo: &Repository) -> Result<(Vec<BranchInfo>, St
             current_branch = name.clone();
         }
 
-        branches.push(BranchInfo { name, is_head, is_remote: false });
+        branches.push(BranchInfo {
+            name,
+            is_head,
+            is_remote: false,
+        });
     }
 
     // Collect remote branches (e.g. origin/main, upstream/develop)
-    let remote_iter = repo.branches(Some(git2::BranchType::Remote)).map_err(|e| e.message().to_string())?;
+    let remote_iter = repo
+        .branches(Some(git2::BranchType::Remote))
+        .map_err(|e| e.message().to_string())?;
     for branch_result in remote_iter {
         let (branch, _) = branch_result.map_err(|e| e.message().to_string())?;
         let name = match branch.name() {
@@ -133,7 +144,11 @@ pub(crate) fn extract_branches(repo: &Repository) -> Result<(Vec<BranchInfo>, St
             continue;
         }
 
-        branches.push(BranchInfo { name, is_head: false, is_remote: true });
+        branches.push(BranchInfo {
+            name,
+            is_head: false,
+            is_remote: true,
+        });
     }
 
     branches.sort_by(|a, b| {
@@ -142,7 +157,11 @@ pub(crate) fn extract_branches(repo: &Repository) -> Result<(Vec<BranchInfo>, St
         } else if b.is_head {
             std::cmp::Ordering::Greater
         } else if a.is_remote != b.is_remote {
-            if a.is_remote { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Less }
+            if a.is_remote {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            }
         } else {
             a.name.cmp(&b.name)
         }
@@ -158,7 +177,9 @@ fn walk_commits(
     limit: usize,
     search: Option<&str>,
 ) -> Result<(Vec<CommitInfo>, bool), String> {
-    let revspec = repo.revparse_single(ref_name).map_err(|e| e.message().to_string())?;
+    let revspec = repo
+        .revparse_single(ref_name)
+        .map_err(|e| e.message().to_string())?;
     let commit = revspec
         .into_commit()
         .map_err(|_| format!("'{}' is not a commit", ref_name))?;
@@ -227,10 +248,7 @@ fn walk_commits(
 // ─── Route handlers ──────────────────────────────────────────────────────
 
 /// POST /api/v1/git/clone
-pub async fn clone_repo(
-    State(state): State<AppState>,
-    Json(req): Json<CloneRequest>,
-) -> Response {
+pub async fn clone_repo(State(state): State<AppState>, Json(req): Json<CloneRequest>) -> Response {
     if req.git_url.trim().is_empty() {
         return err_response(StatusCode::BAD_REQUEST, "Git URL is required".to_string());
     }
@@ -240,23 +258,30 @@ pub async fn clone_repo(
     let repo_id_for_path = repo_id.clone();
     let repo_dir = state.git_cache.repo_dir(&repo_id_for_path);
 
-    let result = tokio::task::spawn_blocking(move || -> Result<(String, Vec<BranchInfo>, String), String> {
-        let dir = repo_dir.clone();
-        let dir_str = dir.to_str().ok_or("Invalid repo directory path")?.to_string();
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<(String, Vec<BranchInfo>, String), String> {
+            let dir = repo_dir.clone();
+            let dir_str = dir
+                .to_str()
+                .ok_or("Invalid repo directory path")?
+                .to_string();
 
-        // Ensure parent directory exists
-        if let Some(parent) = dir.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
-        }
+            // Ensure parent directory exists
+            if let Some(parent) = dir.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create directory: {}", e))?;
+            }
 
-        Repository::clone(&git_url, &dir_str).map_err(|e| format!("Clone failed: {}", e))?;
+            Repository::clone(&git_url, &dir_str).map_err(|e| format!("Clone failed: {}", e))?;
 
-        let repo = Repository::open(&dir_str).map_err(|e| format!("Failed to open cloned repo: {}", e))?;
+            let repo = Repository::open(&dir_str)
+                .map_err(|e| format!("Failed to open cloned repo: {}", e))?;
 
-        let (branches, current_branch) = extract_branches(&repo)?;
+            let (branches, current_branch) = extract_branches(&repo)?;
 
-        Ok((dir_str, branches, current_branch))
-    })
+            Ok((dir_str, branches, current_branch))
+        },
+    )
     .await;
 
     match result {
@@ -289,10 +314,16 @@ pub async fn clone_repo(
                             .into_response();
                     }
                 };
-                if let Ok(mut core_config) = serde_yaml::from_str::<codeprism_core::CodePrismConfig>(&yaml_content) {
+                if let Ok(mut core_config) =
+                    serde_yaml::from_str::<codeprism_core::CodePrismConfig>(&yaml_content)
+                {
                     // Only update repo_path if project already exists in config.
                     // The frontend handles creating the project entry (with template if selected).
-                    if let Some(pos) = core_config.projects.iter().position(|p| p.name == *proj_name) {
+                    if let Some(pos) = core_config
+                        .projects
+                        .iter()
+                        .position(|p| p.name == *proj_name)
+                    {
                         core_config.projects[pos].repo_path = Some(clone_path.clone());
                     }
                     // Atomic write: tmp + rename
@@ -308,8 +339,14 @@ pub async fn clone_repo(
                     let mut project_app_configs = Vec::new();
                     for project in &projects_config {
                         let views = crate::convert_project_views(project);
-                        let mut tech_stacks: Vec<crate::config::TechStackInfo> =
-                            project.tech_stacks.iter().map(|ts| crate::config::TechStackInfo { name: ts.name.clone(), category: ts.category.clone() }).collect();
+                        let mut tech_stacks: Vec<crate::config::TechStackInfo> = project
+                            .tech_stacks
+                            .iter()
+                            .map(|ts| crate::config::TechStackInfo {
+                                name: ts.name.clone(),
+                                category: ts.category.clone(),
+                            })
+                            .collect();
                         tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
                         project_app_configs.push(crate::config::ProjectAppConfig {
                             name: project.name.clone(),
@@ -318,8 +355,9 @@ pub async fn clone_repo(
                             columns: project.columns,
                         });
                     }
-                    *state.config.write().unwrap() =
-                        crate::config::AppConfig { projects: project_app_configs };
+                    *state.config.write().unwrap() = crate::config::AppConfig {
+                        projects: project_app_configs,
+                    };
                 }
             }
 
@@ -334,14 +372,15 @@ pub async fn clone_repo(
                 .into_response()
         }
         Ok(Err(err)) => err_response(StatusCode::INTERNAL_SERVER_ERROR, err),
-        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {}", e)),
+        Err(e) => err_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {}", e),
+        ),
     }
 }
 
 /// GET /api/v1/git/repos — list all cached repos
-pub async fn list_repos(
-    State(state): State<AppState>,
-) -> Response {
+pub async fn list_repos(State(state): State<AppState>) -> Response {
     let repos = state.git_cache.list_all();
     let items: Vec<serde_json::Value> = repos
         .into_iter()
@@ -388,25 +427,27 @@ pub async fn delete_repo(
         });
     }
 
-    (StatusCode::OK, Json(serde_json::json!({ "message": "Repository removed" }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "message": "Repository removed" })),
+    )
+        .into_response()
 }
 
 /// GET /api/v1/git/{repo_id}/branches
-pub async fn list_branches(
-    State(state): State<AppState>,
-    Path(repo_id): Path<String>,
-) -> Response {
+pub async fn list_branches(State(state): State<AppState>, Path(repo_id): Path<String>) -> Response {
     let repo_info = match state.git_cache.get(&repo_id) {
         Some(info) => info,
         None => return err_response(StatusCode::NOT_FOUND, "Repository not found".to_string()),
     };
 
     let path = repo_info.path.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<(Vec<BranchInfo>, String), String> {
-        let repo = Repository::open(&path).map_err(|e| e.message().to_string())?;
-        extract_branches(&repo)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<BranchInfo>, String), String> {
+            let repo = Repository::open(&path).map_err(|e| e.message().to_string())?;
+            extract_branches(&repo)
+        })
+        .await;
 
     match result {
         Ok(Ok((branches, current_branch))) => {
@@ -429,7 +470,10 @@ pub async fn list_branches(
                 .into_response()
         }
         Ok(Err(err)) => err_response(StatusCode::INTERNAL_SERVER_ERROR, err),
-        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {}", e)),
+        Err(e) => err_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {}", e),
+        ),
     }
 }
 
@@ -458,7 +502,8 @@ pub async fn checkout_branch(
 
         if repo.find_reference(&local_ref).is_ok() {
             // Local branch exists — simple checkout
-            repo.set_head(&local_ref).map_err(|e| format!("Failed to set HEAD: {}", e))?;
+            repo.set_head(&local_ref)
+                .map_err(|e| format!("Failed to set HEAD: {}", e))?;
             repo.checkout_head(Some(&mut checkout_opts))
                 .map_err(|e| format!("Checkout failed: {}", e))?;
             Ok(branch_name.clone())
@@ -469,21 +514,30 @@ pub async fn checkout_branch(
 
             // Create local branch tracking the remote if it doesn't exist
             if repo.find_reference(&short_local_ref).is_err() {
-                let remote_commit = repo.revparse_single(&branch_name)
+                let remote_commit = repo
+                    .revparse_single(&branch_name)
                     .map_err(|_| format!("Cannot resolve '{}'", branch_name))?;
-                let commit = remote_commit.peel_to_commit()
+                let commit = remote_commit
+                    .peel_to_commit()
                     .map_err(|_| "Not a commit".to_string())?;
                 repo.branch(&local_name, &commit, true)
                     .map_err(|e| format!("Failed to create branch '{}': {}", local_name, e))?;
             }
 
-            repo.set_head(&short_local_ref).map_err(|e| format!("Failed to set HEAD: {}", e))?;
+            repo.set_head(&short_local_ref)
+                .map_err(|e| format!("Failed to set HEAD: {}", e))?;
             repo.checkout_head(Some(&mut checkout_opts))
                 .map_err(|e| format!("Checkout failed: {}", e))?;
-            println!("Created and switched to local branch '{}' tracking '{}'", local_name, branch_name);
+            println!(
+                "Created and switched to local branch '{}' tracking '{}'",
+                local_name, branch_name
+            );
             Ok(local_name)
         } else {
-            Err(format!("Branch '{}' not found (checked local and remote)", branch_name))
+            Err(format!(
+                "Branch '{}' not found (checked local and remote)",
+                branch_name
+            ))
         }
     })
     .await;
@@ -508,15 +562,15 @@ pub async fn checkout_branch(
                 .into_response()
         }
         Ok(Err(err)) => err_response(StatusCode::BAD_REQUEST, err),
-        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {}", e)),
+        Err(e) => err_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {}", e),
+        ),
     }
 }
 
 /// POST /api/v1/git/{repo_id}/pull
-pub async fn pull_branch(
-    State(state): State<AppState>,
-    Path(repo_id): Path<String>,
-) -> Response {
+pub async fn pull_branch(State(state): State<AppState>, Path(repo_id): Path<String>) -> Response {
     let repo_info = match state.git_cache.get(&repo_id) {
         Some(info) => info,
         None => return err_response(StatusCode::NOT_FOUND, "Repository not found".to_string()),
@@ -600,11 +654,19 @@ pub async fn pull_branch(
     }).await;
 
     match result {
-        Ok(Ok(message)) => {
-            (StatusCode::OK, Json(PullResponse { branch: branch_for_response, message })).into_response()
-        }
+        Ok(Ok(message)) => (
+            StatusCode::OK,
+            Json(PullResponse {
+                branch: branch_for_response,
+                message,
+            }),
+        )
+            .into_response(),
         Ok(Err(err)) => err_response(StatusCode::BAD_REQUEST, err),
-        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {}", e)),
+        Err(e) => err_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {}", e),
+        ),
     }
 }
 
@@ -636,6 +698,9 @@ pub async fn list_commits(
             (StatusCode::OK, Json(CommitsResponse { commits, has_more })).into_response()
         }
         Ok(Err(err)) => err_response(StatusCode::BAD_REQUEST, err),
-        Err(e) => err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Task failed: {}", e)),
+        Err(e) => err_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Task failed: {}", e),
+        ),
     }
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
-import type { Run } from '@/services/data';
+import { fetchRuns, type Run } from '@/services/data';
 
 interface TrendScanSelectorProps {
   open: boolean;
@@ -35,7 +35,6 @@ export function TrendScanSelector({
     const loadScans = async () => {
       setLoading(true);
       try {
-        const { fetchRuns } = await import('@/services/data');
         const all = await fetchRuns(projectName, mode);
         // Only show available scans: for diff mode, filter by same base_commit
         const available = mode === 'DIFF' && baseCommit

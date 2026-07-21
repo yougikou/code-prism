@@ -7,7 +7,10 @@ pub mod routes;
 pub mod template_routes;
 
 use anyhow::Result;
-use axum::{Router, routing::{get, post, delete}};
+use axum::{
+    Router,
+    routing::{delete, get, post},
+};
 use codeprism_core::{AggregationFunc, CodePrismConfig, ProjectConfig};
 use codeprism_database::Db;
 use std::path::PathBuf;
@@ -17,11 +20,15 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::config::{AppConfig, ProjectAppConfig, SourceConfig, TopNParams, ViewConfig, ViewKind};
-use crate::routes::{
-    AppState, get_scan_summary, get_view, get_scans, static_handler, execute_scan, get_scan_job, add_local_project,
-    list_unified_projects, create_project, delete_project, get_matches, get_findings,
+use crate::git_routes::{
+    checkout_branch, clone_repo, delete_repo, extract_branches, list_branches, list_commits,
+    list_repos, pull_branch,
 };
-use crate::git_routes::{clone_repo, list_branches, checkout_branch, pull_branch, list_commits, list_repos, delete_repo, extract_branches};
+use crate::routes::{
+    AppState, add_local_project, create_project, delete_project, execute_scan, get_findings,
+    get_matches, get_scan_job, get_scan_summary, get_scans, get_view, list_unified_projects,
+    static_handler,
+};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -199,7 +206,12 @@ pub(crate) fn convert_project_views(project: &ProjectConfig) -> Vec<ViewConfig> 
     views
 }
 
-pub async fn run_server(db: Db, core_config: CodePrismConfig, config_path: String, port: u16) -> Result<()> {
+pub async fn run_server(
+    db: Db,
+    core_config: CodePrismConfig,
+    config_path: String,
+    port: u16,
+) -> Result<()> {
     // Convert CodePrismConfig (Core) to AppConfig (Server) with multi-project support
     let projects_config = core_config.get_projects();
 
@@ -238,25 +250,28 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, config_path: Strin
 
     // Pre-populate GitCache with projects that have repo_path in config
     for project in &projects_config {
-        if let Some(ref repo_path) = project.repo_path {
-            if std::path::Path::new(repo_path).exists() {
-                let already_cached = git_cache.list_all().iter().any(|(_, r)| r.path == *repo_path);
-                if !already_cached {
-                    let (_branches, current_branch) = match git2::Repository::open(repo_path) {
-                        Ok(repo) => extract_branches(&repo).unwrap_or_default(),
-                        Err(_) => (vec![], String::new()),
-                    };
-                    let repo_id = uuid::Uuid::new_v4().to_string();
-                    git_cache.insert(
-                        repo_id,
-                        crate::git_cache::GitRepo {
-                            path: repo_path.clone(),
-                            git_url: String::new(),
-                            current_branch,
-                            project_name: Some(project.name.clone()),
-                        },
-                    );
-                }
+        if let Some(ref repo_path) = project.repo_path
+            && std::path::Path::new(repo_path).exists()
+        {
+            let already_cached = git_cache
+                .list_all()
+                .iter()
+                .any(|(_, r)| r.path == *repo_path);
+            if !already_cached {
+                let (_branches, current_branch) = match git2::Repository::open(repo_path) {
+                    Ok(repo) => extract_branches(&repo).unwrap_or_default(),
+                    Err(_) => (vec![], String::new()),
+                };
+                let repo_id = uuid::Uuid::new_v4().to_string();
+                git_cache.insert(
+                    repo_id,
+                    crate::git_cache::GitRepo {
+                        path: repo_path.clone(),
+                        git_url: String::new(),
+                        current_branch,
+                        project_name: Some(project.name.clone()),
+                    },
+                );
             }
         }
     }
@@ -274,11 +289,25 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, config_path: Strin
     let router = Router::new()
         // Config & Projects (listing)
         .route("/api/v1/config", get(crate::routes::get_config))
-        .route("/api/v1/config/projects/:project_name", get(crate::routes::get_full_project_config).put(crate::routes::update_project_config))
-        .route("/api/v1/config/templates", get(crate::template_routes::list_templates))
-        .route("/api/v1/config/templates/:name", get(crate::template_routes::get_template).put(crate::template_routes::upsert_template).delete(crate::template_routes::delete_template))
+        .route(
+            "/api/v1/config/projects/:project_name",
+            get(crate::routes::get_full_project_config).put(crate::routes::update_project_config),
+        )
+        .route(
+            "/api/v1/config/templates",
+            get(crate::template_routes::list_templates),
+        )
+        .route(
+            "/api/v1/config/templates/:name",
+            get(crate::template_routes::get_template)
+                .put(crate::template_routes::upsert_template)
+                .delete(crate::template_routes::delete_template),
+        )
         .route("/api/v1/config/reload", post(crate::routes::reload_config))
-        .route("/api/v1/projects", get(crate::routes::list_projects).post(create_project))
+        .route(
+            "/api/v1/projects",
+            get(crate::routes::list_projects).post(create_project),
+        )
         .route("/api/v1/projects/unified", get(list_unified_projects))
         .route("/api/v1/projects/:project_name", delete(delete_project))
         .route("/api/v1/projects/add-local", post(add_local_project))

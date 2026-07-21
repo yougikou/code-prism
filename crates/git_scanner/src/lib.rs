@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use codeprism_analyzer::{
-    Analyzer, CharCountAnalyzer, FileCountAnalyzer, FileProcessor, RegexAnalyzer,
-    ScriptAnalyzer, ScriptCrossFileAnalyzer, WasmAnalyzer,
+    Analyzer, CharCountAnalyzer, FileCountAnalyzer, FileProcessor, RegexAnalyzer, ScriptAnalyzer,
+    ScriptCrossFileAnalyzer, WasmAnalyzer,
 };
 
 mod cross_file;
@@ -36,6 +36,16 @@ pub struct Scanner {
     seen_tag_keys: Mutex<HashSet<String>>,
     // Exact-content cache shared by ordinary match writers during this scanner lifetime.
     match_content_cache: Mutex<HashMap<String, i64>>,
+}
+
+struct MetricSaveInput<'a> {
+    scan_id: i64,
+    file_path: &'a str,
+    change_type: &'a str,
+    old_path: Option<&'a str>,
+    tech_stack: Option<&'a str>,
+    new_metrics: Vec<codeprism_core::MetricEntry>,
+    old_metrics: Vec<codeprism_core::MetricEntry>,
 }
 
 /// Resolve the cross-file analyzers active for one project.
@@ -123,7 +133,10 @@ impl Scanner {
             let (pattern, tags, scan_mode, change_type) = match def {
                 codeprism_core::CustomAnalyzerDef::Pattern(p) => {
                     let mut tags = std::collections::HashMap::new();
-                    tags.insert(codeprism_core::TAG_METRIC.to_string(), "matches".to_string());
+                    tags.insert(
+                        codeprism_core::TAG_METRIC.to_string(),
+                        "matches".to_string(),
+                    );
                     (p.clone(), tags, None, None)
                 }
                 codeprism_core::CustomAnalyzerDef::Config {
@@ -139,8 +152,7 @@ impl Scanner {
                 ),
             };
 
-            match RegexAnalyzer::new(name, &pattern, tags, scan_mode, change_type)
-            {
+            match RegexAnalyzer::new(name, &pattern, tags, scan_mode, change_type) {
                 Ok(ra) => {
                     analyzers.insert(ra.id().to_string(), Box::new(ra));
                 }
@@ -182,44 +194,42 @@ impl Scanner {
         if let Ok(entries) = std::fs::read_dir("custom_analyzers") {
             for entry in entries.filter_map(Result::ok) {
                 let path = entry.path();
-                if path.is_file() {
-                    if let Some(ext) = path.extension() {
-                        if ext == "py" {
-                            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                                let analyzer_id = stem.to_string();
+                if path.is_file()
+                    && let Some(ext) = path.extension()
+                    && ext == "py"
+                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                {
+                    let analyzer_id = stem.to_string();
 
-                                // Cross-file scripts are instantiated per project at scan time.
-                                if all_cross_file_names.contains(&analyzer_id) {
-                                    continue;
-                                }
-
-                                let full_path = path.to_string_lossy().to_string();
-
-                                // Check for overrides (search root then projects)
-                                let (tag_overrides, scan_mode, change_type) =
-                                    if let Some(conf) = impl_defs.get(&analyzer_id) {
-                                        (
-                                            conf.resolve_tags(),
-                                            conf.scan_mode.clone(),
-                                            conf.change_type.clone(),
-                                        )
-                                    } else {
-                                        (HashMap::new(), None, None)
-                                    };
-
-                                // Create ScriptAnalyzer
-                                let sa = ScriptAnalyzer::new(
-                                    &analyzer_id,
-                                    &full_path,
-                                    tag_overrides,
-                                    scan_mode,
-                                    change_type,
-                                );
-                                analyzers.insert(analyzer_id, Box::new(sa));
-                                println!("Loaded custom analyzer: {}", stem);
-                            }
-                        }
+                    // Cross-file scripts are instantiated per project at scan time.
+                    if all_cross_file_names.contains(&analyzer_id) {
+                        continue;
                     }
+
+                    let full_path = path.to_string_lossy().to_string();
+
+                    // Check for overrides (search root then projects)
+                    let (tag_overrides, scan_mode, change_type) =
+                        if let Some(conf) = impl_defs.get(&analyzer_id) {
+                            (
+                                conf.resolve_tags(),
+                                conf.scan_mode.clone(),
+                                conf.change_type.clone(),
+                            )
+                        } else {
+                            (HashMap::new(), None, None)
+                        };
+
+                    // Create ScriptAnalyzer
+                    let sa = ScriptAnalyzer::new(
+                        &analyzer_id,
+                        &full_path,
+                        tag_overrides,
+                        scan_mode,
+                        change_type,
+                    );
+                    analyzers.insert(analyzer_id, Box::new(sa));
+                    println!("Loaded custom analyzer: {}", stem);
                 }
             }
         }
@@ -260,13 +270,13 @@ impl Scanner {
         for (name, analyzer_config) in &active_configs {
             let script_path = format!("custom_analyzers/{}.py", name);
             if Path::new(&script_path).exists() {
-                let analyzer = ScriptCrossFileAnalyzer::new(
-                    name,
-                    analyzer_config.resolve_tags(),
-                );
+                let analyzer = ScriptCrossFileAnalyzer::new(name, analyzer_config.resolve_tags());
                 self.cross_file_analyzers
                     .insert(name.clone(), Box::new(analyzer));
-                println!("Loaded cross-file analyzer for project '{}': {}", project_config.name, name);
+                println!(
+                    "Loaded cross-file analyzer for project '{}': {}",
+                    project_config.name, name
+                );
             } else {
                 let message = format!(
                     "Cross-file analyzer '{}' script not found at '{}' for project '{}'",
@@ -322,7 +332,14 @@ impl Scanner {
             .get_or_create_project(&project_name, &repo_path)
             .await?;
         let scan_id = self
-            .create_scan_record(project_id, &commit_hash, &branch_name, "SNAPSHOT", None, commit_timestamp)
+            .create_scan_record(
+                project_id,
+                &commit_hash,
+                &branch_name,
+                "SNAPSHOT",
+                None,
+                commit_timestamp,
+            )
             .await?;
 
         self.update_progress(5, "Creating scan records").await;
@@ -422,21 +439,25 @@ impl Scanner {
                             &project_config,
                         )
                     } else {
-                        (Vec::<codeprism_core::MetricEntry>::new(), Vec::<codeprism_core::MatchDetail>::new())
+                        (
+                            Vec::<codeprism_core::MetricEntry>::new(),
+                            Vec::<codeprism_core::MatchDetail>::new(),
+                        )
                     };
 
-                    self.save_metrics(
+                    self.save_metrics(MetricSaveInput {
                         scan_id,
-                        &path,
-                        &change_type,
-                        old_path.as_deref(),
-                        tech_stack.as_deref(),
-                        file_metrics,
-                        Vec::new(),
-                    )
+                        file_path: &path,
+                        change_type: &change_type,
+                        old_path: old_path.as_deref(),
+                        tech_stack: tech_stack.as_deref(),
+                        new_metrics: file_metrics,
+                        old_metrics: Vec::new(),
+                    })
                     .await?;
 
-                    self.save_matches(scan_id, file_matches, &change_type).await?;
+                    self.save_matches(scan_id, file_matches, &change_type)
+                        .await?;
 
                     // Run cross-file analyzers — per-file block extraction
                     if let Some(ref c) = content {
@@ -448,12 +469,7 @@ impl Scanner {
         }
 
         // Cross-file analysis: run finalize on all registered analyzers
-        cross_file::finalize_all(
-            scan_id,
-            self.db.pool(),
-            &self.cross_file_analyzers,
-        )
-        .await?;
+        cross_file::finalize_all(scan_id, self.db.pool(), &self.cross_file_analyzers).await?;
 
         pb.finish_with_message(format!(
             "Snapshot Scan Complete. Scanned {} files.",
@@ -582,7 +598,8 @@ impl Scanner {
                     total_deltas = t;
                     pb.set_length(t as u64);
                     pb.set_message("Processing changes...");
-                    self.update_progress(10, &format!("Processing {} changes", t)).await;
+                    self.update_progress(10, &format!("Processing {} changes", t))
+                        .await;
                 }
                 ScanEvent::Start { total: None } => {
                     // Should not happen in diff mode usually
@@ -602,12 +619,13 @@ impl Scanner {
                     pb.inc(1);
                     processed_count += 1;
 
-                    if total_deltas > 0 {
-                        let pct = 10u8.saturating_add(
-                            (80 * processed_count as usize / total_deltas) as u8,
-                        );
+                    if let Some(progress) =
+                        (80 * processed_count as usize).checked_div(total_deltas)
+                    {
+                        let pct = 10u8.saturating_add(progress as u8);
                         if pct != last_reported_progress
-                            && last_progress_update.elapsed() >= std::time::Duration::from_millis(500)
+                            && last_progress_update.elapsed()
+                                >= std::time::Duration::from_millis(500)
                         {
                             self.update_progress(
                                 pct.min(90),
@@ -634,7 +652,10 @@ impl Scanner {
                             &project_config,
                         )
                     } else {
-                        (Vec::<codeprism_core::MetricEntry>::new(), Vec::<codeprism_core::MatchDetail>::new())
+                        (
+                            Vec::<codeprism_core::MetricEntry>::new(),
+                            Vec::<codeprism_core::MatchDetail>::new(),
+                        )
                     };
 
                     let (new_metrics, mut new_matches) = if let Some(ref c) = content {
@@ -647,7 +668,10 @@ impl Scanner {
                             &project_config,
                         )
                     } else {
-                        (Vec::<codeprism_core::MetricEntry>::new(), Vec::<codeprism_core::MatchDetail>::new())
+                        (
+                            Vec::<codeprism_core::MetricEntry>::new(),
+                            Vec::<codeprism_core::MatchDetail>::new(),
+                        )
                     };
 
                     // Tag matches with side: false=base(变更前), true=target(变更后)
@@ -658,25 +682,33 @@ impl Scanner {
                         m.side = Some(true);
                     }
 
-                    self.save_metrics(
+                    self.save_metrics(MetricSaveInput {
                         scan_id,
-                        &path,
-                        &change_type,
-                        old_path.as_deref(),
-                        tech_stack.as_deref(),
+                        file_path: &path,
+                        change_type: &change_type,
+                        old_path: old_path.as_deref(),
+                        tech_stack: tech_stack.as_deref(),
                         new_metrics,
                         old_metrics,
-                    )
+                    })
                     .await?;
 
                     // Save matches for both old and new content
-                    self.save_matches(scan_id, old_matches, &change_type).await?;
-                    self.save_matches(scan_id, new_matches, &change_type).await?;
+                    self.save_matches(scan_id, old_matches, &change_type)
+                        .await?;
+                    self.save_matches(scan_id, new_matches, &change_type)
+                        .await?;
 
                     // Run cross-file analyzers (DIFF: both sides)
                     if let Some(ref c) = old_content {
-                        self.run_cross_file_analyzers(scan_id, old_path_ref, c, Some(0), &change_type)
-                            .await?;
+                        self.run_cross_file_analyzers(
+                            scan_id,
+                            old_path_ref,
+                            c,
+                            Some(0),
+                            &change_type,
+                        )
+                        .await?;
                     }
                     if let Some(ref c) = content {
                         self.run_cross_file_analyzers(scan_id, &path, c, Some(1), &change_type)
@@ -688,12 +720,7 @@ impl Scanner {
         pb.finish_with_message("Diff Scan Complete");
 
         // Cross-file analysis: run finalize on all registered analyzers
-        cross_file::finalize_all(
-            scan_id,
-            self.db.pool(),
-            &self.cross_file_analyzers,
-        )
-        .await?;
+        cross_file::finalize_all(scan_id, self.db.pool(), &self.cross_file_analyzers).await?;
 
         self.update_progress(92, "Auto-creating indexes").await;
         // Auto-create expression indexes for newly seen tag keys
@@ -712,7 +739,10 @@ impl Scanner {
 
     // --- Sync Git Logic (Runs in worker thread) ---
 
-    fn resolve_commit_info(repo: &Repository, ref_name: Option<&str>) -> Result<(String, String, i64)> {
+    fn resolve_commit_info(
+        repo: &Repository,
+        ref_name: Option<&str>,
+    ) -> Result<(String, String, i64)> {
         let obj = match ref_name {
             Some(r) => repo
                 .revparse_single(r)
@@ -732,13 +762,13 @@ impl Scanner {
         let commit_timestamp = commit.time().seconds();
 
         // Try branch name
-        let branch = if ref_name.is_none() {
-            repo.head()
+        let branch = match ref_name {
+            Some(name) => name.to_string(),
+            None => repo
+                .head()
                 .ok()
                 .and_then(|h| h.shorthand().map(|s| s.to_string()))
-                .unwrap_or_else(|| "HEAD".to_string())
-        } else {
-            ref_name.unwrap().to_string()
+                .unwrap_or_else(|| "HEAD".to_string()),
         };
         Ok((hash, branch, commit_timestamp))
     }
@@ -764,12 +794,10 @@ impl Scanner {
                 if let Ok(blob) = entry.to_object(repo).and_then(|o| {
                     o.into_blob()
                         .map_err(|_| git2::Error::from_str("Not a blob"))
-                }) {
-                    if !blob.is_binary() {
-                        if let Ok(c) = std::str::from_utf8(blob.content()) {
-                            content = Some(c.to_string());
-                        }
-                    }
+                }) && !blob.is_binary()
+                    && let Ok(c) = std::str::from_utf8(blob.content())
+                {
+                    content = Some(c.to_string());
                 }
 
                 let tech_stack = project_config.get_tech_stack_for_file(&path);
@@ -841,25 +869,21 @@ impl Scanner {
                 let mut old_content = None;
 
                 // New Content (Target) - for A, M, Renamed
-                if change_type != "D" {
-                    if let Ok(blob) = repo.find_blob(delta.new_file().id()) {
-                        if !blob.is_binary() {
-                            if let Ok(c) = std::str::from_utf8(blob.content()) {
-                                new_content = Some(c.to_string());
-                            }
-                        }
-                    }
+                if change_type != "D"
+                    && let Ok(blob) = repo.find_blob(delta.new_file().id())
+                    && !blob.is_binary()
+                    && let Ok(c) = std::str::from_utf8(blob.content())
+                {
+                    new_content = Some(c.to_string());
                 }
 
                 // Old Content (Base) - for M, D, Renamed
-                if change_type != "A" {
-                    if let Ok(blob) = repo.find_blob(delta.old_file().id()) {
-                        if !blob.is_binary() {
-                            if let Ok(c) = std::str::from_utf8(blob.content()) {
-                                old_content = Some(c.to_string());
-                            }
-                        }
-                    }
+                if change_type != "A"
+                    && let Ok(blob) = repo.find_blob(delta.old_file().id())
+                    && !blob.is_binary()
+                    && let Ok(c) = std::str::from_utf8(blob.content())
+                {
+                    old_content = Some(c.to_string());
                 }
 
                 let final_old_path =
@@ -1052,21 +1076,23 @@ impl Scanner {
         change_type: &str,
         tech_stack_name: Option<&str>,
         project_config: &codeprism_core::ProjectConfig,
-    ) -> (Vec<codeprism_core::MetricEntry>, Vec<codeprism_core::MatchDetail>) {
+    ) -> (
+        Vec<codeprism_core::MetricEntry>,
+        Vec<codeprism_core::MatchDetail>,
+    ) {
         let mut results: Vec<codeprism_core::MetricEntry> = Vec::new();
         let mut all_matches: Vec<codeprism_core::MatchDetail> = Vec::new();
         let mut analyzers_to_run: Vec<String> = vec!["file_count".to_string()];
 
-        if let Some(ts_name) = tech_stack_name {
-            if let Some(stack) = project_config
+        if let Some(ts_name) = tech_stack_name
+            && let Some(stack) = project_config
                 .tech_stacks
                 .iter()
                 .find(|s| s.name == ts_name)
-            {
-                for a in &stack.analyzers {
-                    if !analyzers_to_run.contains(a) {
-                        analyzers_to_run.push(a.clone());
-                    }
+        {
+            for a in &stack.analyzers {
+                if !analyzers_to_run.contains(a) {
+                    analyzers_to_run.push(a.clone());
                 }
             }
         }
@@ -1074,16 +1100,16 @@ impl Scanner {
         for analyzer_id in analyzers_to_run {
             if let Some(analyzer) = self.analyzers.get(&analyzer_id) {
                 // Respect per-analyzer scan_mode filter (None = all modes)
-                if let Some(mode) = analyzer.scan_mode() {
-                    if !scan_mode_matches(mode, scan_mode) {
-                        continue;
-                    }
+                if let Some(mode) = analyzer.scan_mode()
+                    && !scan_mode_matches(mode, scan_mode)
+                {
+                    continue;
                 }
                 // Respect per-analyzer change_type filter (None = all types)
-                if let Some(ct) = analyzer.change_type() {
-                    if ct != change_type {
-                        continue;
-                    }
+                if let Some(ct) = analyzer.change_type()
+                    && ct != change_type
+                {
+                    continue;
                 }
 
                 // Isolate each analyzer with catch_unwind so a panic in one
@@ -1094,13 +1120,16 @@ impl Scanner {
                 // Set per-file context before analysis
                 analyzer.set_file_context(change_type, scan_mode);
 
-                let metrics_result = std::panic::catch_unwind(
-                    std::panic::AssertUnwindSafe(|| analyzer.analyze(file_path, content)),
-                );
+                let metrics_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    analyzer.analyze(file_path, content)
+                }));
 
                 match metrics_result {
                     Ok(metrics) => {
-                        *self.analyzer_exec_count.entry(analyzer_id.clone()).or_insert(0) += 1;
+                        *self
+                            .analyzer_exec_count
+                            .entry(analyzer_id.clone())
+                            .or_insert(0) += 1;
                         results.extend(metrics);
                     }
                     Err(panic_info) => {
@@ -1124,9 +1153,9 @@ impl Scanner {
                 }
 
                 // Extract matches (separate catch_unwind to isolate from analyze panics)
-                let matches_result = std::panic::catch_unwind(
-                    std::panic::AssertUnwindSafe(|| analyzer.extract_matches(file_path, content)),
-                );
+                let matches_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    analyzer.extract_matches(file_path, content)
+                }));
 
                 match matches_result {
                     Ok(matches) => {
@@ -1149,16 +1178,16 @@ impl Scanner {
         (results, all_matches)
     }
 
-    async fn save_metrics(
-        &self,
-        scan_id: i64,
-        file_path: &str,
-        change_type: &str,
-        old_path: Option<&str>,
-        tech_stack: Option<&str>,
-        new_metrics: Vec<codeprism_core::MetricEntry>,
-        old_metrics: Vec<codeprism_core::MetricEntry>,
-    ) -> Result<()> {
+    async fn save_metrics(&self, input: MetricSaveInput<'_>) -> Result<()> {
+        let MetricSaveInput {
+            scan_id,
+            file_path,
+            change_type,
+            old_path,
+            tech_stack,
+            new_metrics,
+            old_metrics,
+        } = input;
         // Track tag keys for auto-indexing
         for m in &old_metrics {
             for k in m.tags.keys() {
@@ -1317,17 +1346,18 @@ impl Scanner {
                     continue;
                 }
             }
-            if let Some(ref ct) = cfg.change_type {
-                if ct != "all" && ct != change_type {
-                    continue;
-                }
+            if let Some(ref ct) = cfg.change_type
+                && ct != "all"
+                && ct != change_type
+            {
+                continue;
             }
             *self.cross_file_exec_count.entry(name.clone()).or_insert(0) += 1;
 
             // Extract blocks via FileProcessor
-            let result = std::panic::catch_unwind(
-                std::panic::AssertUnwindSafe(|| fp.extract_blocks(file_path, content)),
-            );
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                fp.extract_blocks(file_path, content)
+            }));
 
             let mut blocks = match result {
                 Ok(b) => b,
@@ -1453,10 +1483,9 @@ mod tests {
             name: "project-a".to_string(),
             ..ProjectConfig::default()
         };
-        project_a.custom_cross_file_analyzers.insert(
-            "project_a_only".to_string(),
-            cross_file_config("project-a"),
-        );
+        project_a
+            .custom_cross_file_analyzers
+            .insert("project_a_only".to_string(), cross_file_config("project-a"));
 
         let project_b = ProjectConfig {
             name: "project-b".to_string(),
@@ -1489,10 +1518,9 @@ mod tests {
         project
             .custom_cross_file_analyzers
             .insert("shared".to_string(), cross_file_config("project-a"));
-        project.custom_cross_file_analyzers.insert(
-            "project_only".to_string(),
-            cross_file_config("project-a"),
-        );
+        project
+            .custom_cross_file_analyzers
+            .insert("project_only".to_string(), cross_file_config("project-a"));
 
         let config = CodePrismConfig {
             custom_cross_file_analyzers: root_analyzers,

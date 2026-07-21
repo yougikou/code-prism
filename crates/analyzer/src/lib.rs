@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use codeprism_core::{IntermediateBlock, MetricEntry, MatchDetail, TAG_CATEGORY, TAG_METRIC};
+use codeprism_core::{IntermediateBlock, MatchDetail, MetricEntry, TAG_CATEGORY, TAG_METRIC};
 use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
 
@@ -45,11 +45,7 @@ pub trait FileProcessor: Analyzer + Send + Sync {
     /// Implementations query `intermediate_blocks` for their `analyzer_id`,
     /// perform the aggregation logic, write results to `metrics` and `matches` tables,
     /// and clean up their intermediate data.
-    async fn finalize(
-        &self,
-        scan_id: i64,
-        pool: &sqlx::Pool<sqlx::Sqlite>,
-    ) -> anyhow::Result<()>;
+    async fn finalize(&self, scan_id: i64, pool: &sqlx::Pool<sqlx::Sqlite>) -> anyhow::Result<()>;
 }
 
 mod wasm;
@@ -63,6 +59,12 @@ pub use script_cross_file::ScriptCrossFileAnalyzer;
 
 // 1. File Count Analyzer
 pub struct FileCountAnalyzer;
+
+impl Default for FileCountAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl FileCountAnalyzer {
     pub fn new() -> Self {
@@ -91,6 +93,12 @@ impl Analyzer for FileCountAnalyzer {
 
 // 2. Char Count Analyzer
 pub struct CharCountAnalyzer;
+
+impl Default for CharCountAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl CharCountAnalyzer {
     pub fn new() -> Self {

@@ -14,12 +14,19 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ techStacks, select
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const [openCategory, setOpenCategory] = useState<string | null>(null);
-  const categoryBtnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const [dropdownPosition, setDropdownPosition] = useState<{
+    top: number;
+    left: number;
+    minWidth: number;
+  } | null>(null);
 
   // Close dropdown on page scroll / resize to prevent stale positioning
   useEffect(() => {
     if (!openCategory) return;
-    const handleClose = () => setOpenCategory(null);
+    const handleClose = () => {
+      setOpenCategory(null);
+      setDropdownPosition(null);
+    };
     window.addEventListener('scroll', handleClose, { passive: true });
     window.addEventListener('resize', handleClose);
     return () => {
@@ -100,11 +107,13 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ techStacks, select
   const handleCategorySelect = (stackName: string) => {
     onSelect(stackName);
     setOpenCategory(null);
+    setDropdownPosition(null);
   };
 
   const handleSummarySelect = () => {
     onSelect('Summary');
     setOpenCategory(null);
+    setDropdownPosition(null);
   };
 
   const isSelected = (stackName: string) => selectedStack === stackName;
@@ -177,11 +186,20 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ techStacks, select
             return (
               <div key={category} className="relative shrink-0">
                 <button
-                  ref={(el) => {
-                    if (el) categoryBtnRefs.current.set(category, el);
-                    else categoryBtnRefs.current.delete(category);
+                  onClick={event => {
+                    if (isOpen) {
+                      setOpenCategory(null);
+                      setDropdownPosition(null);
+                      return;
+                    }
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    setDropdownPosition({
+                      top: rect.bottom + 4,
+                      left: rect.left,
+                      minWidth: Math.max(rect.width, 140),
+                    });
+                    setOpenCategory(category);
                   }}
-                  onClick={() => setOpenCategory(isOpen ? null : category)}
                   className={`
                     pb-4 pt-4 text-sm font-medium transition-colors relative whitespace-nowrap flex items-center gap-1
                     ${isActive ? 'text-sky-600 dark:text-sky-400' : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}
@@ -214,12 +232,9 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ techStacks, select
       </div>
 
       {/* Dropdown rendered outside overflow container to avoid CSS clipping */}
-      {openCategory && (() => {
+      {openCategory && dropdownPosition && (() => {
         const stacks = groups.find(([cat]) => cat === openCategory)?.[1];
-        const btn = categoryBtnRefs.current.get(openCategory);
-        if (!stacks || !btn) return null;
-
-        const rect = btn.getBoundingClientRect();
+        if (!stacks) return null;
 
         return (
           <>
@@ -230,9 +245,9 @@ export const TechStackTabs: React.FC<TechStackTabsProps> = ({ techStacks, select
             <div
               className="fixed z-50 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 max-h-[60vh] overflow-y-auto"
               style={{
-                top: rect.bottom + 4,
-                left: rect.left,
-                minWidth: Math.max(rect.width, 140),
+                top: dropdownPosition.top,
+                left: dropdownPosition.left,
+                minWidth: dropdownPosition.minWidth,
               }}
             >
               {stacks.map(stackName => (

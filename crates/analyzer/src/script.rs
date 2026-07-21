@@ -97,10 +97,9 @@ impl ScriptAnalyzer {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
+                && output.success()
             {
-                if output.success() {
-                    return Ok(cmd.to_string());
-                }
+                return Ok(cmd.to_string());
             }
         }
 
@@ -216,7 +215,11 @@ impl Analyzer for ScriptAnalyzer {
                             // Check if this is a duplication script (block output format).
                             // If so, return empty metrics silently — duplication analyzers
                             // are handled separately via the FileProcessor (cross-file) trait.
-                            if serde_json::from_str::<Vec<codeprism_core::ScriptContentBlock>>(&line).is_ok() {
+                            if serde_json::from_str::<Vec<codeprism_core::ScriptContentBlock>>(
+                                &line,
+                            )
+                            .is_ok()
+                            {
                                 return vec![];
                             }
                             eprintln!("Failed to parse analyzer output: {}", first_err);
