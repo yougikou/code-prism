@@ -13,7 +13,7 @@ use std::path::Path;
 
 use tokio::sync::mpsc;
 
-use codeprism_core::CodePrismConfig;
+use codeprism_core::{CodePrismConfig, CrossFileAnalyzerConfig, ProjectConfig};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::sync::{Arc, Mutex};
 
@@ -21,10 +21,12 @@ pub struct Scanner {
     db: Db,
     analyzers: HashMap<String, Box<dyn Analyzer>>,
     cross_file_analyzers: HashMap<String, Box<dyn FileProcessor>>,
+    cross_file_configs: HashMap<String, CrossFileAnalyzerConfig>,
     config: Arc<CodePrismConfig>,
     scan_job_id: Option<i64>,
     // Scan summary tracking (accumulated during scan lifecycle)
     analyzer_load_errors: Vec<String>,
+    cross_file_load_errors: Vec<String>,
     analyzer_exec_count: HashMap<String, u64>,
     analyzer_error_details: HashMap<String, Vec<String>>,
     // Cross-file analyzer execution tracking
@@ -32,6 +34,33 @@ pub struct Scanner {
     cross_file_error_details: HashMap<String, Vec<String>>,
     // Track tag keys from this scan for auto-index creation
     seen_tag_keys: Mutex<HashSet<String>>,
+    // Exact-content cache shared by ordinary match writers during this scanner lifetime.
+    match_content_cache: Mutex<HashMap<String, i64>>,
+}
+
+/// Resolve the cross-file analyzers active for one project.
+///
+/// Root-level definitions are global defaults. Project definitions are scoped
+/// to that project and override a root definition with the same analyzer ID.
+fn resolve_cross_file_configs(
+    config: &CodePrismConfig,
+    project: &ProjectConfig,
+) -> HashMap<String, CrossFileAnalyzerConfig> {
+    let mut resolved = config.custom_cross_file_analyzers.clone();
+    resolved.extend(project.custom_cross_file_analyzers.clone());
+    resolved
+}
+
+/// Match a configured scan mode against the scanner's internal mode value.
+///
+/// Configuration files document lowercase values (`snapshot`, `diff`, `all`),
+/// while scan records and the runtime pipeline use uppercase values. Treat the
+/// values case-insensitively so both documented and legacy uppercase configs
+/// behave consistently.
+fn scan_mode_matches(configured_mode: &str, current_mode: &str) -> bool {
+    let configured_mode = configured_mode.trim();
+    configured_mode.eq_ignore_ascii_case("all")
+        || configured_mode.eq_ignore_ascii_case(current_mode)
 }
 
 // Event to decouple Git (Sync) from DB (Async)
@@ -140,14 +169,14 @@ impl Scanner {
             }
         }
 
-        // Collect duplication analyzer configs (needed before step 4 to skip auto-discovery)
-        let all_dup_configs = {
-            let mut m = config.custom_cross_file_analyzers.clone();
-            for project in &config.projects {
-                m.extend(project.custom_cross_file_analyzers.clone());
-            }
-            m
-        };
+        // Collect cross-file analyzer names only to keep their scripts out of
+        // regular Python auto-discovery. Instances and project-specific tags
+        // are resolved later, at the start of each scan.
+        let mut all_cross_file_names: HashSet<String> =
+            config.custom_cross_file_analyzers.keys().cloned().collect();
+        for project in &config.projects {
+            all_cross_file_names.extend(project.custom_cross_file_analyzers.keys().cloned());
+        }
 
         // 4. Auto-discover Python Analyzers in 'custom_analyzers/'
         if let Ok(entries) = std::fs::read_dir("custom_analyzers") {
@@ -159,8 +188,8 @@ impl Scanner {
                             if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                                 let analyzer_id = stem.to_string();
 
-                                // Skip scripts already loaded as duplication analyzers
-                                if all_dup_configs.contains_key(&analyzer_id) {
+                                // Cross-file scripts are instantiated per project at scan time.
+                                if all_cross_file_names.contains(&analyzer_id) {
                                     continue;
                                 }
 
@@ -195,44 +224,60 @@ impl Scanner {
             }
         }
 
-        // 5. Load Cross-File Analyzers (extends Analyzer with FileProcessor)
-        let mut cross_file_analyzers: HashMap<String, Box<dyn FileProcessor>> =
-            HashMap::new();
-
-        for (name, dup_config) in &all_dup_configs {
-            let script_path = format!("custom_analyzers/{}.py", name);
-            if std::path::Path::new(&script_path).exists() {
-                let tag_overrides = dup_config.resolve_tags();
-                let da = ScriptCrossFileAnalyzer::new(name, tag_overrides);
-                cross_file_analyzers.insert(name.clone(), Box::new(da));
-                println!("Loaded cross-file analyzer: {}", name);
-            } else {
-                let msg = format!(
-                    "Cross-file analyzer '{}' script not found at '{}'",
-                    name, script_path
-                );
-                eprintln!("Warning: {}", msg);
-                load_errors.push(msg);
-            }
-        }
-
         Self {
             db,
             analyzers,
-            cross_file_analyzers,
+            cross_file_analyzers: HashMap::new(),
+            cross_file_configs: HashMap::new(),
             config: Arc::new(config),
             scan_job_id: None,
             analyzer_load_errors: load_errors,
+            cross_file_load_errors: Vec::new(),
             analyzer_exec_count: HashMap::new(),
             analyzer_error_details: HashMap::new(),
             cross_file_exec_count: HashMap::new(),
             cross_file_error_details: HashMap::new(),
             seen_tag_keys: Mutex::new(HashSet::new()),
+            match_content_cache: Mutex::new(HashMap::new()),
         }
     }
 
     pub fn set_scan_job_id(&mut self, job_id: i64) {
         self.scan_job_id = Some(job_id);
+    }
+
+    /// Build the cross-file analyzer runtime for the project being scanned.
+    /// This keeps project-only analyzers and tag overrides out of other scans.
+    fn prepare_cross_file_analyzers(&mut self, project_config: &ProjectConfig) {
+        self.cross_file_analyzers.clear();
+        self.cross_file_configs.clear();
+        self.cross_file_load_errors.clear();
+        self.cross_file_exec_count.clear();
+        self.cross_file_error_details.clear();
+
+        let active_configs = resolve_cross_file_configs(self.config.as_ref(), project_config);
+
+        for (name, analyzer_config) in &active_configs {
+            let script_path = format!("custom_analyzers/{}.py", name);
+            if Path::new(&script_path).exists() {
+                let analyzer = ScriptCrossFileAnalyzer::new(
+                    name,
+                    analyzer_config.resolve_tags(),
+                );
+                self.cross_file_analyzers
+                    .insert(name.clone(), Box::new(analyzer));
+                println!("Loaded cross-file analyzer for project '{}': {}", project_config.name, name);
+            } else {
+                let message = format!(
+                    "Cross-file analyzer '{}' script not found at '{}' for project '{}'",
+                    name, script_path, project_config.name
+                );
+                eprintln!("Warning: {}", message);
+                self.cross_file_load_errors.push(message);
+            }
+        }
+
+        self.cross_file_configs = active_configs;
     }
 
     async fn update_progress(&self, progress: u8, message: &str) {
@@ -292,6 +337,7 @@ impl Scanner {
                 );
                 self.config.get_default_project()
             }));
+        self.prepare_cross_file_analyzers(project_config.as_ref());
 
         // 2. Spawn Blocking Git Walker
         self.update_progress(8, "Walking repository tree").await;
@@ -390,11 +436,11 @@ impl Scanner {
                     )
                     .await?;
 
-                    self.save_matches(scan_id, file_matches).await?;
+                    self.save_matches(scan_id, file_matches, &change_type).await?;
 
                     // Run cross-file analyzers — per-file block extraction
                     if let Some(ref c) = content {
-                        self.run_cross_file_analyzers(scan_id, &path, c, None, &change_type, &project_config)
+                        self.run_cross_file_analyzers(scan_id, &path, c, None, &change_type)
                             .await?;
                     }
                 }
@@ -480,6 +526,7 @@ impl Scanner {
                 );
                 self.config.get_default_project()
             }));
+        self.prepare_cross_file_analyzers(project_config.as_ref());
 
         // Spawn Blocking Git Diff
         self.update_progress(8, "Computing diff").await;
@@ -623,16 +670,16 @@ impl Scanner {
                     .await?;
 
                     // Save matches for both old and new content
-                    self.save_matches(scan_id, old_matches).await?;
-                    self.save_matches(scan_id, new_matches).await?;
+                    self.save_matches(scan_id, old_matches, &change_type).await?;
+                    self.save_matches(scan_id, new_matches, &change_type).await?;
 
                     // Run cross-file analyzers (DIFF: both sides)
                     if let Some(ref c) = old_content {
-                        self.run_cross_file_analyzers(scan_id, old_path_ref, c, Some(0), &change_type, &project_config)
+                        self.run_cross_file_analyzers(scan_id, old_path_ref, c, Some(0), &change_type)
                             .await?;
                     }
                     if let Some(ref c) = content {
-                        self.run_cross_file_analyzers(scan_id, &path, c, Some(1), &change_type, &project_config)
+                        self.run_cross_file_analyzers(scan_id, &path, c, Some(1), &change_type)
                             .await?;
                     }
                 }
@@ -860,7 +907,12 @@ impl Scanner {
                 .map(|v| v.len() as u64)
                 .sum::<u64>();
 
-        let load_errors_json = serde_json::to_string(&self.analyzer_load_errors)?;
+        let load_errors: Vec<&String> = self
+            .analyzer_load_errors
+            .iter()
+            .chain(self.cross_file_load_errors.iter())
+            .collect();
+        let load_errors_json = serde_json::to_string(&load_errors)?;
 
         // Regular analyzer stats
         let mut analyzer_stats: Vec<serde_json::Value> = self
@@ -1023,7 +1075,7 @@ impl Scanner {
             if let Some(analyzer) = self.analyzers.get(&analyzer_id) {
                 // Respect per-analyzer scan_mode filter (None = all modes)
                 if let Some(mode) = analyzer.scan_mode() {
-                    if mode != scan_mode {
+                    if !scan_mode_matches(mode, scan_mode) {
                         continue;
                     }
                 }
@@ -1184,20 +1236,56 @@ impl Scanner {
         &self,
         scan_id: i64,
         matches: Vec<codeprism_core::MatchDetail>,
+        change_type: &str,
     ) -> Result<()> {
         for m in matches {
+            let content_hash = codeprism_core::hash_match_content(&m.matched_text);
+            let cached_content_id = self
+                .match_content_cache
+                .lock()
+                .unwrap()
+                .get(&content_hash)
+                .copied();
+            let content_id = if let Some(id) = cached_content_id {
+                id
+            } else {
+                let (id, stored_content): (i64, String) = sqlx::query_as(
+                    "INSERT INTO match_contents (content_hash, content, content_bytes, line_count) \
+                     VALUES (?, ?, ?, ?) \
+                     ON CONFLICT(content_hash) DO UPDATE SET content_hash = excluded.content_hash \
+                     RETURNING id, content",
+                )
+                .bind(&content_hash)
+                .bind(&m.matched_text)
+                .bind(m.matched_text.len() as i64)
+                .bind(m.matched_text.lines().count() as i64)
+                .fetch_one(self.db.pool())
+                .await?;
+                if stored_content != m.matched_text {
+                    anyhow::bail!("SHA-256 collision while storing match content");
+                }
+                self.match_content_cache
+                    .lock()
+                    .unwrap()
+                    .insert(content_hash, id);
+                id
+            };
+
             sqlx::query(
-                "INSERT INTO matches (scan_id, file_path, analyzer_id, line_number, column_start, column_end, matched_text, side, context_before, context_after)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO matches (scan_id, file_path, analyzer_id, content_id, finding_key, \
+                 line_start, line_end, column_start, column_end, side, change_type, context_before, context_after) \
+                 VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(scan_id)
             .bind(&m.file_path)
             .bind(&m.analyzer_id)
+            .bind(content_id)
+            .bind(m.line_number as i64)
             .bind(m.line_number as i64)
             .bind(m.column_start.map(|v| v as i64))
             .bind(m.column_end.map(|v| v as i64))
-            .bind(&m.matched_text)
             .bind(m.side.map(|v| v as i64))
+            .bind(change_type)
             .bind(&m.context_before)
             .bind(&m.context_after)
             .execute(self.db.pool())
@@ -1214,22 +1302,24 @@ impl Scanner {
         content: &str,
         side: Option<i64>,
         change_type: &str,
-        project_config: &codeprism_core::ProjectConfig,
     ) -> Result<()> {
         for (name, fp) in &self.cross_file_analyzers {
-            // Respect per-analyzer scan_mode / change_type filters
-            if let Some(cfg) = project_config.custom_cross_file_analyzers.get(name) {
-                if let Some(ref sm) = cfg.scan_mode {
-                    // scan_mode is passed as "SNAPSHOT" or "DIFF"
-                    let current_mode = if side.is_some() { "DIFF" } else { "SNAPSHOT" };
-                    if sm != "all" && sm != current_mode {
-                        continue;
-                    }
+            // Every registered runtime must have been resolved for this scan.
+            // Missing entries are skipped defensively instead of falling through
+            // and accidentally executing an analyzer from another project.
+            let Some(cfg) = self.cross_file_configs.get(name) else {
+                continue;
+            };
+
+            if let Some(ref sm) = cfg.scan_mode {
+                let current_mode = if side.is_some() { "DIFF" } else { "SNAPSHOT" };
+                if !scan_mode_matches(sm, current_mode) {
+                    continue;
                 }
-                if let Some(ref ct) = cfg.change_type {
-                    if ct != "all" && ct != change_type {
-                        continue;
-                    }
+            }
+            if let Some(ref ct) = cfg.change_type {
+                if ct != "all" && ct != change_type {
+                    continue;
                 }
             }
             *self.cross_file_exec_count.entry(name.clone()).or_insert(0) += 1;
@@ -1323,5 +1413,98 @@ impl Scanner {
                 eprintln!("Warning: failed to create index for tag '{}': {}", key, e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_mode_matching_accepts_documented_and_legacy_case() {
+        assert!(scan_mode_matches("snapshot", "SNAPSHOT"));
+        assert!(scan_mode_matches("SNAPSHOT", "SNAPSHOT"));
+        assert!(scan_mode_matches("diff", "DIFF"));
+        assert!(scan_mode_matches("DIFF", "DIFF"));
+        assert!(scan_mode_matches("all", "SNAPSHOT"));
+        assert!(scan_mode_matches("ALL", "DIFF"));
+        assert!(scan_mode_matches("  snapshot  ", "SNAPSHOT"));
+    }
+
+    #[test]
+    fn scan_mode_matching_rejects_other_or_invalid_modes() {
+        assert!(!scan_mode_matches("snapshot", "DIFF"));
+        assert!(!scan_mode_matches("diff", "SNAPSHOT"));
+        assert!(!scan_mode_matches("invalid", "SNAPSHOT"));
+        assert!(!scan_mode_matches("", "DIFF"));
+    }
+
+    fn cross_file_config(tag_value: &str) -> CrossFileAnalyzerConfig {
+        let mut config = CrossFileAnalyzerConfig::default();
+        config
+            .tags
+            .insert("owner".to_string(), tag_value.to_string());
+        config
+    }
+
+    #[test]
+    fn project_cross_file_analyzers_do_not_leak_to_other_projects() {
+        let mut project_a = ProjectConfig {
+            name: "project-a".to_string(),
+            ..ProjectConfig::default()
+        };
+        project_a.custom_cross_file_analyzers.insert(
+            "project_a_only".to_string(),
+            cross_file_config("project-a"),
+        );
+
+        let project_b = ProjectConfig {
+            name: "project-b".to_string(),
+            ..ProjectConfig::default()
+        };
+
+        let config = CodePrismConfig {
+            projects: vec![project_a.clone(), project_b.clone()],
+            ..CodePrismConfig::default()
+        };
+
+        let active_a = resolve_cross_file_configs(&config, &project_a);
+        let active_b = resolve_cross_file_configs(&config, &project_b);
+
+        assert!(active_a.contains_key("project_a_only"));
+        assert!(!active_b.contains_key("project_a_only"));
+        assert!(active_b.is_empty());
+    }
+
+    #[test]
+    fn root_cross_file_analyzers_are_global_and_project_config_overrides_tags() {
+        let mut root_analyzers = HashMap::new();
+        root_analyzers.insert("shared".to_string(), cross_file_config("global"));
+        root_analyzers.insert("global_only".to_string(), cross_file_config("global"));
+
+        let mut project = ProjectConfig {
+            name: "project-a".to_string(),
+            ..ProjectConfig::default()
+        };
+        project
+            .custom_cross_file_analyzers
+            .insert("shared".to_string(), cross_file_config("project-a"));
+        project.custom_cross_file_analyzers.insert(
+            "project_only".to_string(),
+            cross_file_config("project-a"),
+        );
+
+        let config = CodePrismConfig {
+            custom_cross_file_analyzers: root_analyzers,
+            projects: vec![project.clone()],
+            ..CodePrismConfig::default()
+        };
+
+        let active = resolve_cross_file_configs(&config, &project);
+
+        assert_eq!(active.len(), 3);
+        assert_eq!(active["shared"].tags["owner"], "project-a");
+        assert_eq!(active["global_only"].tags["owner"], "global");
+        assert_eq!(active["project_only"].tags["owner"], "project-a");
     }
 }

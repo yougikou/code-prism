@@ -10,6 +10,9 @@ use tempfile::TempDir;
 
 #[tokio::test]
 async fn test_git_scan_integration() -> anyhow::Result<()> {
+    let original_dir = std::env::current_dir()?;
+    let workspace_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    std::env::set_current_dir(&workspace_dir)?;
     // 1. Setup temporary directory and database
     let temp_dir = TempDir::new()?;
     let db_path = temp_dir.path().join("test.db");
@@ -21,7 +24,7 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
         tech_stacks: vec![codeprism_core::TechStack {
             name: "Text".to_string(),
             extensions: vec!["txt".to_string()],
-            analyzers: vec!["file_count".to_string()],
+            analyzers: vec!["file_count".to_string(), "shared_word".to_string()],
             paths: vec!["**/*.txt".to_string()],
             excludes: vec![],
             category: None,
@@ -30,11 +33,17 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
 
         database_url: None,
         project_templates: HashMap::new(),
-        custom_regex_analyzers: HashMap::new(),
+        custom_regex_analyzers: HashMap::from([(
+            "shared_word".to_string(),
+            codeprism_core::CustomAnalyzerDef::Pattern("Shared".to_string()),
+        )]),
         custom_impl_analyzers: HashMap::new(),
         external_analyzers: HashMap::new(),
         aggregation_views: indexmap::IndexMap::new(),
-        custom_cross_file_analyzers: HashMap::new(),
+        custom_cross_file_analyzers: HashMap::from([(
+            "duplicate_xml_elements".to_string(),
+            codeprism_core::CrossFileAnalyzerConfig::default(),
+        )]),
     };
 
     File::create(&db_path)?; // Create DB file
@@ -67,17 +76,29 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
     // -- COMMIT 2: Modify file1.txt, Add file2.txt --
     {
         let mut file = File::create(&file1_path)?; // Overwrite
-        writeln!(file, "Hello Modified")?;
+        writeln!(file, "Shared Shared")?;
     }
     let file2_path = repo_path.join("file2.txt");
     {
         let mut file = File::create(&file2_path)?;
-        writeln!(file, "New File")?;
+        writeln!(file, "Shared")?;
+    }
+    let xml1_path = repo_path.join("one.xml");
+    let xml2_path = repo_path.join("two.xml");
+    {
+        let mut file = File::create(&xml1_path)?;
+        writeln!(file, "<root><item>shared</item><item>shared</item></root>")?;
+    }
+    {
+        let mut file = File::create(&xml2_path)?;
+        writeln!(file, "<other><item>shared</item></other>")?;
     }
     // Modify file1.txt
 
     index.add_path(Path::new("file1.txt"))?;
     index.add_path(Path::new("file2.txt"))?;
+    index.add_path(Path::new("one.xml"))?;
+    index.add_path(Path::new("two.xml"))?;
     index.write()?;
     let tree_id2 = index.write_tree()?;
     let tree2 = repo.find_tree(tree_id2)?;
@@ -117,6 +138,41 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
         .get(0);
     assert!(metrics_count > 0, "Should have metrics for snapshot");
 
+    let ordinary_match_counts: (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), COUNT(DISTINCT content_id) FROM matches \
+         WHERE analyzer_id = 'shared_word'",
+    )
+    .fetch_one(db.pool())
+    .await?;
+    assert_eq!(ordinary_match_counts, (3, 1));
+
+    let finding_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM matches \
+         WHERE analyzer_id = 'duplicate_xml_elements_aggregated' AND finding_key IS NOT NULL",
+    )
+    .fetch_one(db.pool())
+    .await?;
+    assert_eq!(finding_rows, 3, "all cross-file occurrences must be stored");
+
+    let finding_contents: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT content_id) FROM matches \
+         WHERE analyzer_id = 'duplicate_xml_elements_aggregated' AND finding_key IS NOT NULL",
+    )
+    .fetch_one(db.pool())
+    .await?;
+    assert_eq!(finding_contents, 1, "finding content must be shared");
+
+    let finding_metrics: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT json_extract(tags, '$.metric') FROM metrics \
+         WHERE analyzer_id = 'duplicate_xml_elements_aggregated' ORDER BY 1",
+    )
+    .fetch_all(db.pool())
+    .await?;
+    assert!(finding_metrics.contains(&"finding_count".to_string()));
+    assert!(finding_metrics.contains(&"occurrence_count".to_string()));
+    assert!(finding_metrics.contains(&"affected_file_count".to_string()));
+    assert!(finding_metrics.contains(&"affected_line_count".to_string()));
+
     // 4. Test DIFF Scan (Commit 1 -> Commit 2)
     // Expect: file1.txt (Modified), file2.txt (Added)
     scanner
@@ -143,8 +199,8 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
     .fetch_all(db.pool())
     .await?;
 
-    // We expect 2 files changed
-    assert_eq!(changes.len(), 2);
+    // We expect 4 files changed
+    assert_eq!(changes.len(), 4);
 
     // Check for file1.txt
     let f1 = changes
@@ -256,5 +312,6 @@ async fn test_git_scan_integration() -> anyhow::Result<()> {
     let ts: Option<String> = delete_metric.get("tech_stack");
     assert_eq!(ts.as_deref(), Some("Text"));
 
+    std::env::set_current_dir(original_dir)?;
     Ok(())
 }

@@ -5,6 +5,7 @@
 use codeprism_server::config::{
     AppConfig, ProjectAppConfig, SourceConfig, TechStackInfo, TopNParams, ViewConfig, ViewKind,
 };
+use codeprism_server::aggregation::{SumAggregator, ViewFilters};
 
 /// Test that AppConfig can be serialized to JSON correctly
 #[test]
@@ -124,4 +125,71 @@ fn test_view_kind_serialization() {
     let json = serde_json::to_string(&sum_view).expect("Failed to serialize");
     assert!(json.contains("\"type\":\"sum\""));
     assert!(json.contains("\"analyzer_id\":[\"file_count\"]"));
+}
+
+#[tokio::test]
+async fn cross_file_metrics_group_by_finding_key() -> anyhow::Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("findings.db");
+    std::fs::File::create(&db_path)?;
+    let db = codeprism_database::Db::new(&format!("sqlite:{}", db_path.display())).await?;
+    db.migrate().await?;
+
+    sqlx::query("INSERT INTO projects (name) VALUES ('test')")
+        .execute(db.pool())
+        .await?;
+    sqlx::query(
+        "INSERT INTO scans (project_id, commit_hash, scan_mode) VALUES (1, 'abc', 'SNAPSHOT')",
+    )
+    .execute(db.pool())
+    .await?;
+    for (path, finding_key) in [("a.rs", "finding-a"), ("b.rs", "finding-b")] {
+        sqlx::query(
+            "INSERT INTO metrics (scan_id, file_path, analyzer_id, finding_key, tags, value_after) \
+             VALUES (1, ?, 'cross_aggregated', ?, '{\"metric\":\"finding_count\"}', 1)",
+        )
+        .bind(path)
+        .bind(finding_key)
+        .execute(db.pool())
+        .await?;
+    }
+
+    let view = ViewConfig {
+        id: "findings".to_string(),
+        title: "Findings".to_string(),
+        tech_stacks: vec![],
+        include_children: false,
+        group_by: vec!["finding_key".to_string()],
+        chart_type: Some("bar_col".to_string()),
+        change_type_mode: None,
+        width: 1,
+        kind: ViewKind::Sum {
+            source: SourceConfig {
+                analyzer_id: vec!["cross_aggregated".to_string()],
+                tag_filters: std::collections::HashMap::from([(
+                    "metric".to_string(),
+                    "finding_count".to_string(),
+                )]),
+            },
+        },
+        trend: false,
+        detail_view: true,
+    };
+    let filters = ViewFilters {
+        tech_stack: None,
+        category: None,
+        metric_key: None,
+        change_type: None,
+        group_by: None,
+    };
+
+    let mut results = SumAggregator::execute(db.pool(), 1, &view, &filters).await?;
+    results.sort_by(|left, right| left.label.cmp(&right.label));
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].label, "finding-a");
+    assert_eq!(results[0].value, 1.0);
+    assert_eq!(results[1].label, "finding-b");
+    assert_eq!(results[1].value, 1.0);
+
+    Ok(())
 }

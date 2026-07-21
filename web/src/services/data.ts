@@ -117,6 +117,7 @@ export function getDefaultProject(config: AppConfig): ProjectConfig | undefined 
 export interface MatchDetail {
   file_path: string;
   line_number: number;
+  line_end?: number;
   column_start?: number;
   column_end?: number;
   matched_text: string;
@@ -137,11 +138,12 @@ export interface MatchesResponse {
 export async function fetchMatches(
   projectName: string,
   scanId: number | string,
-  params: { file_path?: string; analyzer_id?: string; content_hash?: string; side?: number; page?: number; page_size?: number }
+  params: { file_path?: string; analyzer_id?: string; finding_key?: string; content_hash?: string; side?: number; page?: number; page_size?: number }
 ): Promise<MatchesResponse> {
   const query = new URLSearchParams();
   if (params.file_path) query.set('file_path', params.file_path);
   if (params.analyzer_id) query.set('analyzer_id', params.analyzer_id);
+  if (params.finding_key) query.set('finding_key', params.finding_key);
   if (params.content_hash) query.set('content_hash', params.content_hash);
   if (params.side !== undefined) query.set('side', String(params.side));
   if (params.page) query.set('page', String(params.page));
@@ -622,20 +624,36 @@ export async function fetchScanJob(jobId: number): Promise<ScanJobResponse> {
 
 // ─── Duplication API Types & Fetch ──────────────────────────────
 
-export interface DuplicationFileInfo {
+export interface FindingFileInfo {
   path: string;
   scope: string | null;
   value_before: number;
   value_after: number;
 }
 
-export interface DuplicationInfo {
+export interface FindingInfo {
   analyzer_id: string;
+  finding_key: string;
+  content: string;
+  affected_line_count: number;
+  /** Deprecated duplication-specific aliases. */
   content_hash: string;
   block_content: string;
   block_size: number;
   occurrence_count: number;
-  files: DuplicationFileInfo[];
+  affected_file_count: number;
+  files: FindingFileInfo[];
+}
+
+// Product-specific aliases kept for the existing duplication UI.
+export type DuplicationFileInfo = FindingFileInfo;
+export type DuplicationInfo = FindingInfo;
+
+export interface FindingsResponse {
+  findings: FindingInfo[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 export interface DuplicationsResponse {
@@ -665,6 +683,23 @@ export async function fetchDuplications(
     console.error('Error fetching duplications:', error);
     return { duplications: [], total: 0, page: 1, page_size: 20 };
   }
+}
+
+export async function fetchFindings(
+  projectName: string,
+  scanId: number | string,
+  params?: { page?: number; page_size?: number; min_occurrences?: number; analyzer_id?: string }
+): Promise<FindingsResponse> {
+  const query = new URLSearchParams();
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.page_size) query.set('page_size', String(params.page_size));
+  if (params?.min_occurrences) query.set('min_occurrences', String(params.min_occurrences));
+  if (params?.analyzer_id) query.set('analyzer_id', params.analyzer_id);
+  const qs = query.toString();
+  const url = `/api/v1/projects/${encodeURIComponent(projectName)}/scans/${scanId}/findings${qs ? '?' + qs : ''}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Failed to fetch cross-file findings');
+  return await res.json();
 }
 
 // ─── Scan Execution Summary ─────────────────────────────────────────

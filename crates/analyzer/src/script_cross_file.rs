@@ -467,17 +467,49 @@ impl FileProcessor for ScriptCrossFileAnalyzer {
         let mut tx = pool.begin().await?;
 
         for result in &match_results {
-            // — Aggregated match record (one per block group) —
-            sqlx::query(
-                "INSERT INTO matches (scan_id, file_path, analyzer_id, line_number, \
-                 matched_text, side, context_before) VALUES (?, NULL, ?, NULL, ?, NULL, ?)",
+            let content_hash = codeprism_core::hash_match_content(&result.block_content);
+            let (content_id, stored_content): (i64, String) = sqlx::query_as(
+                "INSERT INTO match_contents (content_hash, content, content_bytes, line_count) \
+                 VALUES (?, ?, ?, ?) \
+                 ON CONFLICT(content_hash) DO UPDATE SET content_hash = excluded.content_hash \
+                 RETURNING id, content",
             )
-            .bind(scan_id)
-            .bind(&format!("{}_aggregated", self.id))
+            .bind(&content_hash)
             .bind(&result.block_content)
-            .bind(&result.block_hash)
-            .execute(&mut *tx)
+            .bind(result.block_content.len() as i64)
+            .bind(result.block_content.lines().count() as i64)
+            .fetch_one(&mut *tx)
             .await?;
+            if stored_content != result.block_content {
+                anyhow::bail!("SHA-256 collision while storing cross-file finding content");
+            }
+
+            let aggregated_analyzer_id = format!("{}_aggregated", self.id);
+
+            // Every occurrence keeps its own location while sharing one content row.
+            for occurrence in &result.occurrences {
+                let side = occurrence
+                    .side
+                    .as_deref()
+                    .and_then(|value| value.parse::<i64>().ok());
+                sqlx::query(
+                    "INSERT INTO matches (scan_id, file_path, analyzer_id, content_id, finding_key, \
+                     line_start, line_end, column_start, column_end, side, change_type, \
+                     context_before, context_after) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)",
+                )
+                .bind(scan_id)
+                .bind(&occurrence.file_path)
+                .bind(&aggregated_analyzer_id)
+                .bind(content_id)
+                .bind(&result.block_hash)
+                .bind(occurrence.line_start as i64)
+                .bind(occurrence.line_end as i64)
+                .bind(side)
+                .bind(occurrence.change_type.as_deref().unwrap_or("A"))
+                .execute(&mut *tx)
+                .await?;
+            }
 
             // — Per-file metrics: group occurrences by file_path for side aggregation —
             let mut file_groups: BTreeMap<&str, Vec<&FinalizeOccurrence>> = BTreeMap::new();
@@ -488,7 +520,15 @@ impl FileProcessor for ScriptCrossFileAnalyzer {
                     .push(occ);
             }
 
-            for (file_path, file_entries) in &file_groups {
+            let finding_has_before = result
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.side.as_deref() == Some("0"));
+            let finding_has_after = result.occurrences.iter().any(|occurrence| {
+                occurrence.side.is_none() || occurrence.side.as_deref() == Some("1")
+            });
+
+            for (file_index, (file_path, file_entries)) in file_groups.iter().enumerate() {
                 let first = file_entries.first().unwrap();
                 let line_start = first.line_start;
                 let line_end = first.line_end;
@@ -529,38 +569,84 @@ impl FileProcessor for ScriptCrossFileAnalyzer {
                 for (k, v) in &self.tag_overrides {
                     tags.insert(k.clone(), v.clone());
                 }
-                tags.insert("content_hash".to_string(), result.block_hash.clone());
-                tags.insert("block_size".to_string(), result.block_size.to_string());
-                tags.insert(
-                    "occurrence_count".to_string(),
-                    result.occurrences.len().to_string(),
-                );
-
-                let tags_json = {
-                    let sorted: BTreeMap<_, _> = tags.iter().collect();
-                    serde_json::to_string(&sorted).unwrap_or_default()
-                };
 
                 let effective_change_type = change_type.as_deref().unwrap_or("A");
+                let before_occurrences = file_entries
+                    .iter()
+                    .filter(|occurrence| occurrence.side.as_deref() == Some("0"))
+                    .count() as f64;
+                let after_occurrences = file_entries
+                    .iter()
+                    .filter(|occurrence| {
+                        occurrence.side.is_none() || occurrence.side.as_deref() == Some("1")
+                    })
+                    .count() as f64;
+                let before_lines = file_entries
+                    .iter()
+                    .filter(|occurrence| occurrence.side.as_deref() == Some("0"))
+                    .map(|occurrence| (occurrence.line_end - occurrence.line_start + 1).max(0) as f64)
+                    .sum::<f64>();
+                let after_lines = file_entries
+                    .iter()
+                    .filter(|occurrence| {
+                        occurrence.side.is_none() || occurrence.side.as_deref() == Some("1")
+                    })
+                    .map(|occurrence| (occurrence.line_end - occurrence.line_start + 1).max(0) as f64)
+                    .sum::<f64>();
 
-                sqlx::query(
-                    "INSERT INTO metrics (scan_id, file_path, change_type, tech_stack, \
-                     analyzer_id, tags, value_before, value_after, scope) \
-                     VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)",
-                )
-                .bind(scan_id)
-                .bind(file_path)
-                .bind(effective_change_type)
-                .bind(&format!("{}_aggregated", self.id))
-                .bind(&tags_json)
-                .bind(value_before)
-                .bind(value_after)
-                .bind(Some(format!(
-                    "{}:{}-{}",
-                    self.id, line_start, line_end
-                )))
-                .execute(&mut *tx)
-                .await?;
+                let base_metric = tags
+                    .get(TAG_METRIC)
+                    .cloned()
+                    .unwrap_or_else(|| "finding_count".to_string());
+                let mut metric_values = BTreeMap::new();
+                metric_values.insert(base_metric, (value_before, value_after));
+                metric_values.insert(
+                    "occurrence_count".to_string(),
+                    (before_occurrences, after_occurrences),
+                );
+                metric_values.insert(
+                    "affected_file_count".to_string(),
+                    (value_before, value_after),
+                );
+                metric_values.insert(
+                    "affected_line_count".to_string(),
+                    (before_lines, after_lines),
+                );
+                if file_index == 0 {
+                    metric_values.insert(
+                        "finding_count".to_string(),
+                        (
+                            if finding_has_before { 1.0 } else { 0.0 },
+                            if finding_has_after { 1.0 } else { 0.0 },
+                        ),
+                    );
+                }
+
+                for (metric_name, (metric_before, metric_after)) in metric_values {
+                    let mut metric_tags = tags.clone();
+                    metric_tags.insert(TAG_METRIC.to_string(), metric_name);
+                    let tags_json = {
+                        let sorted: BTreeMap<_, _> = metric_tags.iter().collect();
+                        serde_json::to_string(&sorted).unwrap_or_default()
+                    };
+                    sqlx::query(
+                        "INSERT INTO metrics (scan_id, file_path, change_type, tech_stack, \
+                         analyzer_id, content_id, finding_key, tags, value_before, value_after, scope) \
+                         VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+                    )
+                    .bind(scan_id)
+                    .bind(file_path)
+                    .bind(effective_change_type)
+                    .bind(&aggregated_analyzer_id)
+                    .bind(content_id)
+                    .bind(&result.block_hash)
+                    .bind(&tags_json)
+                    .bind(metric_before)
+                    .bind(metric_after)
+                    .bind(Some(format!("{}:{}-{}", self.id, line_start, line_end)))
+                    .execute(&mut *tx)
+                    .await?;
+                }
             }
         }
 

@@ -22,6 +22,17 @@ CREATE TABLE IF NOT EXISTS scans (
     FOREIGN KEY(project_id) REFERENCES projects(id)
 );
 
+-- Shared match content. Every analyzer stores match bodies here so occurrence
+-- queries use one content lookup path and large cross-file findings do not
+-- duplicate their body for every location.
+CREATE TABLE IF NOT EXISTS match_contents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_hash TEXT NOT NULL UNIQUE,
+    content TEXT NOT NULL,
+    content_bytes INTEGER NOT NULL,
+    line_count INTEGER NOT NULL
+);
+
 -- Metrics (atomic metric storage with JSON tags)
 CREATE TABLE IF NOT EXISTS metrics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,11 +42,14 @@ CREATE TABLE IF NOT EXISTS metrics (
     old_file_path TEXT,
     tech_stack TEXT,
     analyzer_id TEXT NOT NULL,
+    content_id INTEGER,
+    finding_key TEXT,
     tags TEXT NOT NULL DEFAULT '{}',
     value_before REAL,
     value_after REAL,
     scope TEXT,
-    FOREIGN KEY(scan_id) REFERENCES scans(id)
+    FOREIGN KEY(scan_id) REFERENCES scans(id),
+    FOREIGN KEY(content_id) REFERENCES match_contents(id)
 );
 
 -- Scan jobs (async scan tracking)
@@ -71,32 +85,40 @@ CREATE INDEX IF NOT EXISTS idx_scans_project ON scans(project_id);
 CREATE INDEX IF NOT EXISTS idx_metrics_scan ON metrics(scan_id);
 CREATE INDEX IF NOT EXISTS idx_metrics_analyzer ON metrics(analyzer_id);
 CREATE INDEX IF NOT EXISTS idx_metrics_file_prop ON metrics(tech_stack, change_type);
+CREATE INDEX IF NOT EXISTS idx_metrics_finding ON metrics(scan_id, analyzer_id, finding_key);
+CREATE INDEX IF NOT EXISTS idx_metrics_content ON metrics(content_id);
 CREATE INDEX IF NOT EXISTS idx_scan_jobs_status ON scan_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_scan_jobs_project ON scan_jobs(project_name);
 CREATE INDEX IF NOT EXISTS idx_scan_summaries_scan ON scan_summaries(scan_id);
 
--- Match details (per-match locations like regex matches)
--- No tags column: tag info is available via analyzer_id referencing the analyzer config.
--- file_path and line_number are nullable — duplication analyzers may store aggregate records
--- not tied to a single file location.
+-- Match occurrences. Match bodies are always resolved through match_contents.
+-- finding_key is NULL for ordinary per-file analyzers. For cross-file analyzers,
+-- (scan_id, analyzer_id, finding_key) identifies one logical finding.
 CREATE TABLE IF NOT EXISTS matches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     scan_id INTEGER NOT NULL,
-    file_path TEXT,
+    file_path TEXT NOT NULL,
     analyzer_id TEXT NOT NULL,
-    line_number INTEGER,
+    content_id INTEGER NOT NULL,
+    finding_key TEXT,
+    line_start INTEGER,
+    line_end INTEGER,
     column_start INTEGER,
     column_end INTEGER,
-    matched_text TEXT NOT NULL,
     side INTEGER,
+    change_type TEXT,
     context_before TEXT,
     context_after TEXT,
-    FOREIGN KEY(scan_id) REFERENCES scans(id)
+    FOREIGN KEY(scan_id) REFERENCES scans(id),
+    FOREIGN KEY(content_id) REFERENCES match_contents(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_matches_scan ON matches(scan_id);
 CREATE INDEX IF NOT EXISTS idx_matches_scan_file ON matches(scan_id, file_path);
 CREATE INDEX IF NOT EXISTS idx_matches_analyzer ON matches(scan_id, analyzer_id);
+CREATE INDEX IF NOT EXISTS idx_matches_finding ON matches(scan_id, analyzer_id, finding_key);
+CREATE INDEX IF NOT EXISTS idx_matches_finding_file ON matches(scan_id, analyzer_id, finding_key, file_path);
+CREATE INDEX IF NOT EXISTS idx_matches_content ON matches(content_id);
 
 -- Intermediate blocks for cross-file analysis pipeline.
 -- Populated during scan (per-file extraction), consumed in finalize (global aggregation), then cleared.
@@ -127,8 +149,3 @@ CREATE TABLE IF NOT EXISTS intermediate_blocks (
 
 CREATE INDEX IF NOT EXISTS idx_intermediate_scan_analyzer ON intermediate_blocks(scan_id, analyzer_id);
 CREATE INDEX IF NOT EXISTS idx_intermediate_group ON intermediate_blocks(scan_id, analyzer_id, group_key);
-
--- Expression index for duplication lookup by content_hash (partial, covers only duplicate_block metrics)
-CREATE INDEX IF NOT EXISTS idx_metrics_dup_content_hash
-ON metrics(scan_id, json_extract(tags, '$.content_hash'))
-WHERE json_extract(tags, '$.metric') = 'duplicate_block';

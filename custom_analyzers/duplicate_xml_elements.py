@@ -18,10 +18,40 @@ Thresholds are defined here in the script, not in codeprism.yaml.
 import json
 import sys
 import xml.etree.ElementTree as ET
+from xml.parsers import expat
 
 # ── Script-internal thresholds ──────────────────────────────────────────────
 MIN_FILE_COUNT = 2
 MIN_BLOCK_COUNT = 3
+
+
+def get_element_line_ranges(content):
+    """Return element start/end line pairs in document preorder.
+
+    ``xml.etree.ElementTree`` elements do not expose ``sourceline`` in the
+    Python standard library. Expat provides line information while using the
+    same XML parsing rules, and its start-element event order matches
+    ``Element.iter()`` preorder.
+    """
+    parser = expat.ParserCreate()
+    ranges = []
+    open_elements = []
+
+    def on_start(_name, _attrs):
+        index = len(ranges)
+        line = parser.CurrentLineNumber
+        ranges.append([line, line])
+        open_elements.append(index)
+
+    def on_end(_name):
+        if open_elements:
+            index = open_elements.pop()
+            ranges[index][1] = parser.CurrentLineNumber
+
+    parser.StartElementHandler = on_start
+    parser.EndElementHandler = on_end
+    parser.Parse(content, True)
+    return [(start, end) for start, end in ranges]
 
 
 def get_content_blocks(file_path, content):
@@ -30,21 +60,24 @@ def get_content_blocks(file_path, content):
 
     try:
         root = ET.fromstring(content)
+        line_ranges = get_element_line_ranges(content)
     except Exception:
         return []
 
     results = []
-    for elem in root.iter():
+    for index, elem in enumerate(root.iter()):
         # Serialize element to canonical XML string
         try:
             elem_str = ET.tostring(elem, encoding='unicode')
         except Exception:
             continue
 
+        line_start, line_end = line_ranges[index] if index < len(line_ranges) else (0, 0)
+
         results.append({
             'block_size': -1,  # -1 identifies XML element mode
-            'line_start': elem.sourceline or 0,
-            'line_end': elem.sourceline or 0,
+            'line_start': line_start,
+            'line_end': line_end,
             'block_content': elem_str,
             'metric_key': 'duplicate_block',
             'category': 'duplication',
@@ -110,6 +143,9 @@ def test():
     # The root element serialization should contain the full XML
     root_block = blocks[0]
     assert root_block["block_size"] == -1
+    assert (root_block["line_start"], root_block["line_end"]) == (2, 6)
+    assert (blocks[1]["line_start"], blocks[1]["line_end"]) == (3, 5)
+    assert (blocks[2]["line_start"], blocks[2]["line_end"]) == (4, 4)
     print("  Test 1 (nested XML elements) passed")
 
     # Test 2: Non-XML file returns empty
@@ -131,6 +167,7 @@ def test():
     blocks = get_content_blocks("test.xml", "<hello name=\"world\"/>")
     assert len(blocks) == 1, f"Expected 1 block, got {len(blocks)}"
     assert "hello" in blocks[0]["block_content"]
+    assert (blocks[0]["line_start"], blocks[0]["line_end"]) == (1, 1)
     print("  Test 5 (single root element) passed")
 
     print("All tests passed!")

@@ -193,6 +193,7 @@ impl Analyzer for RegexAnalyzer {
                 MatchDetail {
                     file_path: file_path.to_string(),
                     line_number,
+                    line_end: Some(line_number),
                     column_start: Some(column_start),
                     column_end: Some(column_end),
                     matched_text: m.as_str().to_string(),

@@ -276,6 +276,14 @@ pub async fn delete_project(
         .bind(&project_name).execute(pool).await.ok();
     sqlx::query("DELETE FROM projects WHERE name = ?")
         .bind(&project_name).execute(pool).await.ok();
+    sqlx::query(
+        "DELETE FROM match_contents \
+         WHERE NOT EXISTS (SELECT 1 FROM matches WHERE matches.content_id = match_contents.id) \
+           AND NOT EXISTS (SELECT 1 FROM metrics WHERE metrics.content_id = match_contents.id)",
+    )
+    .execute(pool)
+    .await
+    .ok();
 
     // 2. Remove cached repo entries + on-disk directories
     let repos = state.git_cache.list_all();
@@ -624,6 +632,8 @@ pub struct MatchesResponse {
 pub struct MatchesQuery {
     pub file_path: Option<String>,
     pub analyzer_id: Option<String>,
+    pub finding_key: Option<String>,
+    /// Deprecated product-specific alias for finding_key.
     pub content_hash: Option<String>,
     pub side: Option<i32>,
     pub page: Option<u32>,
@@ -640,28 +650,29 @@ pub async fn get_matches(
     let page_size = params.page_size.unwrap_or(100).min(500);
     let offset = (page - 1) * page_size;
 
-    let is_duplication = params.content_hash.is_some();
+    let finding_key = params.finding_key.as_ref().or(params.content_hash.as_ref());
 
-    if is_duplication {
-        // Duplication mode: find duplicate block occurrences by content_hash (stored in context_before)
-        let hash = params.content_hash.as_ref().unwrap();
+    if let Some(finding_key) = finding_key {
+        // Cross-file finding mode: return every real occurrence for this finding.
 
         let mut count_sql = String::from(
-            "SELECT COUNT(*) FROM matches WHERE scan_id = ? AND context_before = ?"
+            "SELECT COUNT(*) FROM matches WHERE scan_id = ? AND finding_key = ?"
         );
         let mut rows_sql = String::from(
-            "SELECT file_path, line_number, column_start, column_end, matched_text, side, context_before, context_after, analyzer_id \
-             FROM matches WHERE scan_id = ? AND context_before = ?"
+            "SELECT m.file_path, m.line_start, m.line_end, m.column_start, m.column_end, c.content, \
+                    m.side, m.context_before, m.context_after, m.analyzer_id \
+             FROM matches m JOIN match_contents c ON c.id = m.content_id \
+             WHERE m.scan_id = ? AND m.finding_key = ?"
         );
 
         if params.analyzer_id.is_some() {
             count_sql.push_str(" AND analyzer_id = ?");
             rows_sql.push_str(" AND analyzer_id = ?");
         }
-        rows_sql.push_str(" ORDER BY rowid ASC LIMIT ? OFFSET ?");
+        rows_sql.push_str(" ORDER BY m.file_path, m.side, m.line_start, m.id LIMIT ? OFFSET ?");
 
         let total: i64 = {
-            let mut q = sqlx::query_scalar(&count_sql).bind(scan_id).bind(hash);
+            let mut q = sqlx::query_scalar(&count_sql).bind(scan_id).bind(finding_key);
             if let Some(ref aid) = params.analyzer_id {
                 q = q.bind(aid);
             }
@@ -671,9 +682,9 @@ pub async fn get_matches(
             }
         };
 
-        let mut query = sqlx::query_as::<_, (Option<String>, Option<i32>, Option<i32>, Option<i32>, String, Option<i32>, Option<String>, Option<String>, String)>(&rows_sql)
+        let mut query = sqlx::query_as::<_, (String, i32, Option<i32>, Option<i32>, Option<i32>, String, Option<i32>, Option<String>, Option<String>, String)>(&rows_sql)
             .bind(scan_id)
-            .bind(hash);
+            .bind(finding_key);
         if let Some(ref aid) = params.analyzer_id {
             query = query.bind(aid);
         }
@@ -682,12 +693,13 @@ pub async fn get_matches(
         let matches: Vec<MatchDetail> = match query.fetch_all(state.db.pool()).await {
             Ok(rows) => rows
                 .into_iter()
-                .map(|(fp, ln, cs, ce, mt, sd, cb, ca, aid)| MatchDetail {
-                    file_path: fp.unwrap_or_else(|| params.file_path.clone().unwrap_or_default()),
-                    line_number: ln.unwrap_or(0) as u32,
+                .map(|(fp, ls, le, cs, ce, content, sd, cb, ca, aid)| MatchDetail {
+                    file_path: fp,
+                    line_number: ls as u32,
+                    line_end: le.map(|v| v as u32),
                     column_start: cs.map(|v| v as u32),
                     column_end: ce.map(|v| v as u32),
-                    matched_text: mt,
+                    matched_text: content,
                     side: sd.map(|v| v != 0),
                     context_before: cb,
                     context_after: ca,
@@ -714,8 +726,10 @@ pub async fn get_matches(
     };
 
     let mut count_sql = "SELECT COUNT(*) FROM matches WHERE scan_id = ? AND file_path = ?".to_string();
-    let mut rows_sql = "SELECT file_path, line_number, column_start, column_end, matched_text, side, context_before, context_after, analyzer_id \
-                        FROM matches WHERE scan_id = ? AND file_path = ?".to_string();
+    let mut rows_sql = "SELECT m.file_path, m.line_start, m.line_end, m.column_start, m.column_end, c.content, \
+                               m.side, m.context_before, m.context_after, m.analyzer_id \
+                        FROM matches m JOIN match_contents c ON c.id = m.content_id \
+                        WHERE m.scan_id = ? AND m.file_path = ?".to_string();
 
     if params.analyzer_id.is_some() {
         count_sql.push_str(" AND analyzer_id = ?");
@@ -725,7 +739,7 @@ pub async fn get_matches(
         count_sql.push_str(" AND side = ?");
         rows_sql.push_str(" AND side = ?");
     }
-    rows_sql.push_str(" ORDER BY line_number ASC LIMIT ? OFFSET ?");
+    rows_sql.push_str(" ORDER BY m.line_start ASC LIMIT ? OFFSET ?");
 
     let total: i64 = {
         let mut q = sqlx::query_scalar(&count_sql).bind(scan_id).bind(&file_path);
@@ -741,7 +755,7 @@ pub async fn get_matches(
         }
     };
 
-    let mut query = sqlx::query_as::<_, (String, i32, Option<i32>, Option<i32>, String, Option<i32>, Option<String>, Option<String>, String)>(&rows_sql)
+    let mut query = sqlx::query_as::<_, (String, i32, Option<i32>, Option<i32>, Option<i32>, String, Option<i32>, Option<String>, Option<String>, String)>(&rows_sql)
         .bind(scan_id)
         .bind(&file_path);
     if let Some(ref aid) = params.analyzer_id {
@@ -755,12 +769,13 @@ pub async fn get_matches(
     let matches: Vec<MatchDetail> = match query.fetch_all(state.db.pool()).await {
         Ok(rows) => rows
             .into_iter()
-            .map(|(fp, ln, cs, ce, mt, sd, cb, ca, aid)| MatchDetail {
+            .map(|(fp, ls, le, cs, ce, content, sd, cb, ca, aid)| MatchDetail {
                 file_path: fp,
-                line_number: ln as u32,
+                line_number: ls as u32,
+                line_end: le.map(|v| v as u32),
                 column_start: cs.map(|v| v as u32),
                 column_end: ce.map(|v| v as u32),
-                matched_text: mt,
+                matched_text: content,
                 side: sd.map(|v| v != 0),
                 context_before: cb,
                 context_after: ca,
@@ -776,178 +791,104 @@ pub async fn get_matches(
     Json(MatchesResponse { scan_id, total, page, page_size, matches }).into_response()
 }
 
-// ─── Duplication API ────────────────────────────────────────────
+// ─── Cross-file findings API ────────────────────────────────────
 
-#[derive(Serialize)]
-pub struct DuplicationFileInfo {
+#[derive(Serialize, Clone)]
+pub struct FindingFileInfo {
     pub path: String,
     pub scope: Option<String>,
     pub value_before: f64,
     pub value_after: f64,
 }
 
-#[derive(Serialize)]
-pub struct DuplicationInfo {
+#[derive(Serialize, Clone)]
+pub struct FindingInfo {
     pub analyzer_id: String,
+    pub finding_key: String,
+    pub content: String,
+    pub affected_line_count: usize,
+    /// Deprecated product-specific alias for finding_key.
     pub content_hash: String,
+    /// Deprecated product-specific alias for content.
     pub block_content: String,
+    /// Deprecated product-specific alias for affected_line_count.
     pub block_size: i32,
     pub occurrence_count: usize,
-    pub files: Vec<DuplicationFileInfo>,
+    pub affected_file_count: usize,
+    pub files: Vec<FindingFileInfo>,
 }
 
 #[derive(Serialize)]
-pub struct DuplicationsResponse {
-    pub duplications: Vec<DuplicationInfo>,
+pub struct FindingsResponse {
+    pub findings: Vec<FindingInfo>,
+    /// Deprecated product-specific response alias.
+    pub duplications: Vec<FindingInfo>,
     pub total: i64,
     pub page: u32,
     pub page_size: u32,
 }
 
 #[derive(Deserialize)]
-pub struct DuplicationsQuery {
+pub struct FindingsQuery {
     pub analyzer_id: Option<String>,
     pub min_occurrences: Option<u32>,
     pub page: Option<u32>,
     pub page_size: Option<u32>,
 }
 
-/// GET /api/v1/projects/:project_name/scans/:scan_id/duplications
+/// GET /api/v1/projects/:project_name/scans/:scan_id/findings
 ///
-/// Returns paginated duplicate block groups. Each group represents a content_hash
-/// that appears across ≥min_occurrences files (default 2). Uses batched queries
-/// to avoid N+1 — all metrics for the requested page are fetched in one SQL.
-pub async fn get_duplications(
+/// Returns paginated cross-file findings. The legacy route and response names
+/// remain product aliases; storage and grouping use the generic finding_key.
+pub async fn get_findings(
     State(state): State<AppState>,
     Path((_project_name, scan_id)): Path<(String, i64)>,
-    Query(params): Query<DuplicationsQuery>,
+    Query(params): Query<FindingsQuery>,
 ) -> impl IntoResponse {
     let page = params.page.unwrap_or(1).max(1);
     let page_size = params.page_size.unwrap_or(20).min(100).max(1);
     let offset = ((page - 1) * page_size) as i64;
     let min_occurrences = params.min_occurrences.unwrap_or(2) as i64;
 
-    // Collect aggregated analyzer IDs from config (exact match, no LIKE needed)
-    let agg_ids = {
-        let core_config = state.core_config.read().unwrap();
-        let mut ids: Vec<String> = Vec::new();
-        for project in &core_config.projects {
-            for key in project.custom_cross_file_analyzers.keys() {
-                ids.push(format!("{}_aggregated", key));
-            }
-        }
-        for key in core_config.custom_cross_file_analyzers.keys() {
-            let agg_id = format!("{}_aggregated", key);
-            if !ids.contains(&agg_id) {
-                ids.push(agg_id);
-            }
-        }
-        ids
-    };
-
-    if agg_ids.is_empty() {
-        return Json(DuplicationsResponse {
-            duplications: vec![],
-            total: 0,
-            page,
-            page_size,
-        })
-        .into_response();
-    }
-
-    // Apply optional analyzer_id filter
-    let filtered_agg_ids: Vec<String> = if let Some(ref aid) = params.analyzer_id {
-        if aid.ends_with("_aggregated") {
-            // Direct match: check if this agg_id exists
-            if agg_ids.iter().any(|id| id == aid) {
-                vec![aid.clone()]
-            } else {
-                vec![]
-            }
+    let analyzer_filter = params.analyzer_id.as_ref().map(|value| {
+        if value.ends_with("_aggregated") {
+            value.clone()
         } else {
-            // Accept short names too (auto-append _aggregated)
-            let extended = format!("{}_aggregated", aid);
-            if agg_ids.iter().any(|id| id == &extended) {
-                vec![extended]
-            } else {
-                vec![]
-            }
+            format!("{}_aggregated", value)
         }
-    } else {
-        agg_ids.clone()
-    };
+    });
 
-    if filtered_agg_ids.is_empty() {
-        return Json(DuplicationsResponse {
-            duplications: vec![],
-            total: 0,
-            page,
-            page_size,
-        })
-        .into_response();
-    }
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM ( \
+         SELECT analyzer_id, finding_key FROM matches \
+         WHERE scan_id = ? AND finding_key IS NOT NULL \
+           AND (? IS NULL OR analyzer_id = ?) \
+         GROUP BY analyzer_id, finding_key \
+         HAVING COUNT(DISTINCT file_path) >= ?)",
+    )
+    .bind(scan_id)
+    .bind(analyzer_filter.as_deref())
+    .bind(analyzer_filter.as_deref())
+    .bind(min_occurrences)
+    .fetch_one(state.db.pool())
+    .await
+    .unwrap_or(0);
 
-    // Helper to build analyzer_id IN placeholders
-    let in_placeholders: String = filtered_agg_ids
-        .iter()
-        .enumerate()
-        .map(|(i, _)| if i == 0 { "?".to_string() } else { ", ?".to_string() })
-        .collect();
+    let groups_sql =
+        "SELECT m.finding_key, m.analyzer_id, MIN(m.content_id), COUNT(*), \
+                COUNT(DISTINCT m.file_path), MAX(c.line_count) \
+         FROM matches m JOIN match_contents c ON c.id = m.content_id \
+         WHERE m.scan_id = ? AND m.finding_key IS NOT NULL \
+           AND (? IS NULL OR m.analyzer_id = ?) \
+         GROUP BY m.analyzer_id, m.finding_key \
+         HAVING COUNT(DISTINCT m.file_path) >= ? \
+         ORDER BY COUNT(*) DESC \
+         LIMIT ? OFFSET ?";
 
-    // --- Step 1: Total count (with min_occurrences filter) ---
-    let total: i64 = if min_occurrences > 1 {
-        // Use aggregated metrics to compute count
-        let count_sql = format!(
-            "SELECT COUNT(*) FROM ( \
-             SELECT json_extract(tags, '$.content_hash') \
-             FROM metrics \
-             WHERE scan_id = ? AND json_extract(tags, '$.metric') = 'duplicate_block' \
-               AND analyzer_id IN ({}) \
-             GROUP BY json_extract(tags, '$.content_hash') \
-             HAVING COUNT(DISTINCT file_path) >= ?)",
-            in_placeholders
-        );
-        let mut q = sqlx::query_scalar(&count_sql).bind(scan_id);
-        for aid in &filtered_agg_ids {
-            q = q.bind(aid);
-        }
-        q = q.bind(min_occurrences);
-        q.fetch_one(state.db.pool()).await.unwrap_or(0)
-    } else {
-        let count_sql = format!(
-            "SELECT COUNT(*) FROM matches WHERE scan_id = ? AND file_path IS NULL \
-             AND analyzer_id IN ({})",
-            in_placeholders
-        );
-        let mut q = sqlx::query_scalar(&count_sql).bind(scan_id);
-        for aid in &filtered_agg_ids {
-            q = q.bind(aid);
-        }
-        q.fetch_one(state.db.pool()).await.unwrap_or(0)
-    };
-
-    // --- Step 2: Paginated group data from metrics (avoids polluting matches with counts) ---
-    let groups_sql = format!(
-        "SELECT json_extract(tags, '$.content_hash') as content_hash, \
-                analyzer_id, \
-                COUNT(DISTINCT file_path) as occurrence_count, \
-                json_extract(tags, '$.block_size') as block_size \
-         FROM metrics \
-         WHERE scan_id = ? AND json_extract(tags, '$.metric') = 'duplicate_block' \
-           AND analyzer_id IN ({}) \
-         GROUP BY content_hash \
-         HAVING occurrence_count >= ? \
-         ORDER BY occurrence_count DESC \
-         LIMIT ? OFFSET ?",
-        in_placeholders
-    );
-
-    let mut groups_query = sqlx::query_as::<_, (String, String, i64, Option<String>)>(&groups_sql)
-        .bind(scan_id);
-    for aid in &filtered_agg_ids {
-        groups_query = groups_query.bind(aid);
-    }
-    groups_query = groups_query
+    let groups_query = sqlx::query_as::<_, (String, String, i64, i64, i64, i64)>(groups_sql)
+        .bind(scan_id)
+        .bind(analyzer_filter.as_deref())
+        .bind(analyzer_filter.as_deref())
         .bind(min_occurrences)
         .bind(page_size as i64)
         .bind(offset);
@@ -955,8 +896,9 @@ pub async fn get_duplications(
     let groups = match groups_query.fetch_all(state.db.pool()).await {
         Ok(rows) => rows,
         Err(e) => {
-            eprintln!("DB error fetching duplication groups: {}", e);
-            return Json(DuplicationsResponse {
+            eprintln!("DB error fetching cross-file findings: {}", e);
+            return Json(FindingsResponse {
+                findings: vec![],
                 duplications: vec![],
                 total: 0,
                 page,
@@ -967,7 +909,8 @@ pub async fn get_duplications(
     };
 
     if groups.is_empty() {
-        return Json(DuplicationsResponse {
+        return Json(FindingsResponse {
+            findings: vec![],
             duplications: vec![],
             total,
             page,
@@ -976,50 +919,48 @@ pub async fn get_duplications(
         .into_response();
     }
 
-    // --- Step 3: Batch fetch block_content from matches for these content_hashes ---
-    let content_hashes: Vec<String> = groups.iter().map(|(h, _, _, _)| h.clone()).collect();
-    let hash_placeholders: String = (0..content_hashes.len())
+    let content_ids: Vec<i64> = groups.iter().map(|(_, _, id, _, _, _)| *id).collect();
+    let content_placeholders: String = (0..content_ids.len())
         .map(|i| if i == 0 { "?".to_string() } else { ", ?".to_string() })
         .collect();
-
-    let match_sql = format!(
-        "SELECT matched_text, COALESCE(context_before, '') as content_hash, analyzer_id \
-         FROM matches \
-         WHERE scan_id = ? AND file_path IS NULL AND context_before IN ({})",
-        hash_placeholders
+    let content_sql = format!(
+        "SELECT id, content FROM match_contents WHERE id IN ({})",
+        content_placeholders
     );
-    let mut match_query = sqlx::query_as::<_, (String, String, String)>(&match_sql)
-        .bind(scan_id);
-    for h in &content_hashes {
-        match_query = match_query.bind(h);
+    let mut content_query = sqlx::query_as::<_, (i64, String)>(&content_sql);
+    for content_id in &content_ids {
+        content_query = content_query.bind(content_id);
     }
-    let match_records = match_query.fetch_all(state.db.pool()).await.unwrap_or_default();
-
-    // Index matches by content_hash (owned String → (block_content, analyzer_id))
-    let match_map: std::collections::HashMap<String, (String, String)> = match_records
+    let content_by_id: std::collections::HashMap<i64, String> = content_query
+        .fetch_all(state.db.pool())
+        .await
+        .unwrap_or_default()
         .into_iter()
-        .map(|(text, hash, aid)| (hash, (text, aid)))
         .collect();
 
-    // --- Step 4: Batch fetch file details for all content_hashes ---
+    let finding_keys: Vec<String> = groups.iter().map(|(key, _, _, _, _, _)| key.clone()).collect();
+    let key_placeholders: String = (0..finding_keys.len())
+        .map(|i| if i == 0 { "?".to_string() } else { ", ?".to_string() })
+        .collect();
     let file_sql = format!(
-        "SELECT file_path, scope, value_before, value_after, tags, \
-                json_extract(tags, '$.content_hash') as content_hash \
-         FROM metrics \
-         WHERE scan_id = ? AND json_extract(tags, '$.metric') = 'duplicate_block' \
-           AND json_extract(tags, '$.content_hash') IN ({})",
-        hash_placeholders
+        "SELECT analyzer_id, finding_key, file_path, MIN(line_start), MAX(line_end), \
+                MAX(CASE WHEN side = 0 THEN 1 ELSE 0 END), \
+                MAX(CASE WHEN side = 1 OR side IS NULL THEN 1 ELSE 0 END) \
+         FROM matches WHERE scan_id = ? AND finding_key IN ({}) \
+         GROUP BY analyzer_id, finding_key, file_path",
+        key_placeholders
     );
-    let mut file_query = sqlx::query_as::<_, (String, Option<String>, f64, f64, Option<String>, String)>(&file_sql)
+    let mut file_query = sqlx::query_as::<_, (String, String, String, Option<i64>, Option<i64>, i64, i64)>(&file_sql)
         .bind(scan_id);
-    for h in &content_hashes {
-        file_query = file_query.bind(h);
+    for key in &finding_keys {
+        file_query = file_query.bind(key);
     }
     let file_records = match file_query.fetch_all(state.db.pool()).await {
         Ok(rows) => rows,
         Err(e) => {
-            eprintln!("DB error fetching duplication file records: {}", e);
-            return Json(DuplicationsResponse {
+            eprintln!("DB error fetching finding occurrences: {}", e);
+            return Json(FindingsResponse {
+                findings: vec![],
                 duplications: vec![],
                 total,
                 page,
@@ -1029,55 +970,49 @@ pub async fn get_duplications(
         }
     };
 
-    // Group file records by content_hash (owned String keys)
-    let mut files_by_hash: std::collections::HashMap<String, Vec<(String, Option<String>, f64, f64, Option<String>)>> =
+    let mut files_by_finding: std::collections::HashMap<(String, String), Vec<FindingFileInfo>> =
         std::collections::HashMap::new();
-    for (path, scope, vb, va, tags, hash) in file_records {
-        files_by_hash
-            .entry(hash)
+    for (analyzer_id, finding_key, path, line_start, line_end, before, after) in file_records {
+        let scope = line_start.map(|start| {
+            format!("{}:{}-{}", analyzer_id, start, line_end.unwrap_or(start))
+        });
+        files_by_finding
+            .entry((analyzer_id, finding_key))
             .or_default()
-            .push((path, scope, vb, va, tags));
+            .push(FindingFileInfo {
+                path,
+                scope,
+                value_before: before as f64,
+                value_after: after as f64,
+            });
     }
 
-    // --- Step 5: Build response ---
-    let duplications: Vec<DuplicationInfo> = groups
+    let findings: Vec<FindingInfo> = groups
         .into_iter()
-        .map(|(content_hash, analyzer_id, occurrence_count, block_size_raw)| {
-            let block_size: i32 = block_size_raw
-                .as_deref()
-                .and_then(|s| s.parse::<i32>().ok())
-                .unwrap_or(0);
-
-            let block_content = match_map
-                .get(&content_hash)
-                .map(|(text, _)| text.clone())
+        .map(|(finding_key, analyzer_id, content_id, occurrence_count, file_count, line_count)| {
+            let block_content = content_by_id.get(&content_id).cloned().unwrap_or_default();
+            let file_infos = files_by_finding
+                .remove(&(analyzer_id.clone(), finding_key.clone()))
                 .unwrap_or_default();
 
-            let file_infos: Vec<DuplicationFileInfo> = files_by_hash
-                .remove(&content_hash)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(path, scope, vb, va, _tags)| DuplicationFileInfo {
-                    path,
-                    scope,
-                    value_before: vb,
-                    value_after: va,
-                })
-                .collect();
-
-            DuplicationInfo {
+            FindingInfo {
                 analyzer_id,
-                content_hash,
+                finding_key: finding_key.clone(),
+                content: block_content.clone(),
+                affected_line_count: line_count as usize,
+                content_hash: finding_key,
                 block_content,
-                block_size,
+                block_size: line_count as i32,
                 occurrence_count: occurrence_count as usize,
+                affected_file_count: file_count as usize,
                 files: file_infos,
             }
         })
         .collect();
 
-    Json(DuplicationsResponse {
-        duplications,
+    Json(FindingsResponse {
+        duplications: findings.clone(),
+        findings,
         total,
         page,
         page_size,

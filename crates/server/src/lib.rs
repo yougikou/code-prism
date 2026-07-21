@@ -19,7 +19,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::config::{AppConfig, ProjectAppConfig, SourceConfig, TopNParams, ViewConfig, ViewKind};
 use crate::routes::{
     AppState, get_scan_summary, get_view, get_scans, static_handler, execute_scan, get_scan_job, add_local_project,
-    list_unified_projects, create_project, delete_project, get_matches, get_duplications,
+    list_unified_projects, create_project, delete_project, get_matches, get_findings,
 };
 use crate::git_routes::{clone_repo, list_branches, checkout_branch, pull_branch, list_commits, list_repos, delete_repo, extract_branches};
 
@@ -309,7 +309,11 @@ pub async fn run_server(db: Db, core_config: CodePrismConfig, config_path: Strin
         )
         .route(
             "/api/v1/projects/:project_name/scans/:scan_id/duplications",
-            get(get_duplications),
+            get(get_findings),
+        )
+        .route(
+            "/api/v1/projects/:project_name/scans/:scan_id/findings",
+            get(get_findings),
         )
         // Trend endpoint
         .route(
