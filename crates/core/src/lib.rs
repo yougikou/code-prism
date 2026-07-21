@@ -640,11 +640,11 @@ project_templates:
     #   1. extract — per-file: {"action":"extract","file_path":"...","content":"..."}
     #      → script returns a JSON array of extracted blocks.
     #   2. finalize — global: {"action":"finalize","blocks":[...]}
-    #      → script returns a JSON array of FinalizeMatchResult groups.
+    #      → script returns {"findings":[...]} with analyzer-defined metrics.
     #
     # Thresholds (min_file_count, min_block_count, etc.) are defined INSIDE each
-    # Python script — not in YAML. The framework simply passes blocks through and
-    # writes whatever the script reports as matches.
+    # Python script — not in YAML. The framework validates and persists the
+    # analyzer-defined findings without adding duplication-specific rules.
     #
     # Each script defines its own default metric_key/category; you can override
     # them via tags below.
@@ -929,9 +929,8 @@ project_templates:
 ///
 /// Cross-file analyzers use a two-phase protocol:
 ///   1. **extract** — per-file: the script receives file content and returns blocks.
-///   2. **finalize** — global: the script receives ALL blocks and returns filtered
-///      match groups. Threshold logic (min_file_count, min_block_count, etc.) is
-///      owned by the Python script, not by this config.
+///   2. **finalize** — global: the script receives ALL blocks and returns generic
+///      findings, occurrences, tags, and metrics. All domain logic is script-owned.
 ///
 /// This struct holds only framework-level settings: tags, scan_mode, change_type.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -974,11 +973,8 @@ impl CrossFileAnalyzerConfig {
     }
 }
 
-/// One aggregated match group returned by the Python script's `finalize` phase.
-///
-/// Each instance represents a group of intermediate blocks that passed the
-/// script's own threshold logic (e.g. appeared in ≥N files) and should be
-/// recorded as a duplicate match in the database.
+/// Legacy duplication-specific finalize output. Kept only so existing custom
+/// analyzers continue to work; new analyzers should return `FinalizeOutput`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FinalizeMatchResult {
     /// Hash identifying this block group (matches IntermediateBlock::group_key).
@@ -1003,6 +999,46 @@ pub struct FinalizeOccurrence {
     pub change_type: Option<String>,
     /// Diff side: "0" (old) or "1" (new), or None for snapshot mode.
     pub side: Option<String>,
+}
+
+/// Generic output of a cross-file analyzer's finalize phase.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FinalizeOutput {
+    #[serde(default)]
+    pub findings: Vec<FinalizeFinding>,
+}
+
+/// One logical cross-file finding. The analyzer owns its identity, display
+/// content, occurrences, tags, and metrics; the framework only validates and
+/// persists this data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinalizeFinding {
+    pub finding_key: String,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub occurrences: Vec<FinalizeOccurrence>,
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
+    #[serde(default)]
+    pub metrics: Vec<FinalizeMetric>,
+}
+
+/// A metric explicitly emitted by a cross-file analyzer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinalizeMetric {
+    pub metric_key: String,
+    pub file_path: String,
+    #[serde(default)]
+    pub value_before: f64,
+    #[serde(default)]
+    pub value_after: f64,
+    #[serde(default)]
+    pub change_type: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
 }
 
 /// A single content block extracted from a file for duplicate detection
@@ -1075,19 +1111,14 @@ impl IntermediateBlock {
     }
 }
 
-/// Intermediate block format from Python scripts (no hash — computed by framework).
-/// Scripts output this; the framework hashes block_content to produce ContentBlock.
-///
-/// When `normalized_content` is present, the hash is computed from it instead of
-/// from `block_content`. This allows scripts to supply a "normalized" version
-/// (comments+whitespace stripped) for exact-code dedup while keeping the original
-/// `block_content` for display. Scripts that don't need normalization just omit it.
-///
-/// Optional `metric_key`, `category`, `tags` let each Python script define its own
-/// default tagging (the "analyzer's internal settings"). The YAML config can override
-/// these via `custom_cross_file_analyzers.<name>.tags`.
+/// Intermediate block format returned by Python scripts. New scripts should
+/// provide `group_key`; normalized/content hashing is a legacy fallback.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScriptContentBlock {
+    /// Analyzer-defined aggregation identity. When omitted, the legacy
+    /// normalized-content/content hash fallback is used.
+    #[serde(default)]
+    pub group_key: Option<String>,
     pub block_size: i32,
     pub line_start: i32,
     pub line_end: i32,
@@ -1097,27 +1128,15 @@ pub struct ScriptContentBlock {
     /// is detected as a duplicate. If absent, `block_content` is hashed instead.
     #[serde(default)]
     pub normalized_content: Option<String>,
-    /// Default metric_key defined by the script itself.
-    /// Overridable via YAML config's `tags.metric`.
-    #[serde(default)]
-    pub metric_key: Option<String>,
-    /// Default category defined by the script itself.
-    /// Overridable via YAML config's `tags.category`.
-    #[serde(default)]
-    pub category: Option<String>,
-    /// Default extra tags defined by the script itself.
-    /// Overridable via YAML config's `tags.*`.
-    #[serde(default)]
-    pub tags: Option<HashMap<String, String>>,
 }
 
 impl From<ScriptContentBlock> for ContentBlock {
     fn from(s: ScriptContentBlock) -> Self {
         use sha2::Digest;
-        // Hash from normalized_content when present (exact-code matching),
-        // fall back to block_content for backward compatibility.
-        let hash_source = s.normalized_content.as_ref().unwrap_or(&s.block_content);
-        let hash = hex::encode(sha2::Sha256::digest(hash_source.as_bytes()));
+        let hash = s.group_key.unwrap_or_else(|| {
+            let hash_source = s.normalized_content.as_ref().unwrap_or(&s.block_content);
+            hex::encode(sha2::Sha256::digest(hash_source.as_bytes()))
+        });
         ContentBlock {
             block_hash: hash,
             block_size: s.block_size,
@@ -1151,6 +1170,19 @@ pub enum AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn script_content_block_prefers_analyzer_group_key() {
+        let block = ScriptContentBlock {
+            group_key: Some("domain:key".into()),
+            block_size: 1,
+            line_start: 1,
+            line_end: 1,
+            block_content: "display".into(),
+            normalized_content: Some("legacy-hash-source".into()),
+        };
+        assert_eq!(ContentBlock::from(block).block_hash, "domain:key");
+    }
 
     fn analyzer_ids(func: AggregationFunc) -> Vec<String> {
         match func {

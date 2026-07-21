@@ -583,6 +583,12 @@ GET /api/v1/projects/:project_name/trends/:view_id?mode=snapshot&limit=20
 
 ### カスタムアナライザーガイドライン
 
+#### クロスファイル・カスタムアナライザー
+
+クロスファイルスクリプトは `extract` / `finalize` の2段階プロトコルを使用します。`extract` はアナライザー自身が決めた `group_key` を返し、`finalize` は `{"findings": [...]}` を返します。各 finding は `finding_key`、`content`、`occurrences`、`tags`、`metrics` を明示します。finding の採否、最小ファイル数、最小行数、グルーピング方法、メトリクス計算はスクリプト内部の責務であり、YAML には置きません。YAML は `tags`、`scan_mode`、`change_type` などフレームワーク用メタデータだけを保持します。
+
+フレームワークは検証とトランザクション保存を担当します。1つのアナライザーが失敗しても一度再試行し、中間データを保持したまま他のアナライザーを続行します。ジョブ状態は `completed_with_errors` です。成功時の中間データは同じトランザクションで削除され、失敗データは起動時に7日を超えたものだけ削除されます。Diff は変更ファイルのみを解析します。
+
 カスタムアナライザーを開発する際は、`analyzer_id` と `metric_key` の違いを理解してください：
 
 | フィールド | 用途 | スコープ |

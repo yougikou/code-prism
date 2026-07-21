@@ -201,6 +201,10 @@ impl Scanner {
                 {
                     let analyzer_id = stem.to_string();
 
+                    if analyzer_id.starts_with('_') {
+                        continue;
+                    }
+
                     // Cross-file scripts are instantiated per project at scan time.
                     if all_cross_file_names.contains(&analyzer_id) {
                         continue;
@@ -254,6 +258,10 @@ impl Scanner {
 
     pub fn set_scan_job_id(&mut self, job_id: i64) {
         self.scan_job_id = Some(job_id);
+    }
+
+    pub fn completed_with_errors(&self) -> bool {
+        !self.cross_file_error_details.is_empty()
     }
 
     /// Build the cross-file analyzer runtime for the project being scanned.
@@ -469,7 +477,14 @@ impl Scanner {
         }
 
         // Cross-file analysis: run finalize on all registered analyzers
-        cross_file::finalize_all(scan_id, self.db.pool(), &self.cross_file_analyzers).await?;
+        let finalize_report =
+            cross_file::finalize_all(scan_id, self.db.pool(), &self.cross_file_analyzers).await;
+        for (analyzer_id, error) in finalize_report.errors {
+            self.cross_file_error_details
+                .entry(analyzer_id)
+                .or_default()
+                .push(error);
+        }
 
         pb.finish_with_message(format!(
             "Snapshot Scan Complete. Scanned {} files.",
@@ -720,7 +735,14 @@ impl Scanner {
         pb.finish_with_message("Diff Scan Complete");
 
         // Cross-file analysis: run finalize on all registered analyzers
-        cross_file::finalize_all(scan_id, self.db.pool(), &self.cross_file_analyzers).await?;
+        let finalize_report =
+            cross_file::finalize_all(scan_id, self.db.pool(), &self.cross_file_analyzers).await;
+        for (analyzer_id, error) in finalize_report.errors {
+            self.cross_file_error_details
+                .entry(analyzer_id)
+                .or_default()
+                .push(error);
+        }
 
         self.update_progress(92, "Auto-creating indexes").await;
         // Auto-create expression indexes for newly seen tag keys

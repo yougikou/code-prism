@@ -583,6 +583,12 @@ GET /api/v1/projects/:project_name/trends/:view_id?mode=snapshot&limit=20
 
 ### 自定义分析器指南
 
+#### 跨文件自定义分析器
+
+跨文件脚本采用 `extract` / `finalize` 两阶段协议。`extract` 应返回由分析器决定的 `group_key`；`finalize` 返回 `{"findings": [...]}`，每个 finding 显式包含 `finding_key`、`content`、`occurrences`、`tags` 和 `metrics`。是否形成 finding、最少文件数、最少代码行、分组方法及指标计算都属于分析器内部逻辑，不放入 YAML。YAML 只保留 `tags`、`scan_mode`、`change_type` 等框架级元信息。
+
+框架负责协议校验与事务落库。单个分析器失败会重试一次并保留其中间数据，不影响其他分析器；作业状态为 `completed_with_errors`。成功分析器的中间数据在同一事务中清理，失败数据启动时保留七天。Diff 模式只分析发生变更的文件。
+
 开发自定义分析器时，需理解 `analyzer_id` 和 `metric_key` 的区别：
 
 | 字段 | 用途 | 作用域 |

@@ -628,6 +628,19 @@ impl ScanJobHandle {
         .ok();
     }
 
+    pub async fn set_completed_with_errors(&self, scan_id: i64) {
+        sqlx::query(
+            "UPDATE scan_jobs SET status = 'completed_with_errors', progress = 100, scan_id = ?, \
+             progress_message = 'Scan completed; one or more cross-file analyzers failed', \
+             updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        )
+        .bind(scan_id)
+        .bind(self.job_id)
+        .execute(self.db.pool())
+        .await
+        .ok();
+    }
+
     pub async fn set_failed(&self, error: &str) {
         sqlx::query(
             "UPDATE scan_jobs SET status = 'failed', progress = 100, error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -2152,7 +2165,11 @@ pub async fn execute_scan(
 
             match result {
                 Ok(scan_id) => {
-                    job.set_completed(scan_id).await;
+                    if scanner.completed_with_errors() {
+                        job.set_completed_with_errors(scan_id).await;
+                    } else {
+                        job.set_completed(scan_id).await;
+                    }
                     println!("Scan completed. job={}, scan={}", job_id, scan_id);
                 }
                 Err(e) => {
@@ -2250,7 +2267,11 @@ pub async fn execute_scan(
 
                 match result {
                     Ok(scan_id) => {
-                        job.set_completed(scan_id).await;
+                        if scanner.completed_with_errors() {
+                            job.set_completed_with_errors(scan_id).await;
+                        } else {
+                            job.set_completed(scan_id).await;
+                        }
                         println!("Scan completed. job={}, scan={}", job_id, scan_id);
                     }
                     Err(e) => {

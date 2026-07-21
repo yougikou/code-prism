@@ -1,10 +1,10 @@
 use crate::{Analyzer, FileProcessor};
 use async_trait::async_trait;
 use codeprism_core::{
-    ContentBlock, FinalizeMatchResult, FinalizeOccurrence, IntermediateBlock, ScriptContentBlock,
-    TAG_CATEGORY, TAG_METRIC,
+    ContentBlock, FinalizeFinding, FinalizeMatchResult, FinalizeMetric, FinalizeOccurrence,
+    FinalizeOutput, IntermediateBlock, ScriptContentBlock,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -54,6 +54,13 @@ struct BlockData {
     str_data2: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ScriptFinalizeResponse {
+    Generic(FinalizeOutput),
+    Legacy(Vec<FinalizeMatchResult>),
+}
+
 struct ProcessHandle {
     child: Child,
     stdin: ChildStdin,
@@ -67,21 +74,11 @@ impl Drop for ProcessHandle {
     }
 }
 
-/// Default tags captured from the Python script's own output.
-/// These serve as the fallback when no YAML overrides are configured.
-struct ScriptDefaultTags {
-    metric_key: Option<String>,
-    category: Option<String>,
-    tags: Option<HashMap<String, String>>,
-}
-
 pub struct ScriptCrossFileAnalyzer {
     id: String,
     /// YAML-configured tag overrides (from `custom_cross_file_analyzers`).
     /// Applied on top of whatever the Python script defines as defaults.
     tag_overrides: HashMap<String, String>,
-    /// Script's own default tags, captured from the first script invocation.
-    script_default_tags: Arc<Mutex<Option<ScriptDefaultTags>>>,
     interpreter: Arc<Mutex<Option<String>>>,
     process: Arc<Mutex<Option<ProcessHandle>>>,
 }
@@ -102,7 +99,6 @@ impl ScriptCrossFileAnalyzer {
         Self {
             id: id.to_string(),
             tag_overrides,
-            script_default_tags: Arc::new(Mutex::new(None)),
             interpreter: Arc::new(Mutex::new(None)),
             process: Arc::new(Mutex::new(None)),
         }
@@ -180,8 +176,6 @@ impl ScriptCrossFileAnalyzer {
 
     /// Internal: run the Python script's `extract` action and return ContentBlocks.
     ///
-    /// On the first invocation, also captures the script's own default tags
-    /// (metric_key, category, tags) for use in finalize().
     fn extract_content_blocks(&self, file_path: &str, content: &str) -> Vec<ContentBlock> {
         if let Err(e) = self.ensure_process() {
             eprintln!("{}", e);
@@ -211,7 +205,6 @@ impl ScriptCrossFileAnalyzer {
 
         let (tx, rx) = mpsc::channel();
         let aid = self.id.clone();
-        let script_default_tags = self.script_default_tags.clone();
         std::thread::spawn(move || {
             let result = (|| -> Option<(ProcessHandle, Vec<ContentBlock>)> {
                 let json_bytes = json_input.as_bytes();
@@ -225,18 +218,6 @@ impl ScriptCrossFileAnalyzer {
                 }
 
                 let script_blocks: Vec<ScriptContentBlock> = serde_json::from_str(&line).ok()?;
-
-                // Capture script's default tags from the first block on first call
-                if let Some(first) = script_blocks.first() {
-                    let mut dst = script_default_tags.lock().unwrap();
-                    if dst.is_none() {
-                        *dst = Some(ScriptDefaultTags {
-                            metric_key: first.metric_key.clone(),
-                            category: first.category.clone(),
-                            tags: first.tags.clone(),
-                        });
-                    }
-                }
 
                 let blocks = script_blocks.into_iter().map(ContentBlock::from).collect();
 
@@ -397,262 +378,169 @@ impl FileProcessor for ScriptCrossFileAnalyzer {
             .collect()
     }
 
-    async fn finalize(&self, scan_id: i64, pool: &sqlx::Pool<sqlx::Sqlite>) -> anyhow::Result<()> {
-        // 1. Fetch intermediate blocks for this analyzer
-        let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<i64>, Option<i64>, Option<i64>, Option<String>, Option<String>)>(
-            "SELECT file_path, group_key, blob_data, int_data1, int_data2, int_data3, str_data1, str_data2 \
-             FROM intermediate_blocks WHERE scan_id = ? AND analyzer_id = ? ORDER BY group_key"
-        )
-        .bind(scan_id)
-        .bind(&self.id)
-        .fetch_all(pool)
-        .await?;
-
-        if rows.is_empty() {
-            return Ok(());
+    async fn finalize(&self, blocks: Vec<IntermediateBlock>) -> anyhow::Result<FinalizeOutput> {
+        if blocks.is_empty() {
+            return Ok(FinalizeOutput::default());
         }
-
-        // 2. Build block data for Python script
-        let blocks: Vec<BlockData> = rows
-            .iter()
-            .map(|(fp, gk, bd, i1, i2, i3, s1, s2)| BlockData {
-                file_path: fp.clone(),
-                group_key: gk.clone(),
-                blob_data: bd.clone(),
-                int_data1: *i1,
-                int_data2: *i2,
-                int_data3: *i3,
-                str_data1: s1.clone(),
-                str_data2: s2.clone(),
+        let payload = blocks
+            .into_iter()
+            .map(|block| BlockData {
+                file_path: block.file_path,
+                group_key: block.group_key,
+                blob_data: block.blob_data,
+                int_data1: block.int_data1,
+                int_data2: block.int_data2,
+                int_data3: block.int_data3,
+                str_data1: block.str_data1,
+                str_data2: block.str_data2,
             })
             .collect();
-
-        // 3. Send to Python script for aggregation
-        let response = self
-            .send_finalize(blocks)
-            .map_err(|e| anyhow::anyhow!("Finalize failed for '{}': {}", self.id, e))?;
-
-        // 4. Parse results — the script owns threshold logic and returns only
-        //    groups that passed (e.g. min_file_count, min_block_count, etc.)
-        let match_results: Vec<FinalizeMatchResult> =
-            serde_json::from_str(&response).map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to parse finalize response from '{}': {}",
-                    self.id,
-                    e
-                )
-            })?;
-
-        if match_results.is_empty() {
-            // Clean up intermediate blocks even with no matches
-            sqlx::query("DELETE FROM intermediate_blocks WHERE scan_id = ? AND analyzer_id = ?")
-                .bind(scan_id)
-                .bind(&self.id)
-                .execute(pool)
-                .await?;
-            return Ok(());
+        let response = self.send_finalize(payload).map_err(|error| {
+            self.reset_process();
+            anyhow::anyhow!("transient finalize failure for '{}': {}", self.id, error)
+        })?;
+        match serde_json::from_str::<ScriptFinalizeResponse>(&response).map_err(|error| {
+            anyhow::anyhow!("Invalid finalize response from '{}': {}", self.id, error)
+        })? {
+            ScriptFinalizeResponse::Generic(mut output) => {
+                for finding in &mut output.findings {
+                    finding.tags.extend(self.tag_overrides.clone());
+                }
+                Ok(output)
+            }
+            ScriptFinalizeResponse::Legacy(results) => {
+                eprintln!(
+                    "Cross-file analyzer '{}' uses the deprecated duplication finalize protocol",
+                    self.id
+                );
+                Ok(legacy_output(results, &self.tag_overrides))
+            }
         }
+    }
 
-        // 5. Write matches and metrics in a transaction
-        let mut tx = pool.begin().await?;
+    fn reset(&self) {
+        self.reset_process();
+    }
 
-        for result in &match_results {
-            let content_hash = codeprism_core::hash_match_content(&result.block_content);
-            let (content_id, stored_content): (i64, String) = sqlx::query_as(
-                "INSERT INTO match_contents (content_hash, content, content_bytes, line_count) \
-                 VALUES (?, ?, ?, ?) \
-                 ON CONFLICT(content_hash) DO UPDATE SET content_hash = excluded.content_hash \
-                 RETURNING id, content",
-            )
-            .bind(&content_hash)
-            .bind(&result.block_content)
-            .bind(result.block_content.len() as i64)
-            .bind(result.block_content.lines().count() as i64)
-            .fetch_one(&mut *tx)
-            .await?;
-            if stored_content != result.block_content {
-                anyhow::bail!("SHA-256 collision while storing cross-file finding content");
-            }
+    fn is_transient_error(&self, error: &anyhow::Error) -> bool {
+        error.to_string().starts_with("transient finalize failure")
+    }
+}
 
-            let aggregated_analyzer_id = format!("{}_aggregated", self.id);
-
-            // Every occurrence keeps its own location while sharing one content row.
+fn legacy_output(
+    results: Vec<FinalizeMatchResult>,
+    tag_overrides: &HashMap<String, String>,
+) -> FinalizeOutput {
+    let findings = results
+        .into_iter()
+        .map(|result| {
+            let mut file_groups: BTreeMap<String, Vec<&FinalizeOccurrence>> = BTreeMap::new();
             for occurrence in &result.occurrences {
-                let side = occurrence
-                    .side
-                    .as_deref()
-                    .and_then(|value| value.parse::<i64>().ok());
-                sqlx::query(
-                    "INSERT INTO matches (scan_id, file_path, analyzer_id, content_id, finding_key, \
-                     line_start, line_end, column_start, column_end, side, change_type, \
-                     context_before, context_after) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)",
-                )
-                .bind(scan_id)
-                .bind(&occurrence.file_path)
-                .bind(&aggregated_analyzer_id)
-                .bind(content_id)
-                .bind(&result.block_hash)
-                .bind(occurrence.line_start as i64)
-                .bind(occurrence.line_end as i64)
-                .bind(side)
-                .bind(occurrence.change_type.as_deref().unwrap_or("A"))
-                .execute(&mut *tx)
-                .await?;
-            }
-
-            // — Per-file metrics: group occurrences by file_path for side aggregation —
-            let mut file_groups: BTreeMap<&str, Vec<&FinalizeOccurrence>> = BTreeMap::new();
-            for occ in &result.occurrences {
                 file_groups
-                    .entry(occ.file_path.as_str())
+                    .entry(occurrence.file_path.clone())
                     .or_default()
-                    .push(occ);
+                    .push(occurrence);
             }
-
-            let finding_has_before = result
+            let mut metrics = Vec::new();
+            let finding_before = result
                 .occurrences
                 .iter()
                 .any(|occurrence| occurrence.side.as_deref() == Some("0"));
-            let finding_has_after = result.occurrences.iter().any(|occurrence| {
-                occurrence.side.is_none() || occurrence.side.as_deref() == Some("1")
-            });
-
-            for (file_index, (file_path, file_entries)) in file_groups.iter().enumerate() {
-                let first = file_entries.first().unwrap();
-                let line_start = first.line_start;
-                let line_end = first.line_end;
-                let change_type = first.change_type.clone();
-
-                // Snapshot vs diff mode: side="0" (old), side="1" (new)
-                let has_side_0 = file_entries.iter().any(|o| o.side.as_deref() == Some("0"));
-                let has_side_1 = file_entries.iter().any(|o| o.side.as_deref() == Some("1"));
-
-                let (value_before, value_after) = if !has_side_0 && !has_side_1 {
-                    (0.0, 1.0)
-                } else {
-                    let vb = if has_side_0 { 1.0 } else { 0.0 };
-                    let va = if has_side_1 { 1.0 } else { 0.0 };
-                    (vb, va)
-                };
-
-                if value_before == 0.0 && value_after == 0.0 {
-                    continue;
-                }
-
-                // — Tag merging: script defaults → YAML overrides → auto fields —
-                let mut tags = HashMap::new();
-                {
-                    let sd = self.script_default_tags.lock().unwrap();
-                    if let Some(dt) = sd.as_ref() {
-                        if let Some(mk) = &dt.metric_key {
-                            tags.insert(TAG_METRIC.to_string(), mk.clone());
-                        }
-                        if let Some(cat) = &dt.category {
-                            tags.insert(TAG_CATEGORY.to_string(), cat.clone());
-                        }
-                        if let Some(st) = &dt.tags {
-                            tags.extend(st.clone());
-                        }
-                    }
-                }
-                for (k, v) in &self.tag_overrides {
-                    tags.insert(k.clone(), v.clone());
-                }
-
-                let effective_change_type = change_type.as_deref().unwrap_or("A");
-                let before_occurrences = file_entries
+            let finding_after = result
+                .occurrences
+                .iter()
+                .any(|occurrence| occurrence.side.as_deref() != Some("0"));
+            for (index, (file_path, occurrences)) in file_groups.into_iter().enumerate() {
+                let before = occurrences
                     .iter()
-                    .filter(|occurrence| occurrence.side.as_deref() == Some("0"))
+                    .filter(|o| o.side.as_deref() == Some("0"))
                     .count() as f64;
-                let after_occurrences = file_entries
+                let after = occurrences
                     .iter()
-                    .filter(|occurrence| {
-                        occurrence.side.is_none() || occurrence.side.as_deref() == Some("1")
-                    })
+                    .filter(|o| o.side.as_deref() != Some("0"))
                     .count() as f64;
-                let before_lines = file_entries
+                let before_lines = occurrences
                     .iter()
-                    .filter(|occurrence| occurrence.side.as_deref() == Some("0"))
-                    .map(|occurrence| {
-                        (occurrence.line_end - occurrence.line_start + 1).max(0) as f64
-                    })
-                    .sum::<f64>();
-                let after_lines = file_entries
+                    .filter(|o| o.side.as_deref() == Some("0"))
+                    .map(|o| (o.line_end - o.line_start + 1).max(0) as f64)
+                    .sum();
+                let after_lines = occurrences
                     .iter()
-                    .filter(|occurrence| {
-                        occurrence.side.is_none() || occurrence.side.as_deref() == Some("1")
-                    })
-                    .map(|occurrence| {
-                        (occurrence.line_end - occurrence.line_start + 1).max(0) as f64
-                    })
-                    .sum::<f64>();
-
-                let base_metric = tags
-                    .get(TAG_METRIC)
-                    .cloned()
-                    .unwrap_or_else(|| "finding_count".to_string());
-                let mut metric_values = BTreeMap::new();
-                metric_values.insert(base_metric, (value_before, value_after));
-                metric_values.insert(
-                    "occurrence_count".to_string(),
-                    (before_occurrences, after_occurrences),
-                );
-                metric_values.insert(
-                    "affected_file_count".to_string(),
-                    (value_before, value_after),
-                );
-                metric_values.insert(
-                    "affected_line_count".to_string(),
-                    (before_lines, after_lines),
-                );
-                if file_index == 0 {
-                    metric_values.insert(
-                        "finding_count".to_string(),
-                        (
-                            if finding_has_before { 1.0 } else { 0.0 },
-                            if finding_has_after { 1.0 } else { 0.0 },
-                        ),
+                    .filter(|o| o.side.as_deref() != Some("0"))
+                    .map(|o| (o.line_end - o.line_start + 1).max(0) as f64)
+                    .sum();
+                let mut values = BTreeMap::from([
+                    ("occurrence_count", (before, after)),
+                    (
+                        "affected_file_count",
+                        ((before > 0.0) as u8 as f64, (after > 0.0) as u8 as f64),
+                    ),
+                    ("affected_line_count", (before_lines, after_lines)),
+                ]);
+                if index == 0 {
+                    values.insert(
+                        "finding_count",
+                        (finding_before as u8 as f64, finding_after as u8 as f64),
                     );
                 }
-
-                for (metric_name, (metric_before, metric_after)) in metric_values {
-                    let mut metric_tags = tags.clone();
-                    metric_tags.insert(TAG_METRIC.to_string(), metric_name);
-                    let tags_json = {
-                        let sorted: BTreeMap<_, _> = metric_tags.iter().collect();
-                        serde_json::to_string(&sorted).unwrap_or_default()
-                    };
-                    sqlx::query(
-                        "INSERT INTO metrics (scan_id, file_path, change_type, tech_stack, \
-                         analyzer_id, content_id, finding_key, tags, value_before, value_after, scope) \
-                         VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
-                    )
-                    .bind(scan_id)
-                    .bind(file_path)
-                    .bind(effective_change_type)
-                    .bind(&aggregated_analyzer_id)
-                    .bind(content_id)
-                    .bind(&result.block_hash)
-                    .bind(&tags_json)
-                    .bind(metric_before)
-                    .bind(metric_after)
-                    .bind(Some(format!("{}:{}-{}", self.id, line_start, line_end)))
-                    .execute(&mut *tx)
-                    .await?;
+                for (metric_key, (value_before, value_after)) in values {
+                    metrics.push(FinalizeMetric {
+                        metric_key: metric_key.into(),
+                        file_path: file_path.clone(),
+                        value_before,
+                        value_after,
+                        change_type: occurrences.first().and_then(|o| o.change_type.clone()),
+                        scope: None,
+                        tags: HashMap::new(),
+                    });
                 }
             }
-        }
+            FinalizeFinding {
+                finding_key: result.block_hash,
+                content: Some(result.block_content),
+                occurrences: result.occurrences,
+                tags: tag_overrides.clone(),
+                metrics,
+            }
+        })
+        .collect();
+    FinalizeOutput { findings }
+}
 
-        tx.commit().await?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        // 6. Clean up intermediate blocks
-        sqlx::query("DELETE FROM intermediate_blocks WHERE scan_id = ? AND analyzer_id = ?")
-            .bind(scan_id)
-            .bind(&self.id)
-            .execute(pool)
-            .await?;
+    #[test]
+    fn parses_generic_and_legacy_finalize_protocols() {
+        let generic = r#"{"findings":[{"finding_key":"key","metrics":[],"occurrences":[]}]}"#;
+        assert!(matches!(
+            serde_json::from_str::<ScriptFinalizeResponse>(generic).unwrap(),
+            ScriptFinalizeResponse::Generic(_)
+        ));
 
-        Ok(())
+        let legacy =
+            r#"[{"block_hash":"hash","block_content":"body","block_size":1,"occurrences":[]}]"#;
+        let parsed = serde_json::from_str::<ScriptFinalizeResponse>(legacy).unwrap();
+        assert!(matches!(parsed, ScriptFinalizeResponse::Legacy(_)));
+
+        let legacy = vec![FinalizeMatchResult {
+            block_hash: "hash".into(),
+            block_content: "body".into(),
+            block_size: 1,
+            occurrences: vec![FinalizeOccurrence {
+                file_path: "a.rs".into(),
+                line_start: 1,
+                line_end: 2,
+                change_type: Some("A".into()),
+                side: None,
+            }],
+        }];
+        assert_eq!(
+            legacy_output(legacy, &HashMap::new()).findings[0]
+                .metrics
+                .len(),
+            4
+        );
     }
 }

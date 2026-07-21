@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use codeprism_core::{IntermediateBlock, MatchDetail, MetricEntry, TAG_CATEGORY, TAG_METRIC};
+use codeprism_core::{
+    FinalizeOutput, IntermediateBlock, MatchDetail, MetricEntry, TAG_CATEGORY, TAG_METRIC,
+};
 use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
 
@@ -41,11 +43,17 @@ pub trait FileProcessor: Analyzer + Send + Sync {
     /// before saving to the database.
     fn extract_blocks(&self, file_path: &str, content: &str) -> Vec<IntermediateBlock>;
 
-    /// Global aggregation callback after all files in the scan have been processed.
-    /// Implementations query `intermediate_blocks` for their `analyzer_id`,
-    /// perform the aggregation logic, write results to `metrics` and `matches` tables,
-    /// and clean up their intermediate data.
-    async fn finalize(&self, scan_id: i64, pool: &sqlx::Pool<sqlx::Sqlite>) -> anyhow::Result<()>;
+    /// Global aggregation callback after all files have been extracted. The
+    /// analyzer owns all domain decisions; the scanner owns validation and I/O.
+    async fn finalize(&self, blocks: Vec<IntermediateBlock>) -> anyhow::Result<FinalizeOutput>;
+
+    /// Reset transient analyzer state before a single retry.
+    fn reset(&self) {}
+
+    /// Whether an error represents a transient runtime/process failure.
+    fn is_transient_error(&self, _error: &anyhow::Error) -> bool {
+        false
+    }
 }
 
 mod wasm;

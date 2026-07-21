@@ -1,5 +1,16 @@
 # 跨文件聚合分析框架设计
 
+> 当前实现说明（2026-07）：跨文件分析器是纯领域组件，不持有数据库连接。分析器决定 `group_key`、finding 是否成立、occurrences、tags 和 metrics；Scanner 只负责加载中间数据、校验通用协议并事务落库。本文后续的场景分析仍可作为扩展参考，但若旧草案代码与本节冲突，以本节和实际 trait 为准。
+
+## 当前职责边界
+
+- `extract` 返回通用中间块，并优先使用脚本显式提供的 `group_key`。内容哈希仅作为旧脚本兼容回退。
+- `finalize(blocks)` 返回 `FinalizeOutput { findings }`，不接收连接池，也不直接读写数据库。
+- 每个 finding 显式携带 `finding_key`、展示内容、occurrences、tags 和 metrics。框架不会补充重复检测专用指标。
+- `min_file_count`、最少代码行、分组方式等领域设置保留在分析器脚本内部；YAML 只保留 tags、扫描模式和变更类型等框架元信息。
+- Scanner 对每个分析器独立执行、校验和提交。失败重试一次后保留中间数据并继续其他分析器，扫描状态为 `completed_with_errors`。
+- 成功结果与其中间数据清理处于同一事务；失败数据启动时保留七天。Diff 只向分析器提供变更文件的 old/new 两侧数据。
+
 > 以一个统一的「分片提取 → 中间存储 → 全局聚合」三阶段 pipeline，替代当前独立的 `DuplicationAnalyzer` 路径，使其能承载多种跨文件分析场景。
 
 ---
@@ -96,23 +107,19 @@ pub trait FileProcessor: Analyzer {
     /// 如果不需要跨文件聚合，返回空 vec
     fn extract_blocks(&self, file_path: &str, content: &str) -> Vec<IntermediateBlock>;
 
-    /// 所有文件扫描完成后的聚合回调。
-    ///
-    /// 对于 Python 驱动的分析器（ScriptCrossFileAnalyzer），该方法：
-    /// 1. 从 intermediate_blocks 读取所有 blocks
-    /// 2. 发送 action="finalize" 给 Python 脚本（分组 + 阈值过滤由脚本完成）
-    /// 3. 将脚本返回的 FinalizeMatchResult 写入 metrics + matches 表
-    /// 4. 清理 intermediate_blocks
-    ///
-    /// 分析器的配置参数（阈值等）定义在 Python 脚本内部，不在 YAML 配置中。
-    async fn finalize(&self, scan_id: i64, pool: &sqlx::Pool<sqlx::Sqlite>) -> anyhow::Result<()>;
+    /// 纯领域聚合：不访问数据库，返回分析器定义的通用结果。
+    async fn finalize(&self, blocks: Vec<IntermediateBlock>)
+        -> anyhow::Result<FinalizeOutput>;
+
+    /// 临时进程故障重试前重置状态。
+    fn reset(&self) {}
 }
 ```
 
 **说明**：
 - 继承自 `Analyzer` → 现有分析器不受影响（默认 `extract_blocks` 返回空，`finalize` 是 no-op）
 - `ScriptAnalyzer` 可以实现 `extract_blocks` 而无 `finalize`（纯提取）
-- `ScriptCrossFileAnalyzer` 的 `finalize` 将 blocks 数据发送给 Python 脚本（`action="finalize"` 协议），由脚本完成 group by / 阈值过滤，框架负责将结果写入 metrics + matches 表
+- `ScriptCrossFileAnalyzer` 的 `finalize` 将 blocks 发送给 Python；脚本完成 group by、阈值过滤和 metrics 构造，Scanner 校验并写入 metrics + matches 表
 
 ### 3.2 通用中间表 `intermediate_blocks`
 
@@ -162,13 +169,15 @@ async fn scan_file_common(&mut self, scan_id: i64, path: &str, content: &str,
 async fn finalize_all(&mut self, scan_id: i64) {
     for (id, analyzer) in &self.analyzers {
         if let Some(fp) = analyzer.downcast_ref::<dyn FileProcessor>() {
-            fp.finalize(scan_id, &self.db, &config).await?;
+            // 每个分析器独立失败；临时错误重试一次。
+            match fp.finalize(load_blocks(scan_id, id).await?).await {
+                Ok(output) => validate_persist_and_cleanup_in_one_transaction(
+                    scan_id, id, output
+                ).await?,
+                Err(error) => record_error_and_retain_blocks(id, error),
+            }
         }
     }
-    // 清理中间表
-    sqlx::query("DELETE FROM intermediate_blocks WHERE scan_id = ?")
-        .bind(scan_id)
-        .execute(self.db.pool()).await?;
 }
 
 // scan_snapshot 和 scan_diff 各自调用 scan_file_common + finalize_all，
@@ -303,7 +312,7 @@ WHERE scan_id = ? AND json_extract(tags, '$.metric') = 'duplicate_block'
 
 1. **[已解决]** `finalize` 方法的参数 / 配置传递：`min_file_count`、`min_block_count` 等阈值已移至 Python 脚本内部。框架仅通过 `action="finalize"` 协议传递 blocks 数据，脚本的配置逻辑完全自我包含。
 2. DIFF 模式下历史数据引用策略：应当自动查找上一快照，还是由用户在 UI 中指定？
-3. 新分析类型的 Python 脚本输出格式：`ScriptContentBlock`（extract 阶段）和 `FinalizeMatchResult`（finalize 阶段）的 JSON schema 是否足够泛化，还是需要类型感知的序列化？
+3. **[已解决]** finalize 使用通用 `FinalizeOutput`，finding 显式提供 key、occurrences、tags 和 metrics；旧 `FinalizeMatchResult` 仅作废弃兼容输入。
 4. 性能考量：当仓库很大时（100K+ 文件），`finalize` 中的 blocks 数据通过 stdin/stdout 传输可能成为瓶颈。是否需要用 streaming 或数据库直连的方式分批次处理？
 
 ---

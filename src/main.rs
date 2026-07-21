@@ -240,6 +240,9 @@ async fn main() -> Result<()> {
                             .file_stem()
                             .map(|s| s.to_string_lossy())
                             .unwrap_or_default();
+                        if name.starts_with('_') {
+                            continue;
+                        }
                         println!("\nExample: {}", name);
                         println!("---------------------------------------------------");
 

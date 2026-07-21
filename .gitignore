@@ -23,5 +23,7 @@ codeprism.db-wal
 # Tmp
 tmp/
 artifacts/
+__pycache__/
+*.py[cod]
 cloned_repos/git_repos_cache.json
 .codeprism.db

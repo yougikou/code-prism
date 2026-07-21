@@ -10,7 +10,7 @@ Cross-file analyzer protocol (two-phase):
   1. extract  — {"action":"extract","file_path":"...","content":"..."}
      → returns a JSON array of extracted blocks.
   2. finalize — {"action":"finalize","blocks":[...]}
-     → returns a JSON array of FinalizeMatchResult groups.
+     → returns {"findings": [...]} with explicit occurrences and metrics.
 
 Thresholds are defined here in the script, not in codeprism.yaml.
 """
@@ -18,6 +18,7 @@ Thresholds are defined here in the script, not in codeprism.yaml.
 import json
 import sys
 import xml.etree.ElementTree as ET
+from _cross_file_protocol import content_group_key, duplicate_finding
 from xml.parsers import expat
 
 # ── Script-internal thresholds ──────────────────────────────────────────────
@@ -79,8 +80,7 @@ def get_content_blocks(file_path, content):
             'line_start': line_start,
             'line_end': line_end,
             'block_content': elem_str,
-            'metric_key': 'duplicate_block',
-            'category': 'duplication',
+            'group_key': content_group_key(elem_str),
         })
 
     return results
@@ -106,24 +106,9 @@ def finalize_blocks(blocks):
         if file_count < MIN_FILE_COUNT or block_count < MIN_BLOCK_COUNT:
             continue
 
-        first = entries[0]
-        results.append({
-            'block_hash': h,
-            'block_content': first.get('blob_data') or '',
-            'block_size': first.get('int_data1') or 0,
-            'occurrences': [
-                {
-                    'file_path': e.get('file_path', ''),
-                    'line_start': e.get('int_data2') or 0,
-                    'line_end': e.get('int_data3') or 0,
-                    'change_type': e.get('str_data1'),
-                    'side': e.get('str_data2'),
-                }
-                for e in entries
-            ],
-        })
+        results.append(duplicate_finding(h, entries))
 
-    return results
+    return {'findings': results}
 
 
 def test():
@@ -138,6 +123,7 @@ def test():
     </item>
 </root>"""
     blocks = get_content_blocks("test.xml", xml)
+    assert all(len(block["group_key"]) == 64 for block in blocks)
     # Should find root, item, and name elements
     assert len(blocks) >= 3, f"Expected at least 3 blocks, got {len(blocks)}"
     # The root element serialization should contain the full XML

@@ -10,7 +10,7 @@ Cross-file analyzer protocol (two-phase):
   1. extract  — {"action":"extract","file_path":"...","content":"..."}
      → returns a JSON array of extracted blocks.
   2. finalize — {"action":"finalize","blocks":[...]}
-     → returns a JSON array of FinalizeMatchResult groups.
+     → returns {"findings": [...]} with explicit occurrences and metrics.
 
 Thresholds are defined here in the script, not in codeprism.yaml.
 """
@@ -18,6 +18,7 @@ Thresholds are defined here in the script, not in codeprism.yaml.
 import json
 import sys
 import re
+from _cross_file_protocol import content_group_key, duplicate_finding
 
 # ── Script-internal thresholds ──────────────────────────────────────────────
 MIN_FILE_COUNT = 2
@@ -128,9 +129,8 @@ def get_content_blocks(file_path, content):
             'line_start': body_start + 1,
             'line_end': body_end,
             'block_content': original_body,
+            'group_key': content_group_key(normalized),
             'normalized_content': normalized,
-        'metric_key': 'duplicate_block',
-        'category': 'duplication',
         })
 
         i = body_end
@@ -158,24 +158,9 @@ def finalize_blocks(blocks):
         if file_count < MIN_FILE_COUNT or block_count < MIN_BLOCK_COUNT:
             continue
 
-        first = entries[0]
-        results.append({
-            'block_hash': h,
-            'block_content': first.get('blob_data') or '',
-            'block_size': first.get('int_data1') or 0,
-            'occurrences': [
-                {
-                    'file_path': e.get('file_path', ''),
-                    'line_start': e.get('int_data2') or 0,
-                    'line_end': e.get('int_data3') or 0,
-                    'change_type': e.get('str_data1'),
-                    'side': e.get('str_data2'),
-                }
-                for e in entries
-            ],
-        })
+        results.append(duplicate_finding(h, entries))
 
-    return results
+    return {'findings': results}
 
 
 def test():
@@ -190,9 +175,19 @@ def foo():
     assert len(blocks) == 1, f"Expected 1, got {len(blocks)}"
     assert blocks[0]["block_content"].strip() == "pass"
     assert blocks[0]["normalized_content"] == "pass"
+    assert len(blocks[0]["group_key"]) == 64
     assert blocks[0]["line_start"] == 3
     assert blocks[0]["line_end"] == 3
     assert blocks[0]["block_size"] == -20
+    sample = [{
+        "file_path": f"file{i}.py", "group_key": "custom-key", "blob_data": "pass",
+        "int_data2": 1, "int_data3": 1, "str_data1": "A", "str_data2": None,
+    } for i in range(3)]
+    output = finalize_blocks(sample)
+    assert output["findings"][0]["finding_key"] == "custom-key"
+    assert {m["metric_key"] for m in output["findings"][0]["metrics"]} == {
+        "finding_count", "occurrence_count", "affected_file_count", "affected_line_count"
+    }
     print("  Test 1 (simple body) passed")
 
     # Test 2: Class with methods — body of each method
