@@ -53,6 +53,8 @@ CodePrism is a **high-performance code analysis tool** built with Rust. It scans
 
 Runtime responsibilities are split by boundary: `state.rs` owns shared server state, `scan_routes.rs` owns scan-job and summary HTTP contracts, `api_error.rs` owns JSON API errors, and the scanner keeps summary persistence in `summary.rs`. On the frontend, scan-job transport lives in `services/scan.ts` and polling/ETA state lives in `hooks/useScanJob.ts`; page components remain presentation and workflow coordinators.
 
+Cargo builds fail if npm is unavailable or the frontend build fails, preventing stale `web/dist` assets from being embedded silently. CI and release jobs that already built and verified the frontend may explicitly set `CODEPRISM_SKIP_WEB_BUILD=1`; the prebuilt `web/dist` directory must still exist.
+
 ### CLI Commands
 
 - `init` - Initialize database and create default config

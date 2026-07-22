@@ -53,6 +53,8 @@ CodePrism 是一个使用 Rust 构建的**高性能代码分析工具**。它可
 
 运行期职责按边界拆分：`state.rs` 管理服务端共享状态，`scan_routes.rs` 管理扫描任务与摘要 HTTP 契约，`api_error.rs` 统一 JSON API 错误，Scanner 的摘要持久化位于 `summary.rs`。前端的扫描任务请求位于 `services/scan.ts`，轮询与 ETA 状态位于 `hooks/useScanJob.ts`，页面组件只负责展示和工作流协调。
 
+如果 npm 不可用或前端构建失败，Cargo 构建会直接失败，避免静默嵌入过期的 `web/dist` 资源。已经显式构建并验证前端的 CI 和发布任务可设置 `CODEPRISM_SKIP_WEB_BUILD=1`，但预构建的 `web/dist` 仍必须存在。
+
 ### CLI 命令
 
 - `init` - 初始化数据库并创建默认配置
