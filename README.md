@@ -115,7 +115,7 @@ Run self-tests for all analyzers at once:
 ```bash
 codeprism test-analyzers
 ```
-This auto-discovers all `.py` files in `custom_analyzers/` and runs their test entry point.
+This auto-discovers analyzer `.py` files in `custom_analyzers/` and runs their test entry point. Helper modules whose names start with `_` are ignored.
 
 **Example analyzers** (`custom_analyzers/`):
 - [`gosu_complexity.py`](custom_analyzers/gosu_complexity.py) — Cyclomatic complexity for Gosu language
@@ -129,9 +129,9 @@ Cross-file analyzers detect patterns that span multiple files — most commonly 
    ```json
    {"action": "extract", "file_path": "src/main.rs", "content": "fn main() { ... }"}
    ```
-   Returns a JSON array of extracted blocks:
+   Returns extracted blocks. `group_key` is analyzer-defined; the normalized-content hash fallback exists only for compatibility:
    ```json
-   [{"block_size": 12, "line_start": 5, "line_end": 16, "block_content": "let x = 1;", "normalized_content": "let x=1;", "metric_key": "duplicate_block", "category": "duplication"}]
+   [{"group_key": "domain-or-content-key", "block_size": 12, "line_start": 5, "line_end": 16, "block_content": "let x = 1;"}]
    ```
 
 2. **`finalize` phase** (once after all files are scanned):
@@ -140,12 +140,12 @@ Cross-file analyzers detect patterns that span multiple files — most commonly 
      {"file_path": "a.rs", "group_key": "sha256...", "blob_data": "let x = 1;", "int_data1": 12, "int_data2": 5, "int_data3": 16, "str_data1": "A", "str_data2": "1"}
    ]}
    ```
-   Returns a JSON array of `FinalizeMatchResult` groups — only the groups that pass the script's own thresholds:
+   Returns a generic object. The analyzer decides which findings exist and emits every occurrence, tag, and metric explicitly:
    ```json
-   [{"block_hash": "sha256...", "block_content": "let x = 1;", "block_size": 12, "occurrences": [
-     {"file_path": "a.rs", "line_start": 5, "line_end": 16, "change_type": "A", "side": "1"},
-     {"file_path": "b.rs", "line_start": 10, "line_end": 21, "change_type": "A", "side": "1"}
-   ]}]
+   {"findings":[{"finding_key":"domain-or-content-key","content":"let x = 1;","tags":{"category":"duplication"},
+     "occurrences":[{"file_path":"a.rs","line_start":5,"line_end":16,"change_type":"A","side":"1"}],
+     "metrics":[{"metric_key":"occurrence_count","file_path":"a.rs","value_before":0,"value_after":1,"change_type":"A"}]
+   }]}
    ```
 
 **Key difference from single-file analyzers**: Threshold logic lives **inside the Python script**, not in YAML:
@@ -163,11 +163,11 @@ def finalize_blocks(blocks):
         distinct_files = set(e.get('file_path') for e in entries)
         if len(distinct_files) < MIN_FILE_COUNT or len(entries) < MIN_BLOCK_COUNT:
             continue
-        # build & append FinalizeMatchResult
-    return results
+        # build a generic finding and its exact metrics
+    return {"findings": results}
 ```
 
-YAML registration is minimal — only tags, no thresholds:
+YAML registration contains framework metadata and optional tag overrides only. Detection thresholds, minimum block size, grouping, and metric construction belong in the script:
 ```yaml
 custom_cross_file_analyzers:
   duplicate_rust_fns:
@@ -181,6 +181,8 @@ custom_cross_file_analyzers:
 - [`duplicate_python_defs.py`](custom_analyzers/duplicate_python_defs.py) — duplicate Python function bodies
 - [`duplicate_gosu_methods.py`](custom_analyzers/duplicate_gosu_methods.py) — duplicate Gosu method bodies
 - [`duplicate_xml_elements.py`](custom_analyzers/duplicate_xml_elements.py) — duplicate XML elements
+
+The scanner validates each analyzer output and persists its findings atomically. A failed analyzer is retried once, its intermediate rows are retained, and other analyzers continue. The job finishes as `completed_with_errors`; retained rows older than seven days are removed at startup. Diff scans intentionally analyze changed files only.
 
 ### Match Detail Viewing
 

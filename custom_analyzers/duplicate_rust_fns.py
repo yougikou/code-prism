@@ -10,7 +10,7 @@ Cross-file analyzer protocol (two-phase):
   1. extract  — {"action":"extract","file_path":"...","content":"..."}
      → returns a JSON array of extracted blocks.
   2. finalize — {"action":"finalize","blocks":[...]}
-     → returns a JSON array of FinalizeMatchResult groups.
+     → returns {"findings": [...]} with explicit occurrences and metrics.
 
 Thresholds are defined here in the script, not in codeprism.yaml.
 """
@@ -18,6 +18,7 @@ Thresholds are defined here in the script, not in codeprism.yaml.
 import json
 import sys
 import re
+from _cross_file_protocol import content_group_key, duplicate_finding
 
 # ── Script-internal thresholds ──────────────────────────────────────────────
 # These replace the old min_file_count / min_block_count YAML settings.
@@ -125,9 +126,8 @@ def get_content_blocks(file_path, content):
                         'line_start': sig_end + 1,
                         'line_end': sig_end + 1,
                         'block_content': original_body,
+                        'group_key': content_group_key(normalized),
                         'normalized_content': normalized,
-                        'metric_key': 'duplicate_block',
-                        'category': 'duplication',
                     })
                 i = fn_end + 1
                 continue
@@ -201,9 +201,8 @@ def get_content_blocks(file_path, content):
             'line_start': body_start_line + 1,
             'line_end': fn_end,
             'block_content': original_body,
+			'group_key': content_group_key(normalized),
 			'normalized_content': normalized,
-			'metric_key': 'duplicate_block',
-			'category': 'duplication',
 		})
 
         i = fn_end + 1
@@ -235,24 +234,9 @@ def finalize_blocks(blocks):
         if file_count < MIN_FILE_COUNT or block_count < MIN_BLOCK_COUNT:
             continue
 
-        first = entries[0]
-        results.append({
-            'block_hash': h,
-            'block_content': first.get('blob_data') or '',
-            'block_size': first.get('int_data1') or 0,
-            'occurrences': [
-                {
-                    'file_path': e.get('file_path', ''),
-                    'line_start': e.get('int_data2') or 0,
-                    'line_end': e.get('int_data3') or 0,
-                    'change_type': e.get('str_data1'),
-                    'side': e.get('str_data2'),
-                }
-                for e in entries
-            ],
-        })
+        results.append(duplicate_finding(h, entries))
 
-    return results
+    return {'findings': results}
 
 
 def test():
@@ -270,6 +254,7 @@ fn foo() {
     assert "fn foo()" not in blocks[0]["block_content"], f"Signature leaked: {blocks[0]['block_content']!r}"
     assert "let x = 1;" in blocks[0]["block_content"]
     assert blocks[0]["normalized_content"] == "letx=1;"
+    assert len(blocks[0]["group_key"]) == 64
     assert blocks[0]["block_size"] == -10
     print("  Test 1 (simple body) passed")
 

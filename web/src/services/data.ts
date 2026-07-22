@@ -604,7 +604,7 @@ export interface ScanJobResponse {
   job_id: number;
   project_name: string;
   scan_mode: string;
-  status: 'queued' | 'running' | 'completed' | 'failed';
+  status: 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'failed';
   progress: number;
   progress_message: string | null;
   error_message: string | null;

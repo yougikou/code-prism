@@ -325,10 +325,12 @@ export default function ExecutePage() {
     const pollInterval = setInterval(async () => {
       try {
         const job = await fetchScanJob(jobId)
-        if (job.status === 'completed') {
+        if (job.status === 'completed' || job.status === 'completed_with_errors') {
           setScanProgress({
             status: 'success',
-            message: t('execute.scanCompleted'),
+            message: job.status === 'completed_with_errors'
+              ? (job.progress_message || 'Scan completed with analyzer errors')
+              : t('execute.scanCompleted'),
             projectName: job.project_name,
             scanId: job.scan_id,
             progress: 100,
