@@ -27,4 +27,26 @@ describe('requestJson', () => {
     controller.abort()
     await expect(result).rejects.toMatchObject({ name: 'AbortError' })
   })
+
+  it('starts a fresh request when a cancelled request is immediately replaced', async () => {
+    const fetchMock = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      if (fetchMock.mock.calls.length === 1) {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+        })
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ value: 2 }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const controller = new AbortController()
+    const first = requestJson<{ value: number }>('/retry', { signal: controller.signal })
+    const firstRejection = expect(first).rejects.toMatchObject({ name: 'AbortError' })
+    controller.abort()
+
+    const replacement = requestJson<{ value: number }>('/retry')
+    await firstRejection
+    await expect(replacement).resolves.toEqual({ value: 2 })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
 })

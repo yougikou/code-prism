@@ -32,6 +32,10 @@ export async function requestJson<T>(url: string, options: RequestOptions = {}):
   if (cached) cache.delete(url)
 
   let current = pending.get(url)
+  if (current?.controller.signal.aborted) {
+    pending.delete(url)
+    current = undefined
+  }
   if (!current) {
     const controller = new AbortController()
     const promise = fetch(url, { signal: controller.signal }).then(async response => {
@@ -41,7 +45,9 @@ export async function requestJson<T>(url: string, options: RequestOptions = {}):
         cache.set(url, { value, expiresAt: Date.now() + options.cacheTtlMs! })
       }
       return value
-    }).finally(() => pending.delete(url))
+    }).finally(() => {
+      if (pending.get(url)?.controller === controller) pending.delete(url)
+    })
     current = { controller, promise, subscribers: 0 }
     pending.set(url, current)
   }
@@ -58,7 +64,10 @@ export async function requestJson<T>(url: string, options: RequestOptions = {}):
     }
     const onAbort = () => {
       release()
-      if (request.subscribers === 0 && pending.get(url) === request) request.controller.abort()
+      if (request.subscribers === 0 && pending.get(url) === request) {
+        pending.delete(url)
+        request.controller.abort()
+      }
       reject(new DOMException('Request aborted', 'AbortError'))
     }
     if (options.signal?.aborted) return onAbort()
