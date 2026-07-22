@@ -1152,13 +1152,15 @@ impl Scanner {
             merged_data.entry(key).or_insert((None, None)).1 = Some(m.value);
         }
 
+        merged_data.retain(|_, (before, after)| {
+            before.is_some_and(|value| value != 0.0) || after.is_some_and(|value| value != 0.0)
+        });
+        if merged_data.is_empty() {
+            return Ok(());
+        }
+
+        let mut transaction = self.db.pool().begin().await?;
         for (key, (val_before, val_after)) in merged_data {
-            // Skip entries where both values are zero or NULL — redundant data
-            let before_zero = val_before.map(|v| v == 0.0).unwrap_or(true);
-            let after_zero = val_after.map(|v| v == 0.0).unwrap_or(true);
-            if before_zero && after_zero {
-                continue;
-            }
             sqlx::query(
                 "INSERT INTO metrics (scan_id, file_path, change_type, old_file_path, tech_stack, analyzer_id, tags, value_before, value_after, scope)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1173,9 +1175,10 @@ impl Scanner {
             .bind(val_before)
             .bind(val_after)
             .bind(&key.scope)
-            .execute(self.db.pool())
+            .execute(&mut *transaction)
             .await?;
         }
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -1185,14 +1188,21 @@ impl Scanner {
         matches: Vec<codeprism_core::MatchDetail>,
         change_type: &str,
     ) -> Result<()> {
+        if matches.is_empty() {
+            return Ok(());
+        }
+        let mut transaction = self.db.pool().begin().await?;
+        let mut batch_content_ids = HashMap::new();
+        let mut new_cache_entries = Vec::new();
         for m in matches {
             let content_hash = codeprism_core::hash_match_content(&m.matched_text);
-            let cached_content_id = self
-                .match_content_cache
-                .lock()
-                .unwrap()
-                .get(&content_hash)
-                .copied();
+            let cached_content_id = batch_content_ids.get(&content_hash).copied().or_else(|| {
+                self.match_content_cache
+                    .lock()
+                    .unwrap()
+                    .get(&content_hash)
+                    .copied()
+            });
             let content_id = if let Some(id) = cached_content_id {
                 id
             } else {
@@ -1206,15 +1216,13 @@ impl Scanner {
                 .bind(&m.matched_text)
                 .bind(m.matched_text.len() as i64)
                 .bind(m.matched_text.lines().count() as i64)
-                .fetch_one(self.db.pool())
+                .fetch_one(&mut *transaction)
                 .await?;
                 if stored_content != m.matched_text {
                     anyhow::bail!("SHA-256 collision while storing match content");
                 }
-                self.match_content_cache
-                    .lock()
-                    .unwrap()
-                    .insert(content_hash, id);
+                batch_content_ids.insert(content_hash.clone(), id);
+                new_cache_entries.push((content_hash, id));
                 id
             };
 
@@ -1235,9 +1243,14 @@ impl Scanner {
             .bind(change_type)
             .bind(&m.context_before)
             .bind(&m.context_after)
-            .execute(self.db.pool())
+            .execute(&mut *transaction)
             .await?;
         }
+        transaction.commit().await?;
+        self.match_content_cache
+            .lock()
+            .unwrap()
+            .extend(new_cache_entries);
         Ok(())
     }
 
@@ -1316,6 +1329,10 @@ impl Scanner {
         scan_id: i64,
         blocks: Vec<codeprism_core::IntermediateBlock>,
     ) -> Result<()> {
+        if blocks.is_empty() {
+            return Ok(());
+        }
+        let mut transaction = self.db.pool().begin().await?;
         for block in blocks {
             sqlx::query(
                 "INSERT INTO intermediate_blocks \
@@ -1333,9 +1350,10 @@ impl Scanner {
             .bind(block.int_data3)
             .bind(&block.str_data1)
             .bind(&block.str_data2)
-            .execute(self.db.pool())
+            .execute(&mut *transaction)
             .await?;
         }
+        transaction.commit().await?;
         Ok(())
     }
 

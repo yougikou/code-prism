@@ -1,5 +1,6 @@
 import React from 'react';
-import ReactECharts from 'echarts-for-react';
+import ReactEChartsCore from 'echarts-for-react/lib/core';
+import echarts from '@/lib/echarts';
 
 export interface ChartOptions {
   tooltip?: Record<string, unknown>;
@@ -46,7 +47,7 @@ const ChartRenderer = React.memo(
       }
     };
 
-    return <ReactECharts option={finalOptions} style={{ height }} className={className} opts={{ renderer: 'canvas' }} />;
+    return <ReactEChartsCore echarts={echarts} option={finalOptions} style={{ height }} className={className} opts={{ renderer: 'canvas' }} />;
   },
   (prevProps, nextProps) => {
     return prevProps.height === nextProps.height

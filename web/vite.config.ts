@@ -18,6 +18,15 @@ export default defineConfig({
       }
     }
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          charts: ['echarts/core', 'echarts/charts', 'echarts/components', 'echarts/renderers', 'echarts-for-react/lib/core'],
+        },
+      },
+    },
+  },
   test: {
     globals: true,
     environment: 'jsdom',

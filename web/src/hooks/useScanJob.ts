@@ -2,6 +2,14 @@ import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 
 import { useTranslation } from 'react-i18next'
 import { fetchScanJob } from '@/services/scan'
 
+const INITIAL_POLL_DELAY_MS = 2_000
+const MAX_POLL_DELAY_MS = 15_000
+
+export function nextPollingDelay(previousDelay: number, progressChanged: boolean): number {
+  if (progressChanged) return INITIAL_POLL_DELAY_MS
+  return Math.min(Math.round(previousDelay * 1.5), MAX_POLL_DELAY_MS)
+}
+
 export interface ScanProgress {
   status: 'idle' | 'loading' | 'success' | 'error'
   message: string
@@ -24,10 +32,23 @@ export function useScanJob(
     const jobId = scanProgress.jobId
     if (!jobId || scanProgress.status === 'success' || scanProgress.status === 'error') return
     history.current = []
+    let stopped = false
+    let timer: number | undefined
+    let controller: AbortController | undefined
+    let delay = INITIAL_POLL_DELAY_MS
+    let previousProgress: number | undefined
+
+    const schedule = () => {
+      if (stopped || document.hidden) return
+      timer = window.setTimeout(() => void poll(), delay)
+    }
 
     const poll = async () => {
+      if (stopped || document.hidden) return
+      timer = undefined
+      controller = new AbortController()
       try {
-        const job = await fetchScanJob(jobId)
+        const job = await fetchScanJob(jobId, controller.signal)
         if (job.status === 'completed' || job.status === 'completed_with_errors') {
           setScanProgress({
             status: 'success',
@@ -39,11 +60,13 @@ export function useScanJob(
             progress: 100,
           })
           setEta(null)
+          stopped = true
           return
         }
         if (job.status === 'failed') {
           setScanProgress({ status: 'error', message: job.error_message || t('execute.scanFailed') })
           setEta(null)
+          stopped = true
           return
         }
 
@@ -68,14 +91,37 @@ export function useScanJob(
           progressMessage: job.progress_message || undefined,
           message: job.progress_message || t('execute.scanningProgress', { progress: job.progress }),
         }))
-      } catch {
+        delay = nextPollingDelay(delay, previousProgress !== job.progress)
+        previousProgress = job.progress
+      } catch (error) {
         // A transient polling failure should not terminate the scan UI.
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          delay = nextPollingDelay(delay, false)
+        }
+      } finally {
+        controller = undefined
+        schedule()
       }
     }
 
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        if (timer !== undefined) window.clearTimeout(timer)
+        controller?.abort()
+      } else if (!stopped) {
+        delay = INITIAL_POLL_DELAY_MS
+        if (!controller) void poll()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
     void poll()
-    const interval = window.setInterval(poll, 2_000)
-    return () => window.clearInterval(interval)
+    return () => {
+      stopped = true
+      if (timer !== undefined) window.clearTimeout(timer)
+      controller?.abort()
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
   }, [scanProgress.jobId, scanProgress.status, setScanProgress, t])
 
   return eta

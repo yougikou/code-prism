@@ -9,7 +9,7 @@ describe('scan service', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => job }))
 
     await expect(fetchScanJob(7)).resolves.toEqual(job)
-    expect(fetch).toHaveBeenCalledWith('/api/v1/scan-jobs/7')
+    expect(fetch).toHaveBeenCalledWith('/api/v1/scan-jobs/7', { signal: undefined })
   })
 
   it('normalizes API errors', async () => {

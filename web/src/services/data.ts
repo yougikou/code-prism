@@ -1,4 +1,5 @@
 import type { ScanStartedResponse } from './scan'
+import { isAbortError, requestJson } from './request'
 
 export interface AggregationResult {
   label: string;
@@ -46,6 +47,7 @@ export interface FetchTrendOptions {
   scanIds?: number[];
   techStack?: string;
   changeType?: string;
+  signal?: AbortSignal;
 }
 
 // ── End Trend types ──
@@ -159,6 +161,7 @@ export interface FetchViewOptions {
   techStack?: string;
   changeType?: string;
   groupBy?: string;
+  signal?: AbortSignal;
 }
 
 export async function fetchView(
@@ -182,12 +185,9 @@ export async function fetchView(
     const queryString = params.toString();
     const url = `/api/v1/projects/${projectId}/scans/${scanId}/views/${viewId}${queryString ? `?${queryString}` : ''}`;
 
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`Failed to fetch view ${viewId}`);
-    }
-    return await res.json();
+    return await requestJson<ViewResponse>(url, { signal: typeof options === 'string' ? undefined : options?.signal, cacheTtlMs: 15_000 });
   } catch (error) {
+    if (isAbortError(error)) throw error;
     console.warn(`Error fetching view ${viewId}, falling back to empty`, error);
     return { view_id: viewId, items: [] };
   }
@@ -212,12 +212,9 @@ export async function fetchTrend(
     if (options?.changeType) params.set('change_type', options.changeType);
 
     const url = `/api/v1/projects/${encodeURIComponent(projectName)}/trends/${viewId}?${params}`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`Failed to fetch trend ${viewId}: ${res.statusText}`);
-    }
-    return await res.json();
+    return await requestJson<TrendResponse>(url, { signal: options?.signal, cacheTtlMs: 30_000 });
   } catch (error) {
+    if (isAbortError(error)) throw error;
     console.warn(`Error fetching trend ${viewId}, falling back to empty`, error);
     return { view_id: viewId, series: [] };
   }
@@ -694,15 +691,20 @@ export interface ScanSummary {
   analyzer_stats: AnalyzerStatItem[];
 }
 
-export async function fetchScanSummary(projectName: string, scanId: string | number): Promise<ScanSummary | null> {
+export async function fetchScanSummary(
+  projectName: string,
+  scanId: string | number,
+  signal?: AbortSignal,
+): Promise<ScanSummary | null> {
   try {
-    const res = await fetch(`/api/v1/projects/${encodeURIComponent(projectName)}/scans/${scanId}/summary`);
+    const res = await fetch(`/api/v1/projects/${encodeURIComponent(projectName)}/scans/${scanId}/summary`, { signal });
     if (!res.ok) {
       if (res.status === 404) return null;
       throw new Error(`Failed to fetch scan summary: ${res.statusText}`);
     }
     return await res.json();
   } catch (error) {
+    if (isAbortError(error)) throw error;
     console.error("Error fetching scan summary:", error);
     return null;
   }
