@@ -1,9 +1,12 @@
 pub mod aggregation;
+pub mod api_error;
 pub mod assets;
 pub mod config;
 pub mod git_cache;
 pub mod git_routes;
 pub mod routes;
+pub mod scan_routes;
+pub mod state;
 pub mod template_routes;
 
 use anyhow::Result;
@@ -25,10 +28,11 @@ use crate::git_routes::{
     list_repos, pull_branch,
 };
 use crate::routes::{
-    AppState, add_local_project, create_project, delete_project, execute_scan, get_findings,
-    get_matches, get_scan_job, get_scan_summary, get_scans, get_view, list_unified_projects,
-    static_handler,
+    add_local_project, create_project, delete_project, execute_scan, get_findings, get_matches,
+    get_scans, get_view, list_unified_projects, static_handler,
 };
+use crate::scan_routes::{get_scan_job, get_scan_summary};
+use crate::state::AppState;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -36,7 +40,7 @@ use crate::routes::{
         crate::routes::get_view,
         crate::routes::get_scans,
         crate::routes::get_config,
-        crate::routes::get_scan_job,
+        crate::scan_routes::get_scan_job,
         crate::routes::get_trend,
     ),
     components(schemas(
@@ -47,8 +51,8 @@ use crate::routes::{
         crate::config::ViewKind,
         crate::config::SourceConfig,
         crate::config::TopNParams,
-        crate::routes::ScanStartedResponse,
-        crate::routes::ScanJobResponse,
+        crate::scan_routes::ScanStartedResponse,
+        crate::scan_routes::ScanJobResponse,
     ))
 )]
 struct ApiDoc;

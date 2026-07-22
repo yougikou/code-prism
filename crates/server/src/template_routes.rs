@@ -6,7 +6,7 @@ use axum::{
 use codeprism_core::ProjectConfig;
 use std::collections::HashMap;
 
-use crate::routes::AppState;
+use crate::state::AppState;
 
 /// GET /api/v1/config/templates — list all project templates
 pub async fn list_templates(State(state): State<AppState>) -> impl IntoResponse {

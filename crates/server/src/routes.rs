@@ -1,53 +1,22 @@
 use crate::aggregation::{AggregationResult, TopNAggregator, ViewFilters};
 use crate::config::{AppConfig, ViewConfig, ViewKind};
-use crate::git_cache::GitCache;
+pub use crate::state::AppState;
 use axum::{
     extract::{Json as AxumJson, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json, Response},
 };
-use codeprism_core::{CodePrismConfig, MatchDetail};
-use codeprism_database::Db;
+use codeprism_core::MatchDetail;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::sync::{Arc, RwLock};
 
+use crate::scan_routes::{ScanJobHandle, ScanStartedResponse};
 use codeprism_scanner::Scanner;
 
 // Route macro ViewFilters usage might need IntoParams available?
 // Actually ViewFilters derives IntoParams.
 // "params(..., ViewFilters)" usage needs ToSchema? ToParams?
 // Utoipa: params(..., ViewFilters) works if ViewFilters implements IntoParams.
-
-#[derive(Clone)]
-pub struct AppState {
-    pub(crate) config: Arc<RwLock<AppConfig>>,
-    pub(crate) db: Db,
-    pub(crate) core_config: Arc<RwLock<CodePrismConfig>>,
-    pub(crate) git_cache: GitCache,
-    pub config_path: String,
-}
-
-impl AppState {
-    /// Create a new AppState for use in tests or external builders
-    pub fn new(
-        config: Arc<RwLock<AppConfig>>,
-        db: Db,
-        core_config: Arc<RwLock<CodePrismConfig>>,
-        config_path: String,
-    ) -> Self {
-        let cloned_repos_dir = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .join("cloned_repos");
-        Self {
-            config,
-            db,
-            core_config,
-            git_cache: GitCache::new(cloned_repos_dir),
-            config_path,
-        }
-    }
-}
 
 #[derive(Serialize, utoipa::ToSchema)]
 pub struct ProjectInfo {
@@ -556,204 +525,7 @@ pub struct ScanResponseData {
 
 // ── Scan Job Tracking ────────────────────────────────────────────────
 
-#[derive(Serialize, utoipa::ToSchema)]
-pub struct ScanStartedResponse {
-    pub job_id: i64,
-    pub project_name: String,
-    pub status: String,
-    pub message: String,
-}
-
-#[derive(Serialize, utoipa::ToSchema)]
-pub struct ScanJobResponse {
-    pub job_id: i64,
-    pub project_name: String,
-    pub scan_mode: String,
-    pub status: String,
-    pub progress: u8,
-    pub progress_message: Option<String>,
-    pub error_message: Option<String>,
-    pub scan_id: Option<i64>,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct AnalyzerStatItem {
-    pub analyzer_id: String,
-    pub files_analyzed: i64,
-    pub execution_errors: i64,
-    pub error_details: Vec<String>,
-}
-
-#[derive(Serialize)]
-pub struct ScanSummaryResponse {
-    pub scan_id: i64,
-    pub total_files_scanned: i64,
-    pub total_analyzers_loaded: i64,
-    pub total_analyzers_executed: i64,
-    pub total_analyzer_executions: i64,
-    pub total_errors: i64,
-    pub load_errors: Vec<String>,
-    pub analyzer_stats: Vec<AnalyzerStatItem>,
-}
-
-#[derive(Clone)]
-pub struct ScanJobHandle {
-    db: Db,
-    job_id: i64,
-}
-
-impl ScanJobHandle {
-    pub fn new(db: Db, job_id: i64) -> Self {
-        Self { db, job_id }
-    }
-
-    pub fn job_id(&self) -> i64 {
-        self.job_id
-    }
-
-    pub async fn set_running(&self) {
-        self.set_status("running", 10).await;
-    }
-
-    pub async fn set_completed(&self, scan_id: i64) {
-        sqlx::query(
-            "UPDATE scan_jobs SET status = 'completed', progress = 100, scan_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        )
-        .bind(scan_id)
-        .bind(self.job_id)
-        .execute(self.db.pool())
-        .await
-        .ok();
-    }
-
-    pub async fn set_completed_with_errors(&self, scan_id: i64) {
-        sqlx::query(
-            "UPDATE scan_jobs SET status = 'completed_with_errors', progress = 100, scan_id = ?, \
-             progress_message = 'Scan completed; one or more cross-file analyzers failed', \
-             updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        )
-        .bind(scan_id)
-        .bind(self.job_id)
-        .execute(self.db.pool())
-        .await
-        .ok();
-    }
-
-    pub async fn set_failed(&self, error: &str) {
-        sqlx::query(
-            "UPDATE scan_jobs SET status = 'failed', progress = 100, error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        )
-        .bind(error)
-        .bind(self.job_id)
-        .execute(self.db.pool())
-        .await
-        .ok();
-    }
-
-    async fn set_status(&self, status: &str, progress: u8) {
-        sqlx::query(
-            "UPDATE scan_jobs SET status = ?, progress = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        )
-        .bind(status)
-        .bind(progress as i32)
-        .bind(self.job_id)
-        .execute(self.db.pool())
-        .await
-        .ok();
-    }
-}
-
 // ── Scan Job API ─────────────────────────────────────────────────────
-
-#[utoipa::path(
-    get,
-    path = "/api/v1/scan-jobs/{job_id}",
-    params(
-        ("job_id" = i64, Path, description = "Scan Job ID"),
-    ),
-    responses(
-        (status = 200, description = "Scan job status", body = ScanJobResponse),
-        (status = 404, description = "Job not found"),
-        (status = 500, description = "Internal server error")
-    )
-)]
-pub async fn get_scan_job(
-    State(state): State<AppState>,
-    Path(job_id): Path<i64>,
-) -> impl IntoResponse {
-    match sqlx::query_as::<_, (i64, String, String, String, i32, Option<String>, Option<String>, Option<i64>, String, String)>(
-        "SELECT id, project_name, scan_mode, status, progress, progress_message, error_message, scan_id, created_at, updated_at FROM scan_jobs WHERE id = ?"
-    )
-    .bind(job_id)
-    .fetch_optional(state.db.pool())
-    .await
-    {
-        Ok(Some((id, pn, sm, st, pr, pm, em, si, ca, ua))) => {
-            Json(ScanJobResponse {
-                job_id: id,
-                project_name: pn,
-                scan_mode: sm,
-                status: st,
-                progress: pr as u8,
-                progress_message: pm,
-                error_message: em,
-                scan_id: si,
-                created_at: ca,
-                updated_at: ua,
-            })
-            .into_response()
-        }
-        Ok(None) => (StatusCode::NOT_FOUND, "Job not found").into_response(),
-        Err(e) => {
-            eprintln!("DB error fetching scan job: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
-        }
-    }
-}
-
-/// GET /api/v1/projects/:project_name/scans/:scan_id/summary
-pub async fn get_scan_summary(
-    State(state): State<AppState>,
-    Path((_project_name, scan_id)): Path<(String, i64)>,
-) -> impl IntoResponse {
-    let row = sqlx::query_as::<_, (String, i64, i64, i64, i64, i64, String)>(
-        "SELECT load_errors, total_files_scanned, total_analyzers_loaded, \
-                total_analyzers_executed, total_analyzer_executions, total_errors, \
-                analyzer_stats
-         FROM scan_summaries WHERE scan_id = ?",
-    )
-    .bind(scan_id)
-    .fetch_optional(state.db.pool())
-    .await;
-
-    match row {
-        Ok(Some((load_errors_json, files, loaded, executed, executions, errors, stats_json))) => {
-            let load_errors: Vec<String> =
-                serde_json::from_str(&load_errors_json).unwrap_or_default();
-            let analyzer_stats: Vec<AnalyzerStatItem> =
-                serde_json::from_str(&stats_json).unwrap_or_default();
-
-            Json(ScanSummaryResponse {
-                scan_id,
-                total_files_scanned: files,
-                total_analyzers_loaded: loaded,
-                total_analyzers_executed: executed,
-                total_analyzer_executions: executions,
-                total_errors: errors,
-                load_errors,
-                analyzer_stats,
-            })
-            .into_response()
-        }
-        Ok(None) => (StatusCode::NOT_FOUND, "Scan summary not found").into_response(),
-        Err(e) => {
-            eprintln!("DB error fetching scan summary: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
-        }
-    }
-}
 
 #[derive(Serialize)]
 pub struct MatchesResponse {

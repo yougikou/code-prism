@@ -51,6 +51,8 @@ CodePrism は Rust で構築された**高性能コード分析ツール**です
 - **チャート**: 高性能データ可視化のための Apache ECharts
 - **Git 操作**: libgit2 を介した直接 Git ODB アクセス、checkout 不要
 
+実行時の責務は境界ごとに分割されています。`state.rs` はサーバー共有状態、`scan_routes.rs` はスキャンジョブとサマリーの HTTP 契約、`api_error.rs` は JSON API エラー、Scanner の `summary.rs` はサマリー永続化を担当します。フロントエンドでは `services/scan.ts` がスキャンジョブ通信、`hooks/useScanJob.ts` がポーリングと ETA 状態を担当し、ページコンポーネントは表示とワークフロー調整に集中します。
+
 ### CLI コマンド
 
 - `init` - データベースを初期化し、デフォルト設定を作成

@@ -51,6 +51,8 @@ CodePrism 是一个使用 Rust 构建的**高性能代码分析工具**。它可
 - **图表**: Apache ECharts 用于高性能数据可视化
 - **Git 操作**: 通过 libgit2 直接访问 Git ODB，无需 checkout
 
+运行期职责按边界拆分：`state.rs` 管理服务端共享状态，`scan_routes.rs` 管理扫描任务与摘要 HTTP 契约，`api_error.rs` 统一 JSON API 错误，Scanner 的摘要持久化位于 `summary.rs`。前端的扫描任务请求位于 `services/scan.ts`，轮询与 ETA 状态位于 `hooks/useScanJob.ts`，页面组件只负责展示和工作流协调。
+
 ### CLI 命令
 
 - `init` - 初始化数据库并创建默认配置

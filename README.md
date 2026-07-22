@@ -51,6 +51,8 @@ CodePrism is a **high-performance code analysis tool** built with Rust. It scans
 - **Charts**: Apache ECharts for high-performance data visualization
 - **Git Operations**: Direct Git ODB access via libgit2, no checkout required
 
+Runtime responsibilities are split by boundary: `state.rs` owns shared server state, `scan_routes.rs` owns scan-job and summary HTTP contracts, `api_error.rs` owns JSON API errors, and the scanner keeps summary persistence in `summary.rs`. On the frontend, scan-job transport lives in `services/scan.ts` and polling/ETA state lives in `hooks/useScanJob.ts`; page components remain presentation and workflow coordinators.
+
 ### CLI Commands
 
 - `init` - Initialize database and create default config

@@ -13,7 +13,6 @@ import {
   listRepos,
   deleteRepo,
   executeScanWithRepo,
-  fetchScanJob,
   fetchFullProjectConfig,
   updateProjectConfig,
   fetchTemplates,
@@ -22,6 +21,7 @@ import {
   type RepoInfo,
   type FullProjectConfig,
 } from '@/services/data'
+import { useScanJob, type ScanProgress } from '@/hooks/useScanJob'
 import {
   GitBranchIcon,
   GitForkIcon,
@@ -49,16 +49,6 @@ interface RefSelection {
   label: string
   timestamp?: number
   short_hash?: string
-}
-
-interface ScanProgress {
-  status: 'idle' | 'loading' | 'success' | 'error'
-  message: string
-  projectName?: string
-  jobId?: number
-  scanId?: number | null
-  progress?: number
-  progressMessage?: string
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -205,8 +195,7 @@ export default function ExecutePage() {
   // ── Scan state ──
   const [isScanning, setIsScanning] = useState(false)
   const [scanProgress, setScanProgress] = useState<ScanProgress>({ status: 'idle', message: '' })
-  const progressHistory = useRef<Array<{ time: number; progress: number }>>([])
-  const [eta, setEta] = useState<string | null>(null)
+  const eta = useScanJob(scanProgress, setScanProgress)
 
   // ── Project name: use shared context ──
   const projectName = currentProject
@@ -316,73 +305,6 @@ export default function ExecutePage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [commitSearch])
-
-  // ── Scan job polling ──
-  useEffect(() => {
-    const jobId = scanProgress.jobId
-    if (!jobId || scanProgress.status === 'success' || scanProgress.status === 'error') return
-
-    const pollInterval = setInterval(async () => {
-      try {
-        const job = await fetchScanJob(jobId)
-        if (job.status === 'completed' || job.status === 'completed_with_errors') {
-          setScanProgress({
-            status: 'success',
-            message: job.status === 'completed_with_errors'
-              ? (job.progress_message || 'Scan completed with analyzer errors')
-              : t('execute.scanCompleted'),
-            projectName: job.project_name,
-            scanId: job.scan_id,
-            progress: 100,
-          })
-          setEta(null)
-        } else if (job.status === 'failed') {
-          setScanProgress({
-            status: 'error',
-            message: job.error_message || t('execute.scanFailed'),
-          })
-          setEta(null)
-        } else {
-          // Track progress history for ETA calculation
-          const now = Date.now()
-          progressHistory.current.push({ time: now, progress: job.progress })
-          const cutoff = now - 60000
-          progressHistory.current = progressHistory.current.filter(p => p.time >= cutoff)
-
-          // Calculate ETA if enough samples and progress > 5
-          let etaStr: string | null = null
-          if (progressHistory.current.length >= 3 && job.progress > 5 && job.progress < 95) {
-            const first = progressHistory.current[0]
-            const last = progressHistory.current[progressHistory.current.length - 1]
-            const elapsedSec = (last.time - first.time) / 1000
-            const progressDelta = last.progress - first.progress
-            if (progressDelta > 1 && elapsedSec > 2) {
-              const ratePerSec = progressDelta / elapsedSec
-              const remaining = (100 - last.progress) / ratePerSec
-              if (remaining > 0 && remaining < 3600) {
-                etaStr = remaining > 90
-                  ? `${Math.round(remaining / 60)}m ${Math.round(remaining % 60)}s`
-                  : `${Math.round(remaining)}s`
-              }
-            }
-          }
-          setEta(etaStr)
-
-          setScanProgress(prev => ({
-            ...prev,
-            progress: job.progress,
-            progressMessage: job.progress_message || undefined,
-            message: job.progress_message || t('execute.scanningProgress', { progress: job.progress }),
-          }))
-        }
-      } catch {
-        // network error during poll — keep trying
-      }
-    }, 2000)
-
-    return () => clearInterval(pollInterval)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanProgress.jobId, scanProgress.status])
 
   // ── Add local repo handler ──
   const handleAddLocal = async () => {
