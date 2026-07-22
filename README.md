@@ -774,6 +774,8 @@ flowchart TD
     C --> D[SQLite Database<br/>Metrics + Scan History]
 ```
 
+Performance-sensitive boundaries are explicit: pages and the ECharts runtime are loaded on demand, dashboard reads use short-lived request deduplication with cancellation, hidden tabs pause scan polling, and scanner row groups are committed in transactions. See [Performance baseline](docs/performance-baseline.md) for measurements and reproduction commands.
+
 ## 📚 API Reference
 
 ### Core Endpoints

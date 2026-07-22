@@ -282,6 +282,7 @@ const Dashboard = () => {
     if (!selectedRunId || activeViews.length === 0) return;
 
     let isActive = true;
+    const controller = new AbortController();
 
     const load = async () => {
       setLoading(true);
@@ -290,7 +291,9 @@ const Dashboard = () => {
         const techStackFilter = selectedTechStack !== 'Summary' ? selectedTechStack : undefined;
 
         const promises = activeViews.map(view => {
-          const options: { techStack?: string; changeType?: string; groupBy?: string } = {};
+          const options: { techStack?: string; changeType?: string; groupBy?: string; signal?: AbortSignal } = {
+            signal: controller.signal,
+          };
           if (techStackFilter) options.techStack = techStackFilter;
 
           // For "all" mode: add change_type to group_by
@@ -318,7 +321,7 @@ const Dashboard = () => {
         });
         setViewDataMap(newMap);
       } catch (e) {
-        console.error(e);
+        if (!controller.signal.aborted) console.error(e);
       } finally {
         if (isActive) {
           setLoading(false);
@@ -329,6 +332,7 @@ const Dashboard = () => {
 
     return () => {
       isActive = false;
+      controller.abort();
     };
     // Note: changeTypeFilters is intentionally excluded from dependencies
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -342,16 +346,17 @@ const Dashboard = () => {
     }
 
     let isActive = true;
+    const controller = new AbortController();
 
     const loadSummary = async () => {
-      const summary = await fetchScanSummary(currentProject, selectedRunId);
+      const summary = await fetchScanSummary(currentProject, selectedRunId, controller.signal);
       if (isActive) {
         setScanSummary(summary);
       }
     };
     loadSummary();
 
-    return () => { isActive = false; };
+    return () => { isActive = false; controller.abort(); };
   }, [currentProject, selectedRunId]);
 
   // Track per-view trend fetch params to avoid re-fetching unchanged views
@@ -366,6 +371,7 @@ const Dashboard = () => {
     if (activeTrendViewIds.length === 0) return;
 
     let isActive = true;
+    const controller = new AbortController();
 
     const loadTrends = async () => {
       const updates: Record<string, TrendSeries[]> = {};
@@ -392,7 +398,7 @@ const Dashboard = () => {
         setTrendLoadingMap(prev => ({ ...prev, [viewId]: true }));
 
         try {
-          const options: FetchTrendOptions = {};
+          const options: FetchTrendOptions = { signal: controller.signal };
           if (trendCustomScanIds[viewId] && trendCustomScanIds[viewId].length > 0) {
             options.scanIds = trendCustomScanIds[viewId];
           } else {
@@ -450,7 +456,7 @@ const Dashboard = () => {
           updates[viewId] = result.series;
           prevTrendParamsRef.current[viewId] = paramStr; // Record successful fetch params
         } catch (e) {
-          console.error(`Error fetching trend for ${viewId}:`, e);
+          if (!controller.signal.aborted) console.error(`Error fetching trend for ${viewId}:`, e);
         } finally {
           if (isActive) setTrendLoadingMap(prev => ({ ...prev, [viewId]: false }));
         }
@@ -463,7 +469,7 @@ const Dashboard = () => {
 
     loadTrends();
 
-    return () => { isActive = false; };
+    return () => { isActive = false; controller.abort(); };
   }, [currentProject, viewMode, selectedRunId, selectedTechStack, trendActive, trendCustomScanIds, activeViews, trendViews, runs, changeTypeFilters, trendTimeRange]);
 
   // Track previous change_type filters using ref to avoid re-render cycles
@@ -486,12 +492,15 @@ const Dashboard = () => {
     if (!view || view.change_type_mode !== 'switchable') return;
 
     let isActive = true;
+    const controller = new AbortController();
 
     // Fetch only the changed view
     const fetchSingleView = async () => {
       try {
         const techStackFilter = selectedTechStack !== 'Summary' ? selectedTechStack : undefined;
-        const options: { techStack?: string; changeType?: string } = {};
+        const options: { techStack?: string; changeType?: string; signal?: AbortSignal } = {
+          signal: controller.signal,
+        };
         if (techStackFilter) options.techStack = techStackFilter;
         options.changeType = changeTypeFilters[changedViewId] || 'A';
 
@@ -504,13 +513,14 @@ const Dashboard = () => {
           [changedViewId]: result.items
         }));
       } catch (e) {
-        console.error(e);
+        if (!controller.signal.aborted) console.error(e);
       }
     };
     fetchSingleView();
 
     return () => {
       isActive = false;
+      controller.abort();
     };
   }, [changeTypeFilters, selectedRunId, activeViews, selectedTechStack, currentProject]);
 
