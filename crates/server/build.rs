@@ -28,9 +28,13 @@ fn main() {
     let has_npm = process::Command::new(npm_cmd)
         .arg("--version")
         .output()
-        .is_ok();
+        .is_ok_and(|output| output.status.success());
 
-    if has_npm && !skip_web_build {
+    if skip_web_build {
+        println!(
+            "cargo:warning=Reusing prebuilt frontend assets (CODEPRISM_SKIP_WEB_BUILD is set)"
+        );
+    } else if has_npm {
         println!("cargo:warning=Building frontend assets...");
 
         // Dependency installation is intentionally kept outside Cargo builds.
@@ -41,11 +45,24 @@ fn main() {
             .current_dir(&web_dir)
             .status();
 
-        if build_status.map(|s| !s.success()).unwrap_or(true) {
-            println!("cargo:warning=Frontend build failed. Will try to use existing assets.");
+        match build_status {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                eprintln!("Frontend build failed with status {status}.");
+                eprintln!("Refusing to continue with potentially stale assets in web/dist.");
+                process::exit(1);
+            }
+            Err(error) => {
+                eprintln!("Failed to start the frontend build: {error}");
+                process::exit(1);
+            }
         }
-    } else if !has_npm && !skip_web_build {
-        println!("cargo:warning=npm not found. Skipping frontend build.");
+    } else {
+        eprintln!("npm was not found; the frontend cannot be verified.");
+        eprintln!(
+            "Install npm, or explicitly set CODEPRISM_SKIP_WEB_BUILD=1 to reuse prebuilt assets."
+        );
+        process::exit(1);
     }
 
     if !dist_dir.exists() {
@@ -54,7 +71,9 @@ fn main() {
             dist_dir.display()
         );
         eprintln!("The server requires the web frontend to be built.");
-        if !has_npm {
+        if skip_web_build {
+            eprintln!("CODEPRISM_SKIP_WEB_BUILD was set, but no prebuilt assets were found.");
+        } else if !has_npm {
             eprintln!("'npm' command was not found in your PATH.");
         } else {
             eprintln!("Automatic build with npm failed.");
