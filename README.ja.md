@@ -162,6 +162,8 @@ GET /api/v1/projects/:project_name/scans/:scan_id/matches?file_path=<パス>[&an
 | **macOS (Apple Silicon)** | `codeprism-aarch64-apple-darwin.tar.gz` |
 | **Windows x86_64** | `codeprism-x86_64-pc-windows-msvc.zip` |
 
+Release アーカイブには `custom_analyzers/`、`templates/` の組み込みプロジェクトテンプレート、および同梱された Camel アナライザーのセルフテストを実行する `scripts/verify-release-payload.py` が含まれます。
+
 ```bash
 # Linux / macOS
 tar xzf codeprism-*.tar.gz

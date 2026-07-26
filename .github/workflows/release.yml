@@ -52,6 +52,11 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Build web frontend
         working-directory: web
         run: |
@@ -84,6 +89,8 @@ jobs:
           cd target/${{ matrix.target }}/release
           strip ${{ env.BINARY_NAME }} || true
           cp -r ../../../custom_analyzers .
+          mkdir -p templates
+          cp ../../../codeprism.camel-java-dsl.yaml templates/
           mkdir -p scripts/lib
           cp ../../../scripts/codeprism-scan scripts/
           cp ../../../scripts/codeprism-scan-list scripts/
@@ -91,8 +98,10 @@ jobs:
           cp ../../../scripts/codeprism-repo-clone scripts/
           cp ../../../scripts/lib/codeprism-common.sh scripts/lib/
           cp ../../../scripts/README.md scripts/
+          cp ../../../scripts/verify-release-payload.py scripts/
+          python ../../../scripts/verify-release-payload.py .
           tar czf ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }} \
-            ${{ env.BINARY_NAME }} custom_analyzers scripts
+            ${{ env.BINARY_NAME }} custom_analyzers templates scripts
 
       - name: Prepare artifacts (Windows)
         if: runner.os == 'Windows'
@@ -100,14 +109,18 @@ jobs:
         run: |
           cd target/${{ matrix.target }}/release
           Copy-Item -Recurse ../../../custom_analyzers .
+          New-Item -ItemType Directory -Path templates -Force | Out-Null
+          Copy-Item ../../../codeprism.camel-java-dsl.yaml templates/
           New-Item -ItemType Directory -Path scripts -Force | Out-Null
           Copy-Item ../../../scripts/codeprism-scan.ps1 scripts/
           Copy-Item ../../../scripts/codeprism-scan-list.ps1 scripts/
           Copy-Item ../../../scripts/codeprism-repo-list.ps1 scripts/
           Copy-Item ../../../scripts/codeprism-repo-clone.ps1 scripts/
           Copy-Item ../../../scripts/README.md scripts/
+          Copy-Item ../../../scripts/verify-release-payload.py scripts/
+          python ../../../scripts/verify-release-payload.py .
           7z a ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }} `
-            ${{ env.BINARY_NAME }}.exe custom_analyzers\ scripts\
+            ${{ env.BINARY_NAME }}.exe custom_analyzers\ templates\ scripts\
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

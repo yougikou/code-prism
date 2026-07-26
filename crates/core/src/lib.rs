@@ -580,7 +580,7 @@ impl CodePrismConfig {
     }
 
     pub fn generate_template() -> String {
-        r#"# CodePrism Configuration
+        let template = r#"# CodePrism Configuration
 # For VS Code autocomplete: add this line at the top of the file (adjust the path):
 # yaml-language-server: $schema=schemas/codeprism-config.schema.json
 
@@ -803,7 +803,31 @@ project_templates:
         group_by: ["analyzer_id"]
         chart_type: "pie"
 "#
-        .to_string()
+        .to_string();
+
+        // Keep the built-in Camel template sourced from the standalone,
+        // validated Camel configuration so release users receive one canonical
+        // analyzer/report definition in both forms.
+        let camel_config: CodePrismConfig =
+            serde_yaml::from_str(include_str!("../../../codeprism.camel-java-dsl.yaml"))
+                .expect("embedded Camel Java DSL configuration must be valid");
+        let camel_project = camel_config
+            .projects
+            .first()
+            .expect("embedded Camel Java DSL configuration must contain a project");
+        let camel_yaml =
+            serde_yaml::to_string(camel_project).expect("Camel project template must serialize");
+        let indented_camel = camel_yaml
+            .lines()
+            .map(|line| format!("    {}", line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let project_templates = format!(
+            "project_templates:\n  camel-java-dsl:\n{}\n",
+            indented_camel
+        );
+
+        template.replacen("project_templates:\n", &project_templates, 1)
     }
 
     pub fn validate(&self) -> Result<(), AppError> {
@@ -1277,7 +1301,28 @@ projects:
     #[test]
     fn generated_template_is_parseable() {
         let template = CodePrismConfig::generate_template();
-        serde_yaml::from_str::<CodePrismConfig>(&template).unwrap();
+        let config = serde_yaml::from_str::<CodePrismConfig>(&template).unwrap();
+        let camel = config
+            .get_template("camel-java-dsl")
+            .expect("Camel Java DSL must be available in a fresh configuration");
+        assert_eq!(camel.tech_stacks[0].name, "Camel Java DSL");
+        assert!(
+            camel
+                .custom_impl_analyzers
+                .contains_key("camel_java_production_metrics")
+        );
+        assert!(
+            camel
+                .custom_cross_file_analyzers
+                .contains_key("camel_java_test_project_metrics")
+        );
+        assert!(camel.aggregation_views.contains_key("route_count"));
+
+        let camel_config = CodePrismConfig {
+            projects: vec![camel],
+            ..Default::default()
+        };
+        camel_config.validate().unwrap();
     }
 
     #[test]

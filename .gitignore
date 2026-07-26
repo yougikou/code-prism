@@ -2,6 +2,9 @@
 /target/
 # Cargo.lock
 
+# Python
+__pycache__/
+*.py[cod]
 
 # CodePrism specific
 codeprism.db
