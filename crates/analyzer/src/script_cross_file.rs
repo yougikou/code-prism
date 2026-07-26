@@ -85,8 +85,6 @@ struct ScriptFinalizeMetric {
     #[serde(default)]
     change_type: Option<String>,
     #[serde(default)]
-    scope: Option<String>,
-    #[serde(default)]
     tags: HashMap<String, String>,
     #[serde(default)]
     value_before: Option<f64>,
@@ -154,7 +152,6 @@ fn convert_script_output(
                 value_before: metric.value_before.unwrap_or(0.0),
                 value_after: metric.value_after.unwrap_or(0.0),
                 change_type: metric.change_type,
-                scope: metric.scope,
                 tags: metric.tags,
             });
         }
@@ -595,7 +592,6 @@ fn legacy_output(
                         value_before,
                         value_after,
                         change_type: occurrences.first().and_then(|o| o.change_type.clone()),
-                        scope: None,
                         tags: HashMap::new(),
                     });
                 }

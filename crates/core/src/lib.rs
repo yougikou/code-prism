@@ -1060,8 +1060,6 @@ pub struct FinalizeMetric {
     #[serde(default)]
     pub change_type: Option<String>,
     #[serde(default)]
-    pub scope: Option<String>,
-    #[serde(default)]
     pub tags: HashMap<String, String>,
 }
 
