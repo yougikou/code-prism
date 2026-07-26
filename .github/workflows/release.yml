@@ -52,6 +52,11 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Build web frontend
         working-directory: web
         run: |
@@ -91,6 +96,11 @@ jobs:
           cp ../../../scripts/codeprism-repo-clone scripts/
           cp ../../../scripts/lib/codeprism-common.sh scripts/lib/
           cp ../../../scripts/README.md scripts/
+          cp ../../../scripts/verify-release-payload.py scripts/
+          python ../../../scripts/verify-release-payload.py .
+          ./${{ env.BINARY_NAME }} init-config codeprism.release-test.yaml
+          grep -q "^  camel-java-dsl:" codeprism.release-test.yaml
+          rm codeprism.release-test.yaml
           tar czf ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }} \
             ${{ env.BINARY_NAME }} custom_analyzers scripts
 
@@ -106,6 +116,13 @@ jobs:
           Copy-Item ../../../scripts/codeprism-repo-list.ps1 scripts/
           Copy-Item ../../../scripts/codeprism-repo-clone.ps1 scripts/
           Copy-Item ../../../scripts/README.md scripts/
+          Copy-Item ../../../scripts/verify-release-payload.py scripts/
+          python ../../../scripts/verify-release-payload.py .
+          & ./${{ env.BINARY_NAME }}.exe init-config codeprism.release-test.yaml
+          if (-not (Select-String -Path codeprism.release-test.yaml -Pattern '^  camel-java-dsl:' -Quiet)) {
+            throw "Generated codeprism.yaml does not contain the Camel Java DSL template"
+          }
+          Remove-Item codeprism.release-test.yaml
           7z a ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }} `
             ${{ env.BINARY_NAME }}.exe custom_analyzers\ scripts\
 

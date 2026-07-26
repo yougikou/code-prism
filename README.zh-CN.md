@@ -162,6 +162,8 @@ GET /api/v1/projects/:project_name/scans/:scan_id/matches?file_path=<路径>[&an
 | **macOS (Apple Silicon)** | `codeprism-aarch64-apple-darwin.tar.gz` |
 | **Windows x86_64** | `codeprism-x86_64-pc-windows-msvc.zip` |
 
+Release 压缩包包含 `custom_analyzers/`，以及可运行已打包 Camel 分析器自测试的 `scripts/verify-release-payload.py`。包括 `camel-java-dsl` 在内的内置项目模板由 `codeprism init` 或 `codeprism init-config` 直接写入 `codeprism.yaml`。
+
 ```bash
 # Linux / macOS
 tar xzf codeprism-*.tar.gz

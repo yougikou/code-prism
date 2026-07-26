@@ -591,6 +591,718 @@ database_url: "sqlite:codeprism.db"
 # Project templates can be applied when adding a new project via the UI.
 # The key is the template name; the value contains all project settings.
 project_templates:
+  camel-java-dsl:
+    name: camel-java-dsl-project
+    columns: 2
+    global_excludes:
+      - "**/.git/**"
+      - "**/target/**"
+      - "**/build/**"
+      - "**/.gradle/**"
+      - "**/generated-sources/**"
+      - "**/generated-test-sources/**"
+
+    tech_stacks:
+      - name: Camel Java DSL
+        category: Integration
+        extensions:
+          - java
+        analyzers:
+          - char_count
+          - camel_java_production_metrics
+          - camel_java_test_metrics
+        paths: []
+        excludes:
+          - "**/target/**"
+          - "**/build/**"
+
+    # No regex analyzers are required. Java DSL chains and log placement are
+    # reconstructed by the Python model extractor to avoid comment/string noise.
+    # Dashboard grouping is intentionally limited to Java files or project totals.
+    # Entry/exit windows are the first/last 3 DSL calls; external-call proximity
+    # means no more than 2 DSL calls apart.
+    custom_regex_analyzers: {}
+
+    custom_impl_analyzers:
+      camel_java_production_metrics:
+        description: Production Route, EIP, endpoint, logging, resilience, transformation, and concurrency usage metrics.
+        scan_mode: null
+        change_type: null
+        tags: {}
+      camel_java_test_metrics:
+        description: Test-source Route, logging, endpoint, test-class, and Route-reference usage metrics.
+        scan_mode: null
+        change_type: null
+        tags: {}
+
+    custom_cross_file_analyzers:
+      camel_java_production_project_metrics:
+        description: Production-only project topology, logging counts, and reuse metrics.
+        scan_mode: null
+        change_type: null
+        tags: {}
+      camel_java_test_project_metrics:
+        description: Test-class, Route-reference, and production Route reference coverage metrics.
+        scan_mode: null
+        change_type: null
+        tags: {}
+
+    external_analyzers: {}
+
+    aggregation_views:
+      route_count:
+        title: Camel Route 数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_count
+
+      route_eip_top:
+        title: EIP 数量最多的 Java 文件
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 1
+        trend: false
+        func:
+          type: top_n
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_eip_count
+          limit: 15
+          order: desc
+
+      route_eip_distribution:
+        title: Route EIP 数量分布
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: bar_col
+        change_type_mode: null
+        width: 1
+        trend: false
+        func:
+          type: distribution
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_eip_count
+          buckets: [5, 10, 20, 40, 80]
+
+      route_branch_top:
+        title: 分支最多的 Java 文件
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 1
+        trend: false
+        func:
+          type: top_n
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_branch_count
+          limit: 15
+          order: desc
+
+      eip_usage:
+        title: EIP 使用数量（按 Java 文件）
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 2
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: eip_usage_count
+
+      endpoint_component_usage:
+        title: Endpoint 使用数量（按 Java 文件）
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 2
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: endpoint_usage_count
+
+      external_calls_top:
+        title: 外部调用最多的 Java 文件
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 1
+        trend: false
+        func:
+          type: top_n
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_external_call_count
+          limit: 15
+          order: desc
+
+      route_log_level_usage:
+        title: Java DSL 日志输出数量（按文件）
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_log_level_count
+
+      java_log_level_usage:
+        title: Java Logger 日志输出数量（按文件）
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: java_log_level_count
+
+      error_log_count:
+        title: Route ERROR 日志数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_log_level_count
+            log_level: ERROR
+
+      route_log_count_top:
+        title: Route 日志输出最多的 Java 文件
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 1
+        trend: false
+        func:
+          type: top_n
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_log_count
+          limit: 20
+          order: desc
+
+      route_log_count_distribution:
+        title: Route 日志输出数量分布
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: bar_col
+        change_type_mode: null
+        width: 1
+        trend: false
+        func:
+          type: distribution
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_log_count
+          buckets: [1, 2, 5, 10, 20]
+
+      route_without_log_count:
+        title: 无日志输出的 Route 数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_without_log_count
+
+      entry_log_count:
+        title: Route 前 3 个 DSL 调用中的日志数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: entry_log_count
+
+      exit_log_count:
+        title: Route 最后 3 个 DSL 调用中的日志数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: exit_log_count
+
+      external_call_nearby_log_count:
+        title: 与外部调用相距不超过 2 个 DSL 调用的日志数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: external_call_nearby_log_count
+
+      exception_route_warn_error_log_count:
+        title: 异常处理片段中的 WARN/ERROR 日志数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: exception_route_warn_error_log_count
+
+      resilience_usage:
+        title: 可靠性机制使用数量（按 Java 文件）
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 2
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: resilience_usage_count
+
+      transformation_usage:
+        title: 数据转换操作数量（按 Java 文件）
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: transformation_usage_count
+
+      concurrency_usage:
+        title: 并发与异步机制数量（按 Java 文件）
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: concurrency_usage_count
+
+      project_route_log_count:
+        title: Route 日志输出总数（项目级）
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_project_metrics_aggregated
+          tag_filters:
+            metric: project_route_log_count
+
+      project_internal_endpoint_count:
+        title: 内部 Endpoint 数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_project_metrics_aggregated
+          tag_filters:
+            metric: internal_endpoint_count
+
+      shared_processor_count:
+        title: 被多条 Route 复用的 Processor/Bean
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_project_metrics_aggregated
+          tag_filters:
+            metric: shared_processor_count
+
+      route_nesting_depth_top:
+        title: Route 嵌套深度最高的 Java 文件
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 1
+        trend: false
+        func:
+          type: top_n
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_nesting_depth
+          limit: 20
+          order: desc
+
+      route_internal_call_top:
+        title: 内部 Endpoint 调用最多的 Java 文件
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 1
+        trend: false
+        func:
+          type: top_n
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_internal_call_count
+          limit: 20
+          order: desc
+
+      dynamic_endpoint_top:
+        title: 动态 Endpoint 最多的 Java 文件
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: bar_row
+        change_type_mode: switchable
+        width: 1
+        trend: false
+        func:
+          type: top_n
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_dynamic_endpoint_count
+          limit: 20
+          order: desc
+
+      route_with_log_count:
+        title: 有日志输出的 Route 数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_with_log_count
+
+      exception_path_count:
+        title: 异常处理路径数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: exception_path_count
+
+      routes_without_logs_by_file:
+        title: 包含无日志 Route 的 Java 文件
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: table
+        change_type_mode: switchable
+        width: 2
+        trend: false
+        detail_view: true
+        func:
+          type: top_n
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_without_log_count
+          limit: 100
+          order: desc
+
+      error_logs_by_file:
+        title: Route ERROR 日志数量（按 Java 文件）
+        tech_stacks: []
+        include_children: true
+        group_by:
+          - file_path
+        chart_type: table
+        change_type_mode: switchable
+        width: 2
+        trend: false
+        func:
+          type: top_n
+          analyzer_id: camel_java_production_metrics
+          tag_filters:
+            metric: route_log_level_count
+            log_level: ERROR
+          limit: 100
+          order: desc
+
+      project_route_count:
+        title: 生产 Route 总数（项目级）
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_production_project_metrics_aggregated
+          tag_filters:
+            metric: project_route_count
+
+      avg_routes_per_builder:
+        title: 每个 RouteBuilder 的平均 Route 数
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: avg
+          analyzer_id: camel_java_production_project_metrics_aggregated
+          tag_filters:
+            metric: avg_routes_per_builder
+
+      internal_endpoint_avg_producer_routes:
+        title: 每个内部 Endpoint 的平均 Producer Route 数
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: avg
+          analyzer_id: camel_java_production_project_metrics_aggregated
+          tag_filters:
+            metric: internal_endpoint_avg_producer_routes
+
+      internal_endpoint_max_producer_routes:
+        title: 单个内部 Endpoint 的最大 Producer Route 数
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: max
+          analyzer_id: camel_java_production_project_metrics_aggregated
+          tag_filters:
+            metric: internal_endpoint_max_producer_routes
+
+      internal_endpoint_avg_consumer_routes:
+        title: 每个内部 Endpoint 的平均 Consumer Route 数
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: avg
+          analyzer_id: camel_java_production_project_metrics_aggregated
+          tag_filters:
+            metric: internal_endpoint_avg_consumer_routes
+
+      route_test_reference_coverage:
+        title: Route 测试引用覆盖率
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: gauge
+        change_type_mode: null
+        width: 1
+        trend: true
+        func:
+          type: avg
+          analyzer_id: camel_java_test_project_metrics_aggregated
+          tag_filters:
+            metric: route_test_reference_coverage
+
+      camel_test_class_count:
+        title: Camel 测试类数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_test_project_metrics_aggregated
+          tag_filters:
+            metric: camel_test_class_count
+
+      test_route_reference_count:
+        title: 测试代码引用的 Route ID 数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_test_project_metrics_aggregated
+          tag_filters:
+            metric: test_route_reference_count
+
+      matched_test_route_reference_count:
+        title: 测试代码引用且能匹配生产 Route 的 ID 数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_test_project_metrics_aggregated
+          tag_filters:
+            metric: matched_test_route_reference_count
+
+      test_defined_route_count:
+        title: 测试代码中定义的 Route 数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_test_metrics
+          tag_filters:
+            metric: route_count
+
+      test_route_log_count:
+        title: 测试 Route 日志输出数量
+        tech_stacks: []
+        include_children: true
+        group_by: []
+        chart_type: card
+        change_type_mode: switchable
+        width: 1
+        trend: true
+        func:
+          type: sum
+          analyzer_id: camel_java_test_metrics
+          tag_filters:
+            metric: route_log_count
   code-prism:
     name: "code-prism"
 
@@ -1036,8 +1748,6 @@ pub struct FinalizeMetric {
     #[serde(default)]
     pub change_type: Option<String>,
     #[serde(default)]
-    pub scope: Option<String>,
-    #[serde(default)]
     pub tags: HashMap<String, String>,
 }
 
@@ -1277,7 +1987,28 @@ projects:
     #[test]
     fn generated_template_is_parseable() {
         let template = CodePrismConfig::generate_template();
-        serde_yaml::from_str::<CodePrismConfig>(&template).unwrap();
+        let config = serde_yaml::from_str::<CodePrismConfig>(&template).unwrap();
+        let camel = config
+            .get_template("camel-java-dsl")
+            .expect("Camel Java DSL must be available in a fresh configuration");
+        assert_eq!(camel.tech_stacks[0].name, "Camel Java DSL");
+        assert!(
+            camel
+                .custom_impl_analyzers
+                .contains_key("camel_java_production_metrics")
+        );
+        assert!(
+            camel
+                .custom_cross_file_analyzers
+                .contains_key("camel_java_test_project_metrics")
+        );
+        assert!(camel.aggregation_views.contains_key("route_count"));
+
+        let camel_config = CodePrismConfig {
+            projects: vec![camel],
+            ..Default::default()
+        };
+        camel_config.validate().unwrap();
     }
 
     #[test]

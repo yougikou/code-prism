@@ -2,7 +2,7 @@ use crate::{Analyzer, FileProcessor};
 use async_trait::async_trait;
 use codeprism_core::{
     ContentBlock, FinalizeFinding, FinalizeMatchResult, FinalizeMetric, FinalizeOccurrence,
-    FinalizeOutput, IntermediateBlock, ScriptContentBlock,
+    FinalizeOutput, IntermediateBlock, ScriptContentBlock, TAG_CATEGORY,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -57,8 +57,113 @@ struct BlockData {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum ScriptFinalizeResponse {
-    Generic(FinalizeOutput),
+    Generic(ScriptFinalizeOutput),
     Legacy(Vec<FinalizeMatchResult>),
+}
+
+#[derive(Debug, Deserialize)]
+struct ScriptFinalizeOutput {
+    findings: Vec<ScriptFinalizeFinding>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScriptFinalizeFinding {
+    finding_key: String,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    occurrences: Vec<FinalizeOccurrence>,
+    #[serde(default)]
+    tags: HashMap<String, String>,
+    metrics: Vec<ScriptFinalizeMetric>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScriptFinalizeMetric {
+    metric_key: String,
+    file_path: String,
+    #[serde(default)]
+    change_type: Option<String>,
+    #[serde(default)]
+    tags: HashMap<String, String>,
+    #[serde(default)]
+    value_before: Option<f64>,
+    #[serde(default)]
+    value_after: Option<f64>,
+}
+
+fn convert_script_output(
+    output: ScriptFinalizeOutput,
+    tag_overrides: &HashMap<String, String>,
+) -> anyhow::Result<FinalizeOutput> {
+    let mut findings = Vec::with_capacity(output.findings.len());
+    for finding in output.findings {
+        if finding.finding_key.trim().is_empty() {
+            anyhow::bail!("finding_key must not be empty");
+        }
+        let mut finding_tags = finding.tags;
+        finding_tags.extend(tag_overrides.clone());
+        let mut metrics = Vec::with_capacity(finding.metrics.len());
+        for (index, metric) in finding.metrics.into_iter().enumerate() {
+            if metric.metric_key.trim().is_empty() {
+                anyhow::bail!("generic metric {} requires a non-empty metric_key", index);
+            }
+            if metric.file_path.trim().is_empty() {
+                anyhow::bail!("generic metric {} has an empty file_path", index);
+            }
+            let category = metric
+                .tags
+                .get(TAG_CATEGORY)
+                .or_else(|| finding_tags.get(TAG_CATEGORY));
+            if category.is_none_or(|value| value.trim().is_empty()) {
+                anyhow::bail!(
+                    "generic metric {} requires a non-empty '{}' tag",
+                    index,
+                    TAG_CATEGORY
+                );
+            }
+            if metric.value_before.is_none() && metric.value_after.is_none() {
+                anyhow::bail!(
+                    "generic metric {} requires value_before or value_after",
+                    index
+                );
+            }
+            for (field, value) in [
+                ("value_before", metric.value_before),
+                ("value_after", metric.value_after),
+            ] {
+                if value.is_some_and(|number| !number.is_finite()) {
+                    anyhow::bail!("generic metric {} has non-finite {}", index, field);
+                }
+            }
+            if metric
+                .change_type
+                .as_deref()
+                .is_some_and(|value| !matches!(value, "A" | "M" | "D"))
+            {
+                anyhow::bail!(
+                    "generic metric {} has invalid change_type; expected A, M, or D",
+                    index
+                );
+            }
+            metrics.push(FinalizeMetric {
+                metric_key: metric.metric_key,
+                file_path: metric.file_path,
+                value_before: metric.value_before.unwrap_or(0.0),
+                value_after: metric.value_after.unwrap_or(0.0),
+                change_type: metric.change_type,
+                tags: metric.tags,
+            });
+        }
+        findings.push(FinalizeFinding {
+            finding_key: finding.finding_key,
+            content: finding.content,
+            occurrences: finding.occurrences,
+            tags: finding_tags,
+            metrics,
+        });
+    }
+    Ok(FinalizeOutput { findings })
 }
 
 struct ProcessHandle {
@@ -402,11 +507,8 @@ impl FileProcessor for ScriptCrossFileAnalyzer {
         match serde_json::from_str::<ScriptFinalizeResponse>(&response).map_err(|error| {
             anyhow::anyhow!("Invalid finalize response from '{}': {}", self.id, error)
         })? {
-            ScriptFinalizeResponse::Generic(mut output) => {
-                for finding in &mut output.findings {
-                    finding.tags.extend(self.tag_overrides.clone());
-                }
-                Ok(output)
+            ScriptFinalizeResponse::Generic(output) => {
+                convert_script_output(output, &self.tag_overrides)
             }
             ScriptFinalizeResponse::Legacy(results) => {
                 eprintln!(
@@ -490,7 +592,6 @@ fn legacy_output(
                         value_before,
                         value_after,
                         change_type: occurrences.first().and_then(|o| o.change_type.clone()),
-                        scope: None,
                         tags: HashMap::new(),
                     });
                 }
@@ -511,13 +612,21 @@ fn legacy_output(
 mod tests {
     use super::*;
 
+    fn parse_generic(json: &str) -> anyhow::Result<FinalizeOutput> {
+        match serde_json::from_str::<ScriptFinalizeResponse>(json)? {
+            ScriptFinalizeResponse::Generic(output) => {
+                convert_script_output(output, &HashMap::new())
+            }
+            ScriptFinalizeResponse::Legacy(_) => anyhow::bail!("expected generic response"),
+        }
+    }
+
     #[test]
     fn parses_generic_and_legacy_finalize_protocols() {
-        let generic = r#"{"findings":[{"finding_key":"key","metrics":[],"occurrences":[]}]}"#;
-        assert!(matches!(
-            serde_json::from_str::<ScriptFinalizeResponse>(generic).unwrap(),
-            ScriptFinalizeResponse::Generic(_)
-        ));
+        let generic = r#"{"findings":[{"finding_key":"project","tags":{"category":"route"},"metrics":[{"metric_key":"route_count","file_path":"__project__","value_before":null,"value_after":2.0}]}]}"#;
+        let output = parse_generic(generic).unwrap();
+        assert_eq!(output.findings[0].metrics[0].value_before, 0.0);
+        assert_eq!(output.findings[0].metrics[0].value_after, 2.0);
 
         let legacy =
             r#"[{"block_hash":"hash","block_content":"body","block_size":1,"occurrences":[]}]"#;
@@ -541,6 +650,35 @@ mod tests {
                 .metrics
                 .len(),
             4
+        );
+    }
+
+    #[test]
+    fn generic_response_requires_complete_finite_metrics() {
+        assert!(serde_json::from_str::<ScriptFinalizeResponse>(r#"{}"#).is_err());
+        assert!(
+            serde_json::from_str::<ScriptFinalizeResponse>(
+                r#"{"findings":[{"finding_key":"project"}]}"#
+            )
+            .is_err()
+        );
+        assert!(
+            parse_generic(
+                r#"{"findings":[{"finding_key":"project","metrics":[{"metric_key":"route_count","file_path":"__project__","value_after":1}]}]}"#
+            )
+            .is_err()
+        );
+        assert!(
+            parse_generic(
+                r#"{"findings":[{"finding_key":"project","tags":{"category":"route"},"metrics":[{"metric_key":"route_count","file_path":"__project__","value_before":null,"value_after":null}]}]}"#
+            )
+            .is_err()
+        );
+        assert!(
+            parse_generic(
+                r#"{"findings":[{"finding_key":"project","tags":{"category":"route"},"metrics":[{"metric_key":"route_count","file_path":"__project__","value_after":NaN}]}]}"#
+            )
+            .is_err()
         );
     }
 }

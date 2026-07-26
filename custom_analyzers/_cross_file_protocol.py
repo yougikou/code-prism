@@ -43,7 +43,6 @@ def duplicate_finding(group_key, entries):
                 "value_before": value_before,
                 "value_after": value_after,
                 "change_type": file_occurrences[0].get("change_type"),
-                "scope": "{}:{}-{}".format(group_key, file_occurrences[0]["line_start"], file_occurrences[0]["line_end"]),
             })
     return {
         "finding_key": group_key,

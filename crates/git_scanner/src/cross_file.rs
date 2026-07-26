@@ -197,12 +197,12 @@ async fn persist_finding(
         let sorted: BTreeMap<_, _> = tags.iter().collect();
         let tags_json = serde_json::to_string(&sorted)?;
         sqlx::query(
-            "INSERT INTO metrics (scan_id, file_path, change_type, tech_stack, analyzer_id, content_id, finding_key, tags, value_before, value_after, scope) \
-             VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO metrics (scan_id, file_path, change_type, tech_stack, analyzer_id, content_id, finding_key, tags, value_before, value_after) \
+             VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)",
         )
         .bind(scan_id).bind(&metric.file_path).bind(metric.change_type.as_deref().unwrap_or("A"))
         .bind(analyzer_id).bind(content_id).bind(&finding.finding_key).bind(tags_json)
-        .bind(metric.value_before).bind(metric.value_after).bind(&metric.scope)
+        .bind(metric.value_before).bind(metric.value_after)
         .execute(&mut **tx).await?;
     }
     Ok(())
@@ -263,7 +263,6 @@ mod tests {
                         value_before: 0.0,
                         value_after: 7.0,
                         change_type: Some("A".into()),
-                        scope: None,
                         tags: HashMap::new(),
                     }],
                 }],
