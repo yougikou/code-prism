@@ -89,8 +89,6 @@ jobs:
           cd target/${{ matrix.target }}/release
           strip ${{ env.BINARY_NAME }} || true
           cp -r ../../../custom_analyzers .
-          mkdir -p templates
-          cp ../../../codeprism.camel-java-dsl.yaml templates/
           mkdir -p scripts/lib
           cp ../../../scripts/codeprism-scan scripts/
           cp ../../../scripts/codeprism-scan-list scripts/
@@ -100,8 +98,11 @@ jobs:
           cp ../../../scripts/README.md scripts/
           cp ../../../scripts/verify-release-payload.py scripts/
           python ../../../scripts/verify-release-payload.py .
+          ./${{ env.BINARY_NAME }} init-config codeprism.release-test.yaml
+          grep -q "^  camel-java-dsl:" codeprism.release-test.yaml
+          rm codeprism.release-test.yaml
           tar czf ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }} \
-            ${{ env.BINARY_NAME }} custom_analyzers templates scripts
+            ${{ env.BINARY_NAME }} custom_analyzers scripts
 
       - name: Prepare artifacts (Windows)
         if: runner.os == 'Windows'
@@ -109,8 +110,6 @@ jobs:
         run: |
           cd target/${{ matrix.target }}/release
           Copy-Item -Recurse ../../../custom_analyzers .
-          New-Item -ItemType Directory -Path templates -Force | Out-Null
-          Copy-Item ../../../codeprism.camel-java-dsl.yaml templates/
           New-Item -ItemType Directory -Path scripts -Force | Out-Null
           Copy-Item ../../../scripts/codeprism-scan.ps1 scripts/
           Copy-Item ../../../scripts/codeprism-scan-list.ps1 scripts/
@@ -119,8 +118,13 @@ jobs:
           Copy-Item ../../../scripts/README.md scripts/
           Copy-Item ../../../scripts/verify-release-payload.py scripts/
           python ../../../scripts/verify-release-payload.py .
+          & ./${{ env.BINARY_NAME }}.exe init-config codeprism.release-test.yaml
+          if (-not (Select-String -Path codeprism.release-test.yaml -Pattern '^  camel-java-dsl:' -Quiet)) {
+            throw "Generated codeprism.yaml does not contain the Camel Java DSL template"
+          }
+          Remove-Item codeprism.release-test.yaml
           7z a ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }} `
-            ${{ env.BINARY_NAME }}.exe custom_analyzers\ templates\ scripts\
+            ${{ env.BINARY_NAME }}.exe custom_analyzers\ scripts\
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

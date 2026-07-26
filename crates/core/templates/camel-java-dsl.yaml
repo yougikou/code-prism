@@ -1,9 +1,6 @@
-# CodePrism configuration for Apache Camel routes authored with Java DSL.
-# Run from the CodePrism directory so custom_analyzers/ can be discovered:
-#   codeprism --config codeprism.camel-java-dsl.yaml init
-#   codeprism --config codeprism.camel-java-dsl.yaml scan /path/to/camel-repo \
-#     --project camel-java-dsl-project
-#   codeprism --config codeprism.camel-java-dsl.yaml serve
+# Internal CodePrism configuration source for the built-in Camel Java DSL project template.
+# Embedded at compile time; users receive this project under
+# project_templates.camel-java-dsl in the generated codeprism.yaml.
 
 database_url: sqlite:codeprism-camel.db
 

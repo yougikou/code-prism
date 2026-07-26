@@ -225,9 +225,10 @@ Download the latest release for your platform from [GitHub Releases](https://git
 | **macOS (Apple Silicon)** | `codeprism-aarch64-apple-darwin.tar.gz` |
 | **Windows x86_64** | `codeprism-x86_64-pc-windows-msvc.zip` |
 
-Release archives include `custom_analyzers/`, the built-in project templates in
-`templates/`, and `scripts/verify-release-payload.py` for running the packaged
-Camel analyzer self-tests.
+Release archives include `custom_analyzers/` and
+`scripts/verify-release-payload.py` for running the packaged Camel analyzer
+self-tests. Built-in project templates, including `camel-java-dsl`, are written
+directly into `codeprism.yaml` by `codeprism init` or `codeprism init-config`.
 
 ```bash
 # Linux / macOS

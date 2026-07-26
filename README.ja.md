@@ -162,7 +162,7 @@ GET /api/v1/projects/:project_name/scans/:scan_id/matches?file_path=<パス>[&an
 | **macOS (Apple Silicon)** | `codeprism-aarch64-apple-darwin.tar.gz` |
 | **Windows x86_64** | `codeprism-x86_64-pc-windows-msvc.zip` |
 
-Release アーカイブには `custom_analyzers/`、`templates/` の組み込みプロジェクトテンプレート、および同梱された Camel アナライザーのセルフテストを実行する `scripts/verify-release-payload.py` が含まれます。
+Release アーカイブには `custom_analyzers/` と、同梱された Camel アナライザーのセルフテストを実行する `scripts/verify-release-payload.py` が含まれます。`camel-java-dsl` を含む組み込みプロジェクトテンプレートは、`codeprism init` または `codeprism init-config` によって `codeprism.yaml` に直接書き込まれます。
 
 ```bash
 # Linux / macOS

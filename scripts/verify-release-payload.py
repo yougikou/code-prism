@@ -21,7 +21,6 @@ REQUIRED_FILES = (
     "custom_analyzers/camel_support/__init__.py",
     "custom_analyzers/camel_support/file_metrics.py",
     "custom_analyzers/camel_support/model.py",
-    "templates/codeprism.camel-java-dsl.yaml",
 )
 
 
@@ -65,7 +64,7 @@ def main() -> int:
     except (RuntimeError, subprocess.CalledProcessError) as error:
         print(f"release payload verification failed: {error}", file=sys.stderr)
         return 1
-    print("release payload contains all Camel analyzers, support files, template, and tests")
+    print("release payload contains all Camel analyzers, support files, and tests")
     return 0
 
 

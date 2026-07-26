@@ -805,11 +805,10 @@ project_templates:
 "#
         .to_string();
 
-        // Keep the built-in Camel template sourced from the standalone,
-        // validated Camel configuration so release users receive one canonical
-        // analyzer/report definition in both forms.
+        // Embed the internal Camel project definition directly into every newly
+        // generated codeprism.yaml. It is not exposed as a separate user config.
         let camel_config: CodePrismConfig =
-            serde_yaml::from_str(include_str!("../../../codeprism.camel-java-dsl.yaml"))
+            serde_yaml::from_str(include_str!("../templates/camel-java-dsl.yaml"))
                 .expect("embedded Camel Java DSL configuration must be valid");
         let camel_project = camel_config
             .projects
