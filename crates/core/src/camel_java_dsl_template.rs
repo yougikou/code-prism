@@ -1,4 +1,4 @@
-# Internal CodePrism configuration source for the built-in Camel Java DSL project template.
+pub const CONFIG: &str = r#"# Internal CodePrism configuration source for the built-in Camel Java DSL project template.
 # Embedded at compile time; users receive this project under
 # project_templates.camel-java-dsl in the generated codeprism.yaml.
 
@@ -716,3 +716,4 @@ projects:
           analyzer_id: camel_java_test_metrics
           tag_filters:
             metric: route_log_count
+"#;

@@ -1,3 +1,5 @@
+mod camel_java_dsl_template;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -807,9 +809,8 @@ project_templates:
 
         // Embed the internal Camel project definition directly into every newly
         // generated codeprism.yaml. It is not exposed as a separate user config.
-        let camel_config: CodePrismConfig =
-            serde_yaml::from_str(include_str!("../templates/camel-java-dsl.yaml"))
-                .expect("embedded Camel Java DSL configuration must be valid");
+        let camel_config: CodePrismConfig = serde_yaml::from_str(camel_java_dsl_template::CONFIG)
+            .expect("embedded Camel Java DSL configuration must be valid");
         let camel_project = camel_config
             .projects
             .first()
