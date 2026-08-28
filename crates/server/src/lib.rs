@@ -1,24 +1,25 @@
 pub mod aggregation;
 pub mod api_error;
 pub mod assets;
+pub mod auth;
 pub mod config;
 pub mod git_cache;
 pub mod git_routes;
 pub mod routes;
 pub mod scan_routes;
+pub mod scan_scheduler;
 pub mod state;
 pub mod template_routes;
 
 use anyhow::Result;
 use axum::{
-    Router,
+    Router, middleware,
     routing::{delete, get, post},
 };
 use codeprism_core::{AggregationFunc, CodePrismConfig, ProjectConfig};
 use codeprism_database::Db;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use tower_http::cors::CorsLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -31,7 +32,7 @@ use crate::routes::{
     add_local_project, create_project, delete_project, execute_scan, get_findings, get_matches,
     get_scans, get_view, list_unified_projects, static_handler,
 };
-use crate::scan_routes::{get_scan_job, get_scan_summary};
+use crate::scan_routes::{cancel_scan_job, get_execution_outcomes, get_scan_job, get_scan_summary};
 use crate::state::AppState;
 
 #[derive(OpenApi)]
@@ -41,6 +42,8 @@ use crate::state::AppState;
         crate::routes::get_scans,
         crate::routes::get_config,
         crate::scan_routes::get_scan_job,
+        crate::scan_routes::cancel_scan_job,
+        crate::scan_routes::get_execution_outcomes,
         crate::routes::get_trend,
     ),
     components(schemas(
@@ -53,6 +56,7 @@ use crate::state::AppState;
         crate::config::TopNParams,
         crate::scan_routes::ScanStartedResponse,
         crate::scan_routes::ScanJobResponse,
+        crate::scan_routes::ExecutionOutcomeResponse,
     ))
 )]
 struct ApiDoc;
@@ -214,8 +218,18 @@ pub async fn run_server(
     db: Db,
     core_config: CodePrismConfig,
     config_path: String,
+    host: String,
     port: u16,
 ) -> Result<()> {
+    let api_token = crate::auth::api_token_from_env()?;
+    if !crate::auth::is_loopback_host(&host) && api_token.is_none() {
+        anyhow::bail!(
+            "refusing to listen on non-loopback host '{}': set CODEPRISM_API_TOKEN to a strong token first",
+            host
+        );
+    }
+    let scan_scheduler = crate::scan_scheduler::ScanScheduler::from_env();
+    scan_scheduler.recover_interrupted_jobs(&db).await?;
     // Convert CodePrismConfig (Core) to AppConfig (Server) with multi-project support
     let projects_config = core_config.get_projects();
 
@@ -273,6 +287,7 @@ pub async fn run_server(
                         path: repo_path.clone(),
                         git_url: String::new(),
                         current_branch,
+                        managed: git_cache.is_managed_path(repo_path),
                         project_name: Some(project.name.clone()),
                     },
                 );
@@ -286,11 +301,15 @@ pub async fn run_server(
         db,
         core_config: Arc::new(RwLock::new(core_config)),
         git_cache,
+        api_token,
+        scan_scheduler,
         config_path,
     };
 
     // Setup Router
     let router = Router::new()
+        .route("/api/v1/auth/status", get(crate::auth::auth_status))
+        .route("/api/v1/auth/login", post(crate::auth::login))
         // Config & Projects (listing)
         .route("/api/v1/config", get(crate::routes::get_config))
         .route(
@@ -326,6 +345,7 @@ pub async fn run_server(
         // Scan operations
         .route("/api/v1/scan", post(execute_scan))
         .route("/api/v1/scan-jobs/:id", get(get_scan_job))
+        .route("/api/v1/scan-jobs/:id/cancel", post(cancel_scan_job))
         // Project operations (views, scans listing)
         .route("/api/v1/projects/:project_name/scans", get(get_scans))
         .route(
@@ -335,6 +355,10 @@ pub async fn run_server(
         .route(
             "/api/v1/projects/:project_name/scans/:scan_id/summary",
             get(get_scan_summary),
+        )
+        .route(
+            "/api/v1/projects/:project_name/scans/:scan_id/execution-outcomes",
+            get(get_execution_outcomes),
         )
         .route(
             "/api/v1/projects/:project_name/scans/:scan_id/matches",
@@ -355,13 +379,16 @@ pub async fn run_server(
         )
         // Swagger UI
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .layer(CorsLayer::permissive())
         .fallback(static_handler)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::require_api_token,
+        ))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
-    println!("Server running on http://0.0.0.0:{}", port);
-    println!("Swagger UI: http://0.0.0.0:{}/swagger-ui", port);
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", host, port)).await?;
+    println!("Server running on http://{}:{}", host, port);
+    println!("Swagger UI: http://{}:{}/swagger-ui", host, port);
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

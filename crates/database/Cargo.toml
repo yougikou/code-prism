@@ -1,11 +1,11 @@
 [package]
 name = "codeprism-database"
-version = "0.1.0"
+version = "0.4.1"
 edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
-codeprism-core = { version = "0.1.0", path = "../core" }
+codeprism-core = { version = "0.4.1", path = "../core" }
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio", "macros"] }
 
 [dev-dependencies]

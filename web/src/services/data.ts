@@ -691,6 +691,31 @@ export interface ScanSummary {
   analyzer_stats: AnalyzerStatItem[];
 }
 
+export interface ExecutionOutcome {
+  analyzer_id: string;
+  file_path: string;
+  change_type: string | null;
+  kind: string;
+  severity: string;
+  message: string;
+  limit: string | null;
+  observed: string | null;
+  analysis_complete: boolean;
+}
+
+export async function fetchExecutionOutcomes(
+  projectName: string,
+  scanId: string | number,
+  signal?: AbortSignal,
+): Promise<ExecutionOutcome[]> {
+  const res = await fetch(
+    `/api/v1/projects/${encodeURIComponent(projectName)}/scans/${scanId}/execution-outcomes`,
+    { signal },
+  );
+  if (!res.ok) throw new Error(`Failed to fetch execution outcomes: ${res.statusText}`);
+  return await res.json();
+}
+
 export async function fetchScanSummary(
   projectName: string,
   scanId: string | number,

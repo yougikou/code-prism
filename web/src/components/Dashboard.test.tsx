@@ -12,6 +12,7 @@ vi.mock('@/services/data', () => ({
   fetchView: vi.fn(),
   fetchUnifiedProjects: vi.fn().mockResolvedValue([]),
   fetchScanSummary: vi.fn(),
+  fetchExecutionOutcomes: vi.fn(),
   fetchMatches: vi.fn(),
   isMultiProject: vi.fn(),
   getDefaultProject: vi.fn(),
@@ -32,6 +33,7 @@ describe('Dashboard', () => {
     vi.mocked(dataService.fetchUnifiedProjects).mockResolvedValue([]);
     vi.mocked(dataService.fetchRuns).mockResolvedValue([]);
     vi.mocked(dataService.fetchScanSummary).mockResolvedValue(null);
+    vi.mocked(dataService.fetchExecutionOutcomes).mockResolvedValue([]);
   });
 
   it('renders a chart loading state while view data is pending', async () => {

@@ -272,75 +272,7 @@ pub async fn delete_project(
 ) -> impl IntoResponse {
     let pool = state.db.pool();
 
-    // 1. Delete all DB records for this project
-    let project_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM projects WHERE name = ?")
-        .bind(&project_name)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
-
-    for pid in &project_ids {
-        sqlx::query("DELETE FROM scan_summaries WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
-            .bind(pid).execute(pool).await.ok();
-        sqlx::query(
-            "DELETE FROM matches WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)",
-        )
-        .bind(pid)
-        .execute(pool)
-        .await
-        .ok();
-        sqlx::query(
-            "DELETE FROM metrics WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)",
-        )
-        .bind(pid)
-        .execute(pool)
-        .await
-        .ok();
-        sqlx::query(
-            "DELETE FROM file_changes WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)",
-        )
-        .bind(pid)
-        .execute(pool)
-        .await
-        .ok();
-        sqlx::query("DELETE FROM scans WHERE project_id = ?")
-            .bind(pid)
-            .execute(pool)
-            .await
-            .ok();
-    }
-    sqlx::query("DELETE FROM scan_jobs WHERE project_name = ?")
-        .bind(&project_name)
-        .execute(pool)
-        .await
-        .ok();
-    sqlx::query("DELETE FROM projects WHERE name = ?")
-        .bind(&project_name)
-        .execute(pool)
-        .await
-        .ok();
-    sqlx::query(
-        "DELETE FROM match_contents \
-         WHERE NOT EXISTS (SELECT 1 FROM matches WHERE matches.content_id = match_contents.id) \
-           AND NOT EXISTS (SELECT 1 FROM metrics WHERE metrics.content_id = match_contents.id)",
-    )
-    .execute(pool)
-    .await
-    .ok();
-
-    // 2. Remove cached repo entries + on-disk directories
-    let repos = state.git_cache.list_all();
-    for (repo_id, repo) in &repos {
-        if repo.project_name.as_deref() == Some(&project_name) {
-            let path = repo.path.clone();
-            tokio::spawn(async move {
-                let _ = tokio::fs::remove_dir_all(&path).await;
-            });
-            state.git_cache.remove(repo_id);
-        }
-    }
-
-    // 3. Remove project config from YAML
+    // Read and serialize the replacement config before mutating persisted state.
     let yaml_content = match std::fs::read_to_string(&state.config_path) {
         Ok(c) => c,
         Err(e) => {
@@ -363,8 +295,6 @@ pub async fn delete_project(
         }
     };
     core_config.projects.retain(|p| p.name != project_name);
-
-    // Atomic write
     let yaml_str = match serde_yaml::to_string(&core_config) {
         Ok(s) => s,
         Err(e) => {
@@ -375,6 +305,60 @@ pub async fn delete_project(
                 .into_response();
         }
     };
+
+    // Keep all database changes in one transaction. Configuration is written
+    // before the commit, so a filesystem failure rolls the database work back.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to start database transaction: {}", e)})),
+            )
+                .into_response();
+        }
+    };
+    let delete_result: Result<(), sqlx::Error> = async {
+        let project_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM projects WHERE name = ?")
+            .bind(&project_name)
+            .fetch_all(&mut *tx)
+            .await?;
+        for pid in &project_ids {
+            sqlx::query("DELETE FROM scan_summaries WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
+                .bind(pid).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM matches WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
+                .bind(pid).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM metrics WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
+                .bind(pid).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM file_changes WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
+                .bind(pid).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM intermediate_blocks WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
+                .bind(pid).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM scans WHERE project_id = ?")
+                .bind(pid).execute(&mut *tx).await?;
+        }
+        sqlx::query("DELETE FROM scan_jobs WHERE project_name = ?")
+            .bind(&project_name).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM projects WHERE name = ?")
+            .bind(&project_name).execute(&mut *tx).await?;
+        sqlx::query(
+            "DELETE FROM match_contents \
+             WHERE NOT EXISTS (SELECT 1 FROM matches WHERE matches.content_id = match_contents.id) \
+               AND NOT EXISTS (SELECT 1 FROM metrics WHERE metrics.content_id = match_contents.id)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        Ok(())
+    }
+    .await;
+    if let Err(e) = delete_result {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to delete project data: {}", e)})),
+        )
+            .into_response();
+    }
+
     let tmp_path = format!("{}.tmp", state.config_path);
     if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
         let _ = std::fs::remove_file(&tmp_path);
@@ -391,6 +375,33 @@ pub async fn delete_project(
             Json(serde_json::json!({"error": format!("Failed to save config: {}", e)})),
         )
             .into_response();
+    }
+    if let Err(e) = tx.commit().await {
+        // Preserve the prior YAML if SQLite rejects the transaction commit.
+        let _ = std::fs::write(&state.config_path, &yaml_content);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(
+                serde_json::json!({"error": format!("Failed to finalize project deletion: {}", e)}),
+            ),
+        )
+            .into_response();
+    }
+
+    // Remove cache entries. Only CodePrism-managed clones are eligible for
+    // deletion; local repositories are always preserved.
+    let repos = state.git_cache.list_all();
+    for (repo_id, repo) in &repos {
+        if repo.project_name.as_deref() == Some(&project_name) {
+            let remove_files = state.git_cache.can_remove_files(repo);
+            let path = repo.path.clone();
+            state.git_cache.remove(repo_id);
+            if remove_files {
+                tokio::spawn(async move {
+                    let _ = tokio::fs::remove_dir_all(&path).await;
+                });
+            }
+        }
     }
 
     // Rebuild in-memory state
@@ -1727,6 +1738,7 @@ pub async fn add_local_project(
             path: canonical_path.clone(),
             git_url: String::new(),
             current_branch: current_branch.clone(),
+            managed: false,
             project_name: Some(req.name.clone()),
         },
     );
@@ -1859,7 +1871,62 @@ pub async fn execute_scan(
         .clone()
         .unwrap_or_else(|| "scanned_project".to_string());
 
-    // Create scan_job record before branching into two flows
+    // Validate every request before creating a durable job. Otherwise rejected
+    // requests leave scan_jobs stuck in the queued state forever.
+    if let Some(repo_id) = request.repo_id.as_deref() {
+        if state.git_cache.get(repo_id).is_none() {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ScanResponseData {
+                    scan_id: 0,
+                    project_name: String::new(),
+                    status: "error".to_string(),
+                    message: "Repository not found in cache. Please clone it first.".to_string(),
+                }),
+            )
+                .into_response();
+        }
+        if request.scan_mode == "diff" && request.ref_2.as_deref().is_none_or(str::is_empty) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ScanResponseData {
+                    scan_id: 0,
+                    project_name: String::new(),
+                    status: "error".to_string(),
+                    message: "ref_2 is required for diff mode when using a cached repository"
+                        .to_string(),
+                }),
+            )
+                .into_response();
+        }
+    } else {
+        if request.git_url.trim().is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ScanResponseData {
+                    scan_id: 0,
+                    project_name: String::new(),
+                    status: "error".to_string(),
+                    message: "git_url is required when no repo_id is provided".to_string(),
+                }),
+            )
+                .into_response();
+        }
+        if request.scan_mode == "diff" && request.base_commit.as_deref().is_none_or(str::is_empty) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ScanResponseData {
+                    scan_id: 0,
+                    project_name: String::new(),
+                    status: "error".to_string(),
+                    message: "base_commit is required for diff mode".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    }
+
+    // Create the job only once the request is known to be executable.
     let job_id = match sqlx::query_scalar::<_, i64>(
         "INSERT INTO scan_jobs (project_name, scan_mode) VALUES (?, ?) RETURNING id",
     )
@@ -1885,24 +1952,12 @@ pub async fn execute_scan(
     };
 
     let job_handle = ScanJobHandle::new(state.db.clone(), job_id);
+    let cancellation = state.scan_scheduler.register(job_id).await;
 
     // ── Flow 1: repo_id provided — use cached cloned repo ──────────────
     if let Some(ref repo_id) = request.repo_id {
-        let repo_info = match state.git_cache.get(repo_id) {
-            Some(info) => info,
-            None => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(ScanResponseData {
-                        scan_id: 0,
-                        project_name: String::new(),
-                        status: "error".to_string(),
-                        message: "Repository not found in cache. Please clone it first."
-                            .to_string(),
-                    }),
-                )
-                    .into_response();
-            }
+        let Some(repo_info) = state.git_cache.get(repo_id) else {
+            unreachable!("cached repository was validated before creating the scan job");
         };
 
         let temp_dir = repo_info.path.clone();
@@ -1913,26 +1968,32 @@ pub async fn execute_scan(
         let db = state.db.clone();
         let core_config = state.core_config.read().unwrap().clone();
         let job = job_handle;
+        let scheduler = state.scan_scheduler.clone();
+        let cancellation = cancellation.clone();
 
         tokio::spawn(async move {
+            let Some(_permit) = scheduler.acquire(&cancellation).await else {
+                job.set_cancelled().await;
+                scheduler.finish(job_id).await;
+                return;
+            };
             job.set_running().await;
             let mut scanner = Scanner::with_config(db, core_config);
             scanner.set_scan_job_id(job.job_id());
+            scanner.set_cancellation_token(cancellation.clone());
 
             let result = if scan_mode == "snapshot" {
                 scanner
                     .scan_snapshot(&temp_dir, &proj_name, Some(&ref_1))
                     .await
+            } else if let Some(base) = ref_2 {
+                scanner
+                    .scan_diff(&temp_dir, &proj_name, &base, &ref_1)
+                    .await
             } else {
-                if let Some(base) = ref_2 {
-                    scanner
-                        .scan_diff(&temp_dir, &proj_name, &base, &ref_1)
-                        .await
-                } else {
-                    Err(anyhow::anyhow!(
-                        "ref_2 is required for diff mode when using cached repo"
-                    ))
-                }
+                Err(anyhow::anyhow!(
+                    "ref_2 is required for diff mode when using cached repo"
+                ))
             };
 
             match result {
@@ -1945,10 +2006,15 @@ pub async fn execute_scan(
                     println!("Scan completed. job={}, scan={}", job_id, scan_id);
                 }
                 Err(e) => {
-                    job.set_failed(&e.to_string()).await;
+                    if cancellation.load(std::sync::atomic::Ordering::Acquire) {
+                        job.set_cancelled().await;
+                    } else {
+                        job.set_failed(&e.to_string()).await;
+                    }
                     eprintln!("Scan error for job {}: {}", job_id, e);
                 }
             }
+            scheduler.finish(job_id).await;
         });
 
         return (
@@ -1964,117 +2030,111 @@ pub async fn execute_scan(
     }
 
     // ── Flow 2: No repo_id — clone fresh (original behavior) ──────────
-    if request.git_url.trim().is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ScanResponseData {
-                scan_id: 0,
-                project_name: String::new(),
-                status: "error".to_string(),
-                message: "git_url is required when no repo_id is provided".to_string(),
-            }),
-        )
-            .into_response();
-    }
-
     let git_url = request.git_url.clone();
     let branch = request.branch.clone();
     let commit = request.commit.clone();
     let base_commit = request.base_commit.clone();
     let project_name_clone = project_name.clone();
+    let db = state.db.clone();
+    let core_config = state.core_config.read().unwrap().clone();
+    let scheduler = state.scan_scheduler.clone();
+    let job = job_handle;
+    let cancellation = cancellation.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let temp_dir = std::env::temp_dir().join(format!("codeprism-{}", uuid::Uuid::new_v4()));
-        let temp_dir_str = match temp_dir.to_str() {
-            Some(path) => path.to_string(),
-            None => return Err("Failed to create temp directory".to_string()),
+    tokio::spawn(async move {
+        let Some(_permit) = scheduler.acquire(&cancellation).await else {
+            job.set_cancelled().await;
+            scheduler.finish(job_id).await;
+            return;
         };
-
-        match git2::Repository::clone(&git_url, &temp_dir_str) {
-            Ok(repo) => {
-                if let Some(br) = &branch
-                    && let Err(e) = repo.set_head(&format!("refs/heads/{}", br))
-                {
-                    let _ = std::fs::remove_dir_all(&temp_dir_str);
-                    return Err(format!("Failed to checkout branch {}: {}", br, e));
+        job.set_running().await;
+        let cloned = tokio::task::spawn_blocking(move || {
+            let temp_dir = std::env::temp_dir().join(format!("codeprism-{}", uuid::Uuid::new_v4()));
+            let temp_dir_str = temp_dir
+                .to_str()
+                .ok_or_else(|| "Failed to create temp directory".to_string())?
+                .to_string();
+            match git2::Repository::clone(&git_url, &temp_dir_str) {
+                Ok(repo) => {
+                    if let Some(br) = &branch
+                        && let Err(e) = repo.set_head(&format!("refs/heads/{}", br))
+                    {
+                        let _ = std::fs::remove_dir_all(&temp_dir_str);
+                        return Err(format!("Failed to checkout branch {}: {}", br, e));
+                    }
+                    Ok((temp_dir_str, project_name_clone))
                 }
-                Ok((temp_dir_str, project_name_clone))
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&temp_dir_str);
+                    Err(format!("Failed to clone repository: {}", e))
+                }
             }
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&temp_dir_str);
-                Err(format!("Failed to clone repository: {}", e))
-            }
-        }
-    })
-    .await;
+        })
+        .await;
 
-    match result {
-        Ok(Ok((temp_dir, proj_name))) => {
-            let db = state.db.clone();
-            let core_config = state.core_config.read().unwrap().clone();
-            let job = job_handle;
-
-            tokio::spawn(async move {
-                job.set_running().await;
-                let mut scanner = Scanner::with_config(db, core_config);
-                scanner.set_scan_job_id(job.job_id());
-
-                let result = if scan_mode == "snapshot" {
-                    let commit_ref = commit.as_deref();
-                    scanner
-                        .scan_snapshot(&temp_dir, &proj_name, commit_ref)
-                        .await
+        let result: anyhow::Result<()> = match cloned {
+            Ok(Ok((temp_dir, project_name))) => {
+                if cancellation.load(std::sync::atomic::Ordering::Acquire) {
+                    let _ = std::fs::remove_dir_all(&temp_dir);
+                    Err(anyhow::anyhow!("Scan cancelled"))
                 } else {
-                    if let Some(base) = base_commit {
-                        let target = commit.as_deref().unwrap_or("HEAD");
+                    let mut scanner = Scanner::with_config(db, core_config);
+                    scanner.set_scan_job_id(job.job_id());
+                    scanner.set_cancellation_token(cancellation.clone());
+                    let result = if scan_mode == "snapshot" {
                         scanner
-                            .scan_diff(&temp_dir, &proj_name, &base, target)
+                            .scan_snapshot(&temp_dir, &project_name, commit.as_deref())
+                            .await
+                    } else if let Some(base) = base_commit {
+                        scanner
+                            .scan_diff(
+                                &temp_dir,
+                                &project_name,
+                                &base,
+                                commit.as_deref().unwrap_or("HEAD"),
+                            )
                             .await
                     } else {
                         Err(anyhow::anyhow!("base_commit is required for diff mode"))
-                    }
-                };
-
-                let _ = std::fs::remove_dir_all(&temp_dir);
-
-                match result {
-                    Ok(scan_id) => {
-                        if scanner.completed_with_errors() {
-                            job.set_completed_with_errors(scan_id).await;
-                        } else {
-                            job.set_completed(scan_id).await;
+                    };
+                    let _ = std::fs::remove_dir_all(&temp_dir);
+                    match result {
+                        Ok(scan_id) => {
+                            if scanner.completed_with_errors() {
+                                job.set_completed_with_errors(scan_id).await;
+                            } else {
+                                job.set_completed(scan_id).await;
+                            }
+                            println!("Scan completed. job={}, scan={}", job_id, scan_id);
+                            scheduler.finish(job_id).await;
+                            return;
                         }
-                        println!("Scan completed. job={}, scan={}", job_id, scan_id);
-                    }
-                    Err(e) => {
-                        job.set_failed(&e.to_string()).await;
-                        eprintln!("Scan error for job {}: {}", job_id, e);
+                        Err(error) => Err(error),
                     }
                 }
-            });
-
-            (
-                StatusCode::OK,
-                Json(ScanStartedResponse {
-                    job_id,
-                    project_name,
-                    status: "started".to_string(),
-                    message: "Scan has been queued and will start shortly".to_string(),
-                }),
-            )
-                .into_response()
+            }
+            Ok(Err(error)) => Err(anyhow::anyhow!(error)),
+            Err(error) => Err(anyhow::anyhow!(error)),
+        };
+        if cancellation.load(std::sync::atomic::Ordering::Acquire) {
+            job.set_cancelled().await;
+        } else if let Err(error) = result {
+            job.set_failed(&error.to_string()).await;
+            eprintln!("Scan error for job {}: {}", job_id, error);
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ScanResponseData {
-                scan_id: 0,
-                project_name: String::new(),
-                status: "error".to_string(),
-                message: "Failed to initialize scan".to_string(),
-            }),
-        )
-            .into_response(),
-    }
+        scheduler.finish(job_id).await;
+    });
+
+    (
+        StatusCode::OK,
+        Json(ScanStartedResponse {
+            job_id,
+            project_name,
+            status: "started".to_string(),
+            message: "Scan has been queued and will start shortly".to_string(),
+        }),
+    )
+        .into_response()
 }
 
 pub async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {

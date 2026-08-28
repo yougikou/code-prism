@@ -30,6 +30,7 @@ function Invoke-ApiCall {
         ContentType = 'application/json'
         UseBasicParsing = $true
     }
+    if ($env:CODEPRISM_API_TOKEN) { $params.Headers = @{ Authorization = "Bearer $($env:CODEPRISM_API_TOKEN)" } }
     if ($Body) { $params.Body = $Body }
     try { return Invoke-RestMethod @params }
     catch {

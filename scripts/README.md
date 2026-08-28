@@ -37,6 +37,20 @@ $env:CODEPRISM_SERVER = 'http://localhost:8080'
 .\codeprism-scan.ps1 -Server http://localhost:8080 -Project myapp -Mode snapshot
 ```
 
+## 认证令牌
+
+当服务器使用 `--host` 暴露到非本机地址时，必须设置 `CODEPRISM_API_TOKEN`。脚本会自动将同名环境变量作为 Bearer Token 发送：
+
+```bash
+export CODEPRISM_API_TOKEN='your-random-token'
+codeprism-scan --server http://analysis-host:3000 --project myapp --mode snapshot
+```
+
+```powershell
+$env:CODEPRISM_API_TOKEN = 'your-random-token'
+.\codeprism-scan.ps1 -Server http://analysis-host:3000 -Project myapp -Mode snapshot
+```
+
 ## 命令
 
 ### codeprism-scan

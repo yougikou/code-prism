@@ -60,6 +60,13 @@
         "type": "string"
       }
     },
+    "custom_cross_file_analyzers": {
+      "type": "object",
+      "description": "Cross-file script analyzers using the extract/finalize protocol",
+      "additionalProperties": {
+        "$ref": "#/$defs/cross-file-analyzer-config"
+      }
+    },
     "aggregation_views": {
       "type": "object",
       "description": "Aggregation views for the dashboard. Keys are view IDs.",
@@ -75,6 +82,16 @@
         "name": {
           "type": "string",
           "description": "Project name"
+        },
+        "repo_path": {
+          "type": "string",
+          "description": "Optional local path for this project's repository"
+        },
+        "columns": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Dashboard grid column count",
+          "default": 2
         },
         "tech_stacks": {
           "type": "array",
@@ -107,6 +124,13 @@
           "description": "External WASM analyzers",
           "additionalProperties": {
             "type": "string"
+          }
+        },
+        "custom_cross_file_analyzers": {
+          "type": "object",
+          "description": "Cross-file script analyzers",
+          "additionalProperties": {
+            "$ref": "#/$defs/cross-file-analyzer-config"
           }
         },
         "aggregation_views": {
@@ -230,6 +254,27 @@
         }
       }
     },
+    "cross-file-analyzer-config": {
+      "type": "object",
+      "properties": {
+        "metric_key": { "type": "string" },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "tags": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "default": {}
+        },
+        "scan_mode": {
+          "type": "string",
+          "enum": ["all", "snapshot", "diff"]
+        },
+        "change_type": {
+          "type": "string",
+          "enum": ["all", "A", "M", "D"]
+        }
+      }
+    },
     "aggregation-view": {
       "type": "object",
       "properties": {
@@ -260,6 +305,22 @@
           "type": "string",
           "description": "Change type display mode: \"all\" (stacked), \"switchable\" (A/M/D toggle), or undefined (no filtering)",
           "enum": ["all", "switchable"]
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Grid width occupied by this view",
+          "default": 1
+        },
+        "trend": {
+          "type": "boolean",
+          "description": "Enable trend data for this view",
+          "default": false
+        },
+        "detail_view": {
+          "type": "boolean",
+          "description": "Enable finding detail drill-down",
+          "default": false
         },
         "func": {
           "$ref": "#/$defs/aggregation-func"

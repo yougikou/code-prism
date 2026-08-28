@@ -79,6 +79,9 @@ enum Commands {
     TestAnalyzers,
     /// Start the API server
     Serve {
+        /// Host address to listen on. Non-loopback addresses require CODEPRISM_API_TOKEN.
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
         /// Port to listen on
         #[arg(long, default_value_t = 3000)]
         port: u16,
@@ -272,26 +275,25 @@ async fn main() -> Result<()> {
                 anyhow::bail!("{} custom analyzer test(s) failed", failures);
             }
         }
-        Commands::Serve { port } => {
+        Commands::Serve { host, port } => {
             // Load Config & DB
             let config_path = cli.config.as_deref().unwrap_or("codeprism.yaml");
             let config = if std::path::Path::new(config_path).exists() {
                 codeprism_core::CodePrismConfig::load_from_file(config_path)?
+            } else if cli.config.is_none() {
+                println!("No config file found, using defaults.");
+                codeprism_core::CodePrismConfig::default()
             } else {
-                if cli.config.is_none() {
-                    println!("No config file found, using defaults.");
-                    codeprism_core::CodePrismConfig::default()
-                } else {
-                    eprintln!("Config '{}' not found.", config_path);
-                    std::process::exit(1);
-                }
+                eprintln!("Config '{}' not found.", config_path);
+                std::process::exit(1);
             };
             let db_url = resolve_db_url(&config, config_path);
             let db = Db::new(&db_url).await?;
             db.migrate().await?;
 
             println!("Starting server...");
-            codeprism_server::run_server(db, config, config_path.to_string(), *port).await?;
+            codeprism_server::run_server(db, config, config_path.to_string(), host.clone(), *port)
+                .await?;
         }
     }
 

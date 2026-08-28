@@ -340,6 +340,7 @@ codeprism scan ../my-project --project "MyApp"
 codeprism serve [OPTIONS]
 
 Options:
+  --host <HOST>    Host address (default: 127.0.0.1; non-loopback requires CODEPRISM_API_TOKEN)
   --port <PORT>    Server port (default: 3000)
 ```
 
@@ -354,7 +355,41 @@ codeprism serve --port 8080
 
 # Use custom config
 codeprism serve --config production.yaml
+
+# Expose intentionally on a LAN or reverse proxy, protected by a token
+export CODEPRISM_API_TOKEN='replace-with-a-random-token-of-at-least-32-characters'
+codeprism serve --host 0.0.0.0 --port 3000
 ```
+
+The server binds to `127.0.0.1` by default and does not enable permissive
+cross-origin access. A non-loopback host requires `CODEPRISM_API_TOKEN`; the
+dashboard prompts for it once and stores it in an HttpOnly, same-site cookie.
+API clients may instead send `Authorization: Bearer $CODEPRISM_API_TOKEN`.
+Local repositories registered with the dashboard are never deleted by project
+or cache deletion; only clones created inside CodePrism's managed cache can be
+removed from disk.
+
+### Scan reliability controls (v0.4)
+
+Scans are queued in-process and execute one at a time by default, which keeps
+SQLite writes and analyzer resource use predictable. Set
+`CODEPRISM_MAX_CONCURRENT_SCANS` to a positive integer only after validating
+your host capacity. `POST /api/v1/scan-jobs/{job_id}/cancel` requests
+cancellation; a restarted server marks queued or running jobs as failed because
+their request payload is intentionally not persisted for replay. Python script
+analyzers time out after 30 seconds per file, while Wasm analyzers have input,
+output, CPU-fuel, and 64 MiB linear-memory limits.
+
+### Analysis execution outcomes (v0.4.1)
+
+Execution limits are results, not silent omissions and not analyzer-specific
+quality rules. When a Python or Wasm analyzer times out, exceeds an input or
+output limit, exhausts Wasm resources, returns an invalid protocol response, or
+panics, CodePrism records a generic `codeprism.runtime` finding with
+`analysis_complete: false`. Retrieve these records with `GET
+/api/v1/projects/{project_name}/scans/{scan_id}/execution-outcomes`; each record
+includes the affected file, source analyzer, outcome kind, severity, limit and
+observed value when available. No database migration is required.
 
 #### `init-config` - Generate Configuration
 

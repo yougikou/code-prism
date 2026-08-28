@@ -11,7 +11,7 @@ import { ChildrenViewer } from './dashboard/ChildrenViewer';
 import { MatchDetailView } from './dashboard/MatchDetailView';
 import { DetailViewPanel } from './dashboard/DetailViewPanel';
 import { AnalysisDetailModal } from './dashboard/AnalysisDetailModal';
-import { fetchConfig, fetchRuns, fetchView, fetchScanSummary, fetchMatches, fetchTrend, type AggregationResult, type AppConfig, type ScanSummary, type MatchDetail, type TrendSeries, type DuplicationInfo, type FetchTrendOptions, type Run, type ViewConfig, getDefaultProject } from '@/services/data';
+import { fetchConfig, fetchRuns, fetchView, fetchScanSummary, fetchExecutionOutcomes, fetchMatches, fetchTrend, type AggregationResult, type AppConfig, type ScanSummary, type ExecutionOutcome, type MatchDetail, type TrendSeries, type DuplicationInfo, type FetchTrendOptions, type Run, type ViewConfig, getDefaultProject } from '@/services/data';
 import TrendRenderer from './widgets/TrendRenderer';
 import { TrendScanSelector } from './dashboard/TrendScanSelector';
 import { ChartSkeleton } from '@/components/ui/skeleton';
@@ -75,6 +75,7 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [runs, setRuns] = useState<DashboardRun[]>([]);
   const [scanSummary, setScanSummary] = useState<ScanSummary | null>(null);
+  const [executionOutcomes, setExecutionOutcomes] = useState<ExecutionOutcome[]>([]);
   // Track change_type filter per view (for switchable mode)
   const [changeTypeFilters, setChangeTypeFilters] = useState<Record<string, string>>({});
   // Trend state
@@ -342,6 +343,7 @@ const Dashboard = () => {
   useEffect(() => {
     if (!selectedRunId || !currentProject) {
       setScanSummary(null);
+      setExecutionOutcomes([]);
       return;
     }
 
@@ -349,9 +351,13 @@ const Dashboard = () => {
     const controller = new AbortController();
 
     const loadSummary = async () => {
-      const summary = await fetchScanSummary(currentProject, selectedRunId, controller.signal);
+      const [summary, outcomes] = await Promise.all([
+        fetchScanSummary(currentProject, selectedRunId, controller.signal),
+        fetchExecutionOutcomes(currentProject, selectedRunId, controller.signal).catch(() => []),
+      ]);
       if (isActive) {
         setScanSummary(summary);
+        setExecutionOutcomes(outcomes);
       }
     };
     loadSummary();
@@ -1538,7 +1544,7 @@ const Dashboard = () => {
                   {scanSummary ? (
                     <div className="space-y-4">
                       {/* Overview stats row */}
-                      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 text-sm">
+                      <div className="grid grid-cols-2 md:grid-cols-7 gap-4 text-sm">
                         <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
                           <div className="text-2xl font-bold text-sky-600 dark:text-sky-400">{scanSummary.total_files_scanned.toLocaleString()}</div>
                           <p className="text-slate-600 dark:text-slate-400 mt-1">{t('dashboard.totalFiles')}</p>
@@ -1567,6 +1573,12 @@ const Dashboard = () => {
                           </div>
                           <p className="text-slate-600 dark:text-slate-400 mt-1">{t('dashboard.loadErrors')}</p>
                         </div>
+                        <div className="bg-slate-50 dark:bg-slate-700/30 rounded-lg p-3 text-center">
+                          <div className={`text-2xl font-bold ${executionOutcomes.length > 0 ? 'text-amber-500' : 'text-green-500'}`}>
+                            {executionOutcomes.length.toLocaleString()}
+                          </div>
+                          <p className="text-slate-600 dark:text-slate-400 mt-1">{t('dashboard.incompleteAnalyses')}</p>
+                        </div>
                       </div>
 
                       {/* Load errors detail */}
@@ -1578,6 +1590,22 @@ const Dashboard = () => {
                               <li key={i} className="text-xs break-all">{err}</li>
                             ))}
                           </ul>
+                        </div>
+                      )}
+
+                      {executionOutcomes.length > 0 && (
+                        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-sm">
+                          <div className="font-medium text-amber-800 dark:text-amber-300 mb-2">{t('dashboard.executionOutcomes')}</div>
+                          <div className="max-h-56 overflow-auto space-y-2">
+                            {executionOutcomes.map((outcome, index) => (
+                              <div key={`${outcome.file_path}-${outcome.analyzer_id}-${index}`} className="text-xs text-amber-800 dark:text-amber-200 break-all">
+                                <span className="font-mono font-semibold">{outcome.kind}</span>{' · '}
+                                <span className="font-mono">{outcome.analyzer_id}</span>{' · '}
+                                <span className="font-mono">{outcome.file_path}</span>{' — '}{outcome.message}
+                                {outcome.limit && <span>{` (${t('dashboard.limit')}: ${outcome.limit})`}</span>}
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
 

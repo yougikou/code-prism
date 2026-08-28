@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fetchScanJob } from './scan'
+import { cancelScanJob, fetchScanJob } from './scan'
 
 describe('scan service', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -19,5 +19,11 @@ describe('scan service', () => {
     }))
 
     await expect(fetchScanJob(9)).rejects.toThrow('Job not found')
+  })
+
+  it('cancels an active job', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }))
+    await expect(cancelScanJob(7)).resolves.toBeUndefined()
+    expect(fetch).toHaveBeenCalledWith('/api/v1/scan-jobs/7/cancel', { method: 'POST' })
   })
 })

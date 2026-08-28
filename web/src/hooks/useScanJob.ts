@@ -63,8 +63,8 @@ export function useScanJob(
           stopped = true
           return
         }
-        if (job.status === 'failed') {
-          setScanProgress({ status: 'error', message: job.error_message || t('execute.scanFailed') })
+        if (job.status === 'failed' || job.status === 'cancelled') {
+          setScanProgress({ status: 'error', message: job.status === 'cancelled' ? (job.progress_message || 'Scan cancelled') : (job.error_message || t('execute.scanFailed')) })
           setEta(null)
           stopped = true
           return

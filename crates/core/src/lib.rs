@@ -5,6 +5,20 @@ use std::collections::HashMap;
 pub const TAG_METRIC: &str = "metric";
 pub const TAG_CATEGORY: &str = "category";
 
+/// A framework-generated record describing why an analyzer could not produce
+/// a complete result for one input. It is intentionally independent of any
+/// analyzer's domain metrics or configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnalyzerRuntimeOutcome {
+    pub kind: String,
+    pub severity: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed: Option<String>,
+}
+
 /// Stable SHA-256 hash for exact match content stored in `match_contents`.
 /// Analyzer-specific normalization belongs in a finding key, not this hash.
 pub fn hash_match_content(content: &str) -> String {

@@ -38,6 +38,9 @@ api_call() {
     endpoint_url="$(get_server_url)${endpoint}"
 
     local curl_args=(-s -S -X "$method")
+    if [[ -n "${CODEPRISM_API_TOKEN:-}" ]]; then
+        curl_args+=(-H "Authorization: Bearer ${CODEPRISM_API_TOKEN}")
+    fi
     if [[ -n "$data" ]]; then
         curl_args+=(-H "Content-Type: application/json" -d "$data")
     fi

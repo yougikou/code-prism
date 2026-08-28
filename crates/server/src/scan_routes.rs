@@ -2,6 +2,7 @@ use crate::{api_error::ApiError, state::AppState};
 use axum::{
     Json,
     extract::{Path, State},
+    http::StatusCode,
 };
 use codeprism_database::Db;
 use serde::{Deserialize, Serialize};
@@ -48,6 +49,30 @@ pub struct ScanSummaryResponse {
     pub analyzer_stats: Vec<AnalyzerStatItem>,
 }
 
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ExecutionOutcomeResponse {
+    pub analyzer_id: String,
+    pub file_path: String,
+    pub change_type: Option<String>,
+    pub kind: String,
+    pub severity: String,
+    pub message: String,
+    pub limit: Option<String>,
+    pub observed: Option<String>,
+    pub analysis_complete: bool,
+}
+
+#[derive(Deserialize)]
+struct StoredExecutionOutcome {
+    kind: String,
+    severity: String,
+    message: String,
+    limit: Option<String>,
+    observed: Option<String>,
+    source_analyzer_id: String,
+    analysis_complete: bool,
+}
+
 #[derive(Clone)]
 pub struct ScanJobHandle {
     db: Db,
@@ -76,9 +101,38 @@ impl ScanJobHandle {
         sqlx::query("UPDATE scan_jobs SET status = 'failed', progress = 100, error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
             .bind(error).bind(self.job_id).execute(self.db.pool()).await.ok();
     }
+    pub async fn set_cancelled(&self) {
+        sqlx::query("UPDATE scan_jobs SET status = 'cancelled', progress = 100, progress_message = 'Scan cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .bind(self.job_id).execute(self.db.pool()).await.ok();
+    }
     async fn set_status(&self, status: &str, progress: u8) {
         sqlx::query("UPDATE scan_jobs SET status = ?, progress = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
             .bind(status).bind(progress as i32).bind(self.job_id).execute(self.db.pool()).await.ok();
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/scan-jobs/{job_id}/cancel",
+    params(("job_id" = i64, Path, description = "Scan Job ID")),
+    responses((status = 202), (status = 404))
+)]
+pub async fn cancel_scan_job(
+    State(state): State<AppState>,
+    Path(job_id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    let exists = sqlx::query_scalar::<_, i64>("SELECT id FROM scan_jobs WHERE id = ?")
+        .bind(job_id)
+        .fetch_optional(state.db.pool())
+        .await
+        .map_err(ApiError::database)?;
+    if exists.is_none() {
+        return Err(ApiError::not_found("Job not found"));
+    }
+    if state.scan_scheduler.cancel(job_id).await {
+        Ok(StatusCode::ACCEPTED)
+    } else {
+        Err(ApiError::not_found("Job is not active"))
     }
 }
 
@@ -144,6 +198,48 @@ pub async fn get_scan_summary(
         load_errors: serde_json::from_str(&load_errors_json).unwrap_or_default(),
         analyzer_stats: serde_json::from_str(&stats_json).unwrap_or_default(),
     }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{project_name}/scans/{scan_id}/execution-outcomes",
+    params(
+        ("project_name" = String, Path, description = "Project name"),
+        ("scan_id" = i64, Path, description = "Scan ID")
+    ),
+    responses((status = 200, body = [ExecutionOutcomeResponse]))
+)]
+pub async fn get_execution_outcomes(
+    State(state): State<AppState>,
+    Path((_project_name, scan_id)): Path<(String, i64)>,
+) -> Result<Json<Vec<ExecutionOutcomeResponse>>, ApiError> {
+    let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
+        "SELECT m.file_path, m.change_type, c.content FROM matches m \
+         JOIN match_contents c ON c.id = m.content_id \
+         WHERE m.scan_id = ? AND m.analyzer_id = 'codeprism.runtime' ORDER BY m.id",
+    )
+    .bind(scan_id)
+    .fetch_all(state.db.pool())
+    .await
+    .map_err(ApiError::database)?;
+    Ok(Json(
+        rows.into_iter()
+            .filter_map(|(file_path, change_type, content)| {
+                let outcome: StoredExecutionOutcome = serde_json::from_str(&content).ok()?;
+                Some(ExecutionOutcomeResponse {
+                    analyzer_id: outcome.source_analyzer_id,
+                    file_path,
+                    change_type,
+                    kind: outcome.kind,
+                    severity: outcome.severity,
+                    message: outcome.message,
+                    limit: outcome.limit,
+                    observed: outcome.observed,
+                    analysis_complete: outcome.analysis_complete,
+                })
+            })
+            .collect(),
+    ))
 }
 
 #[cfg(test)]

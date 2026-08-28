@@ -540,7 +540,7 @@ checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
 name = "codeprism"
-version = "0.1.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -555,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "codeprism-analyzer"
-version = "0.1.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "codeprism-core"
-version = "0.1.0"
+version = "0.4.1"
 dependencies = [
  "glob",
  "hex",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "codeprism-database"
-version = "0.1.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "codeprism-core",
@@ -595,7 +595,7 @@ dependencies = [
 
 [[package]]
 name = "codeprism-scanner"
-version = "0.1.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -615,7 +615,7 @@ dependencies = [
 
 [[package]]
 name = "codeprism-server"
-version = "0.1.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "axum 0.7.9",

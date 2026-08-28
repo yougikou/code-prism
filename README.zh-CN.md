@@ -274,6 +274,7 @@ codeprism scan ../my-project --project "MyApp"
 codeprism serve [选项]
 
 选项:
+  --host <主机>    监听地址（默认：127.0.0.1；非回环地址必须设置 CODEPRISM_API_TOKEN）
   --port <端口>    服务器端口（默认：3000）
 ```
 
@@ -288,7 +289,32 @@ codeprism serve --port 8080
 
 # 使用自定义配置
 codeprism serve --config production.yaml
+
+# 有意暴露到局域网或反向代理时，必须设置访问令牌
+export CODEPRISM_API_TOKEN='替换为至少 32 个字符的随机令牌'
+codeprism serve --host 0.0.0.0 --port 3000
 ```
+
+服务默认只绑定到 `127.0.0.1`，且不再启用宽松的跨域访问。使用非回环监听地址时必须设置
+`CODEPRISM_API_TOKEN`；仪表板会提示输入令牌并将其保存为 HttpOnly、同站 Cookie。API 客户端也可
+使用 `Authorization: Bearer $CODEPRISM_API_TOKEN`。通过仪表板登记的本地仓库不会被“删除项目”或
+“删除缓存仓库”操作删除，只有 CodePrism 在其管理缓存中创建的克隆仓库允许从磁盘移除。
+
+### 扫描可靠性控制（v0.4）
+
+扫描任务在进程内排队，默认一次只执行一个，以保持 SQLite 写入和分析器资源占用可预期。仅在验证过
+主机容量后再把 `CODEPRISM_MAX_CONCURRENT_SCANS` 设置为正整数。`POST
+/api/v1/scan-jobs/{job_id}/cancel` 可请求取消任务；服务重启时，已排队或运行中的任务会被标记为失败，
+因为请求参数不会为了重放而持久化。Python 脚本分析器对每个文件的执行限制为 30 秒；Wasm 分析器则限制
+输入、输出、CPU fuel 以及 64 MiB 线性内存。
+
+### 分析执行结果（v0.4.1）
+
+执行限制本身是分析结果，不是静默遗漏，也不是某个业务分析器的质量规则。当 Python 或 Wasm 分析器超时、
+超过输入/输出上限、耗尽 Wasm 资源、返回无效协议结果或发生 panic 时，CodePrism 会写入通用的
+`codeprism.runtime` finding，并标记 `analysis_complete: false`。通过 `GET
+/api/v1/projects/{project_name}/scans/{scan_id}/execution-outcomes` 查询；每条记录包含受影响文件、来源
+分析器、结果类型、严重度、限制值及可用的观测值。此能力不需要数据库迁移。
 
 #### `init-config` - 生成配置文件
 

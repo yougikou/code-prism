@@ -8,6 +8,10 @@ pub struct GitRepo {
     pub path: String,
     pub git_url: String,
     pub current_branch: String,
+    /// Only repositories cloned into CodePrism's managed cache may be removed
+    /// from disk by API calls. Local repositories are registered by reference.
+    #[serde(default)]
+    pub managed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_name: Option<String>,
 }
@@ -84,5 +88,54 @@ impl GitCache {
     /// Get the directory where a repo with the given ID should be stored.
     pub fn repo_dir(&self, repo_id: &str) -> PathBuf {
         self.base_dir.join(repo_id)
+    }
+
+    /// Returns whether CodePrism owns `repo` and can safely remove it.
+    ///
+    /// The path containment check prevents a stale or tampered cache entry from
+    /// turning a managed flag into permission to delete an arbitrary directory.
+    pub fn can_remove_files(&self, repo: &GitRepo) -> bool {
+        repo.managed && self.is_managed_path(&repo.path)
+    }
+
+    pub fn is_managed_path(&self, path: &str) -> bool {
+        let Ok(base_dir) = std::fs::canonicalize(&self.base_dir) else {
+            return false;
+        };
+        let Ok(repo_path) = std::fs::canonicalize(path) else {
+            return false;
+        };
+
+        repo_path != base_dir && repo_path.starts_with(base_dir)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo(path: String, managed: bool) -> GitRepo {
+        GitRepo {
+            path,
+            git_url: String::new(),
+            current_branch: "main".to_string(),
+            managed,
+            project_name: None,
+        }
+    }
+
+    #[test]
+    fn only_managed_repositories_under_the_cache_can_be_deleted() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cache_dir = temp_dir.path().join("cache");
+        let managed_dir = cache_dir.join("clone");
+        let local_dir = temp_dir.path().join("local");
+        std::fs::create_dir_all(&managed_dir).unwrap();
+        std::fs::create_dir_all(&local_dir).unwrap();
+        let cache = GitCache::new(cache_dir);
+
+        assert!(cache.can_remove_files(&repo(managed_dir.to_string_lossy().to_string(), true,)));
+        assert!(!cache.can_remove_files(&repo(local_dir.to_string_lossy().to_string(), true,)));
+        assert!(!cache.can_remove_files(&repo(local_dir.to_string_lossy().to_string(), false,)));
     }
 }

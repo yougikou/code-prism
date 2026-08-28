@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use codeprism_core::{
-    FinalizeOutput, IntermediateBlock, MatchDetail, MetricEntry, TAG_CATEGORY, TAG_METRIC,
+    AnalyzerRuntimeOutcome, FinalizeOutput, IntermediateBlock, MatchDetail, MetricEntry,
+    TAG_CATEGORY, TAG_METRIC,
 };
 use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
@@ -24,6 +25,11 @@ pub trait Analyzer: Send + Sync {
     /// Set per-file context (change_type, scan_mode) before analyze().
     /// Default is no-op — override in analyzers that need per-file context.
     fn set_file_context(&self, _change_type: &str, _scan_mode: &str) {}
+    /// Drain framework-level execution outcomes. Domain analyzers need not
+    /// implement this; process and sandbox adapters use it to report limits.
+    fn take_runtime_outcomes(&self) -> Vec<AnalyzerRuntimeOutcome> {
+        Vec::new()
+    }
     /// If this analyzer supports cross-file processing, return the FileProcessor interface.
     /// Default returns None — override in analyzers that implement FileProcessor.
     fn as_file_processor(&self) -> Option<&dyn FileProcessor> {

@@ -294,6 +294,7 @@ pub async fn clone_repo(State(state): State<AppState>, Json(req): Json<CloneRequ
                     path,
                     git_url: req.git_url.clone(),
                     current_branch: current_branch.clone(),
+                    managed: true,
                     project_name: project_name.clone(),
                 },
             );
@@ -406,7 +407,8 @@ pub struct DeleteRepoParams {
 /// DELETE /api/v1/git/{repo_id}?remove_files=true — remove a cached repo
 ///
 /// By default only removes the cache entry and keeps files on disk.
-/// Pass `remove_files=true` to also physically delete the cloned directory.
+/// Pass `remove_files=true` to also physically delete a CodePrism-managed clone.
+/// Local repositories are never deleted.
 /// Does NOT touch project config or scan data.
 pub async fn delete_repo(
     State(state): State<AppState>,
@@ -420,7 +422,8 @@ pub async fn delete_repo(
 
     state.git_cache.remove(&repo_id);
 
-    if params.remove_files {
+    let files_removed = params.remove_files && state.git_cache.can_remove_files(&repo_info);
+    if files_removed {
         let path = repo_info.path.clone();
         tokio::spawn(async move {
             let _ = tokio::fs::remove_dir_all(&path).await;
@@ -429,7 +432,16 @@ pub async fn delete_repo(
 
     (
         StatusCode::OK,
-        Json(serde_json::json!({ "message": "Repository removed" })),
+        Json(serde_json::json!({
+            "message": if files_removed {
+                "Managed repository removed"
+            } else if params.remove_files {
+                "Repository cache entry removed; local repository files were preserved"
+            } else {
+                "Repository removed"
+            },
+            "files_removed": files_removed,
+        })),
     )
         .into_response()
 }

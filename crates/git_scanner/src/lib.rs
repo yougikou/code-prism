@@ -16,7 +16,10 @@ use tokio::sync::mpsc;
 
 use codeprism_core::{CodePrismConfig, CrossFileAnalyzerConfig, ProjectConfig};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 pub struct Scanner {
     db: Db,
@@ -37,6 +40,8 @@ pub struct Scanner {
     seen_tag_keys: Mutex<HashSet<String>>,
     // Exact-content cache shared by ordinary match writers during this scanner lifetime.
     match_content_cache: Mutex<HashMap<String, i64>>,
+    cancellation: Arc<AtomicBool>,
+    runtime_outcomes: Vec<RuntimeOutcomeRecord>,
 }
 
 struct MetricSaveInput<'a> {
@@ -47,6 +52,16 @@ struct MetricSaveInput<'a> {
     tech_stack: Option<&'a str>,
     new_metrics: Vec<codeprism_core::MetricEntry>,
     old_metrics: Vec<codeprism_core::MetricEntry>,
+}
+
+const RUNTIME_OUTCOME_ANALYZER_ID: &str = "codeprism.runtime";
+
+#[derive(Debug, Clone)]
+struct RuntimeOutcomeRecord {
+    analyzer_id: String,
+    file_path: String,
+    change_type: String,
+    outcome: codeprism_core::AnalyzerRuntimeOutcome,
 }
 
 /// Resolve the cross-file analyzers active for one project.
@@ -254,11 +269,24 @@ impl Scanner {
             cross_file_error_details: HashMap::new(),
             seen_tag_keys: Mutex::new(HashSet::new()),
             match_content_cache: Mutex::new(HashMap::new()),
+            cancellation: Arc::new(AtomicBool::new(false)),
+            runtime_outcomes: Vec::new(),
         }
     }
 
     pub fn set_scan_job_id(&mut self, job_id: i64) {
         self.scan_job_id = Some(job_id);
+    }
+
+    pub fn set_cancellation_token(&mut self, cancellation: Arc<AtomicBool>) {
+        self.cancellation = cancellation;
+    }
+
+    fn check_cancelled(&self) -> Result<()> {
+        if self.cancellation.load(Ordering::Acquire) {
+            anyhow::bail!("Scan cancelled")
+        }
+        Ok(())
     }
 
     pub fn completed_with_errors(&self) -> bool {
@@ -319,6 +347,7 @@ impl Scanner {
         project_name: &str,
         commit_ref: Option<&str>,
     ) -> Result<i64> {
+        self.check_cancelled()?;
         let repo_path = repo_path.to_string();
         let commit_ref = commit_ref.map(|s| s.to_string());
         let project_name = project_name.to_string();
@@ -371,6 +400,7 @@ impl Scanner {
         let repo_path_clone = repo_path.clone();
         let commit_hash_clone = commit_hash.clone();
         let project_config_clone = project_config.clone();
+        let cancellation = self.cancellation.clone();
 
         tokio::task::spawn_blocking(move || {
             let res = (|| -> Result<()> {
@@ -381,7 +411,7 @@ impl Scanner {
                     .map_err(|_| anyhow::anyhow!("Not a commit"))?;
                 let tree = commit.tree()?;
 
-                Scanner::walk_tree_sync(&repo, &tree, &tx, &project_config_clone)?;
+                Scanner::walk_tree_sync(&repo, &tree, &tx, &project_config_clone, &cancellation)?;
                 Ok(())
             })();
             if let Err(e) = res {
@@ -403,7 +433,13 @@ impl Scanner {
         let mut last_reported_progress = 0u8;
         let mut last_progress_update = std::time::Instant::now();
 
-        while let Some(event) = rx.recv().await {
+        loop {
+            self.check_cancelled()?;
+            let event = tokio::select! {
+                event = rx.recv() => event,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => continue,
+            };
+            let Some(event) = event else { break };
             match event {
                 ScanEvent::Start { total: _ } => {
                     pb.set_message("Scanning files...");
@@ -477,6 +513,8 @@ impl Scanner {
             }
         }
 
+        self.check_cancelled()?;
+
         // Cross-file analysis: run finalize on all registered analyzers
         let finalize_report =
             cross_file::finalize_all(scan_id, self.db.pool(), &self.cross_file_analyzers).await;
@@ -497,6 +535,7 @@ impl Scanner {
         self.ensure_tag_indexes().await;
 
         self.update_progress(95, "Saving scan summary").await;
+        self.save_runtime_outcomes(scan_id).await?;
         // Save scan summary
         if let Err(e) = self.save_scan_summary(scan_id, processed_count).await {
             eprintln!("Failed to save scan summary: {}", e);
@@ -514,6 +553,7 @@ impl Scanner {
         base_ref: &str,
         target_ref: &str,
     ) -> Result<i64> {
+        self.check_cancelled()?;
         let repo_path = repo_path.to_string();
         let base_ref = base_ref.to_string();
         let target_ref = target_ref.to_string();
@@ -565,6 +605,7 @@ impl Scanner {
         let (tx, mut rx) = mpsc::channel(100);
         let repo_path_clone = repo_path.clone();
         let project_config_clone = project_config.clone();
+        let cancellation = self.cancellation.clone();
 
         tokio::task::spawn_blocking(move || {
             let res = (|| -> Result<()> {
@@ -582,6 +623,7 @@ impl Scanner {
                     &target_tree,
                     &tx,
                     &project_config_clone,
+                    &cancellation,
                 )?;
                 Ok(())
             })();
@@ -608,7 +650,13 @@ impl Scanner {
         let mut last_reported_progress = 0u8;
         let mut last_progress_update = std::time::Instant::now();
 
-        while let Some(event) = rx.recv().await {
+        loop {
+            self.check_cancelled()?;
+            let event = tokio::select! {
+                event = rx.recv() => event,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => continue,
+            };
+            let Some(event) = event else { break };
             match event {
                 ScanEvent::Start { total: Some(t) } => {
                     total_deltas = t;
@@ -733,6 +781,7 @@ impl Scanner {
                 }
             }
         }
+        self.check_cancelled()?;
         pb.finish_with_message("Diff Scan Complete");
 
         // Cross-file analysis: run finalize on all registered analyzers
@@ -750,6 +799,7 @@ impl Scanner {
         self.ensure_tag_indexes().await;
 
         self.update_progress(95, "Saving scan summary").await;
+        self.save_runtime_outcomes(scan_id).await?;
         // Save scan summary
         if let Err(e) = self.save_scan_summary(scan_id, processed_count).await {
             eprintln!("Failed to save scan summary: {}", e);
@@ -801,8 +851,12 @@ impl Scanner {
         tree: &Tree<'_>,
         tx: &mpsc::Sender<ScanEvent>,
         project_config: &codeprism_core::ProjectConfig,
+        cancellation: &AtomicBool,
     ) -> Result<()> {
         tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+            if cancellation.load(Ordering::Acquire) {
+                return git2::TreeWalkResult::Abort;
+            }
             if let Some(ObjectType::Blob) = entry.kind() {
                 let filename = entry.name().unwrap_or("unknown");
                 let path = format!("{}{}", root, filename);
@@ -845,6 +899,7 @@ impl Scanner {
         target: &Tree<'_>,
         tx: &mpsc::Sender<ScanEvent>,
         project_config: &codeprism_core::ProjectConfig,
+        cancellation: &AtomicBool,
     ) -> Result<()> {
         let mut diff = repo.diff_tree_to_tree(Some(base), Some(target), None)?;
         diff.find_similar(None)?;
@@ -856,6 +911,9 @@ impl Scanner {
         });
 
         for i in 0..delta_count {
+            if cancellation.load(Ordering::Acquire) {
+                anyhow::bail!("Scan cancelled")
+            }
             if let Some(delta) = diff.get_delta(i) {
                 let file_path = delta
                     .new_file()
@@ -1065,6 +1123,18 @@ impl Scanner {
                             .entry(analyzer_id.clone())
                             .or_default()
                             .push(format!("{}: {}", file_path, msg));
+                        self.runtime_outcomes.push(RuntimeOutcomeRecord {
+                            analyzer_id: analyzer_id.clone(),
+                            file_path: file_path.to_string(),
+                            change_type: change_type.to_string(),
+                            outcome: codeprism_core::AnalyzerRuntimeOutcome {
+                                kind: "panic".to_string(),
+                                severity: "high".to_string(),
+                                message: format!("Analyzer panicked: {}", msg),
+                                limit: None,
+                                observed: None,
+                            },
+                        });
                         // Skip match extraction if analyze panicked
                         continue;
                     }
@@ -1089,11 +1159,56 @@ impl Scanner {
                             "Analyzer '{}' extract_matches panicked for '{}': {}",
                             analyzer_id, file_path, msg,
                         );
+                        self.analyzer_error_details
+                            .entry(analyzer_id.clone())
+                            .or_default()
+                            .push(format!("{}: {}", file_path, msg));
+                        self.runtime_outcomes.push(RuntimeOutcomeRecord {
+                            analyzer_id: analyzer_id.clone(),
+                            file_path: file_path.to_string(),
+                            change_type: change_type.to_string(),
+                            outcome: codeprism_core::AnalyzerRuntimeOutcome {
+                                kind: "panic".to_string(),
+                                severity: "high".to_string(),
+                                message: format!("Analyzer match extraction panicked: {}", msg),
+                                limit: None,
+                                observed: None,
+                            },
+                        });
                     }
                 }
+
+                let runtime_outcomes = analyzer.take_runtime_outcomes();
+                self.collect_runtime_outcomes(
+                    &analyzer_id,
+                    file_path,
+                    change_type,
+                    runtime_outcomes,
+                );
             }
         }
         (results, all_matches)
+    }
+
+    fn collect_runtime_outcomes(
+        &mut self,
+        analyzer_id: &str,
+        file_path: &str,
+        change_type: &str,
+        outcomes: Vec<codeprism_core::AnalyzerRuntimeOutcome>,
+    ) {
+        for outcome in outcomes {
+            self.analyzer_error_details
+                .entry(analyzer_id.to_string())
+                .or_default()
+                .push(format!("{}: {}", file_path, outcome.message));
+            self.runtime_outcomes.push(RuntimeOutcomeRecord {
+                analyzer_id: analyzer_id.to_string(),
+                file_path: file_path.to_string(),
+                change_type: change_type.to_string(),
+                outcome,
+            });
+        }
     }
 
     async fn save_metrics(&self, input: MetricSaveInput<'_>) -> Result<()> {
@@ -1251,6 +1366,53 @@ impl Scanner {
             .lock()
             .unwrap()
             .extend(new_cache_entries);
+        Ok(())
+    }
+
+    /// Persist runtime outcomes using the existing generic findings storage.
+    /// No schema or analyzer-specific table is required: the JSON payload holds
+    /// the execution evidence and `codeprism.runtime` identifies its producer.
+    async fn save_runtime_outcomes(&mut self, scan_id: i64) -> Result<()> {
+        if self.runtime_outcomes.is_empty() {
+            return Ok(());
+        }
+        let mut transaction = self.db.pool().begin().await?;
+        for record in self.runtime_outcomes.drain(..) {
+            let payload = serde_json::json!({
+                "kind": record.outcome.kind,
+                "severity": record.outcome.severity,
+                "message": record.outcome.message,
+                "limit": record.outcome.limit,
+                "observed": record.outcome.observed,
+                "source_analyzer_id": record.analyzer_id,
+                "analysis_complete": false,
+            });
+            let content = serde_json::to_string(&payload)?;
+            let hash = codeprism_core::hash_match_content(&content);
+            let content_id: i64 = sqlx::query_scalar(
+                "INSERT INTO match_contents (content_hash, content, content_bytes, line_count) \
+                 VALUES (?, ?, ?, 1) ON CONFLICT(content_hash) DO UPDATE SET content_hash = excluded.content_hash \
+                 RETURNING id",
+            )
+            .bind(hash)
+            .bind(&content)
+            .bind(content.len() as i64)
+            .fetch_one(&mut *transaction)
+            .await?;
+            sqlx::query(
+                "INSERT INTO matches (scan_id, file_path, analyzer_id, content_id, finding_key, line_start, line_end, change_type) \
+                 VALUES (?, ?, ?, ?, ?, 0, 0, ?)",
+            )
+            .bind(scan_id)
+            .bind(&record.file_path)
+            .bind(RUNTIME_OUTCOME_ANALYZER_ID)
+            .bind(content_id)
+            .bind(format!("{}:{}", record.analyzer_id, payload["kind"].as_str().unwrap_or("unknown")))
+            .bind(&record.change_type)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -1470,5 +1632,45 @@ mod tests {
         assert_eq!(active["shared"].tags["owner"], "project-a");
         assert_eq!(active["global_only"].tags["owner"], "global");
         assert_eq!(active["project_only"].tags["owner"], "project-a");
+    }
+
+    #[tokio::test]
+    async fn runtime_outcomes_are_persisted_as_generic_findings() {
+        let db = Db::new("sqlite::memory:").await.unwrap();
+        db.migrate().await.unwrap();
+        sqlx::query("INSERT INTO projects (name) VALUES ('demo')")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO scans (project_id, commit_hash, scan_mode) VALUES (1, 'abc', 'SNAPSHOT')",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let mut scanner = Scanner::with_config(db.clone(), CodePrismConfig::default());
+        scanner.runtime_outcomes.push(RuntimeOutcomeRecord {
+            analyzer_id: "example".to_string(),
+            file_path: "src/large.rs".to_string(),
+            change_type: "A".to_string(),
+            outcome: codeprism_core::AnalyzerRuntimeOutcome {
+                kind: "timeout".to_string(),
+                severity: "warning".to_string(),
+                message: "Exceeded execution limit".to_string(),
+                limit: Some("120 seconds".to_string()),
+                observed: Some("120 seconds".to_string()),
+            },
+        });
+        scanner.save_runtime_outcomes(1).await.unwrap();
+        let row: (String, String, String) = sqlx::query_as(
+            "SELECT m.analyzer_id, m.file_path, c.content FROM matches m JOIN match_contents c ON c.id = m.content_id",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(row.0, RUNTIME_OUTCOME_ANALYZER_ID);
+        assert_eq!(row.1, "src/large.rs");
+        assert!(row.2.contains("analysis_complete"));
+        assert!(row.2.contains("timeout"));
     }
 }

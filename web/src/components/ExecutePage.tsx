@@ -22,6 +22,7 @@ import {
   type FullProjectConfig,
 } from '@/services/data'
 import { useScanJob, type ScanProgress } from '@/hooks/useScanJob'
+import { cancelScanJob } from '@/services/scan'
 import {
   GitBranchIcon,
   GitForkIcon,
@@ -594,6 +595,20 @@ export default function ExecutePage() {
       })
     } finally {
       setIsScanning(false)
+    }
+  }
+
+  const handleCancelScan = async () => {
+    if (!scanProgress.jobId) return
+    try {
+      await cancelScanJob(scanProgress.jobId)
+      setScanProgress(previous => ({ ...previous, message: 'Cancelling scan…' }))
+    } catch (err) {
+      setScanProgress(previous => ({
+        ...previous,
+        status: 'error',
+        message: err instanceof Error ? err.message : 'Failed to cancel scan',
+      }))
     }
   }
 
@@ -1307,6 +1322,14 @@ export default function ExecutePage() {
                       {scanProgress.status === 'success' && <CheckIcon className="w-4 h-4 shrink-0" />}
                       {scanProgress.status === 'error' && <XIcon className="w-4 h-4 shrink-0" />}
                       <span className="flex-1">{scanProgress.message}</span>
+                      {scanProgress.status === 'loading' && scanProgress.jobId && (
+                        <button
+                          onClick={() => void handleCancelScan()}
+                          className="px-3 py-1.5 text-xs bg-slate-700 hover:bg-slate-600 text-white rounded-md transition-colors shrink-0"
+                        >
+                          Cancel
+                        </button>
+                      )}
                       {scanProgress.status === 'success' && scanProgress.projectName && (
                         <button
                           onClick={() => goToDashboard(scanProgress.projectName!)}

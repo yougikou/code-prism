@@ -1,10 +1,14 @@
 use crate::Analyzer;
-use codeprism_core::{MatchDetail, MetricEntry, TAG_CATEGORY, TAG_METRIC};
+use codeprism_core::{AnalyzerRuntimeOutcome, MatchDetail, MetricEntry, TAG_CATEGORY, TAG_METRIC};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
+
+const SCRIPT_IO_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_SCRIPT_INPUT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
 struct ScriptInput {
@@ -44,9 +48,18 @@ impl ScriptOutput {
 }
 
 struct ProcessHandle {
-    _child: Child,
+    child: Arc<Mutex<Child>>,
     stdin: ChildStdin,
     stdout_reader: BufReader<ChildStdout>,
+}
+
+impl Drop for ProcessHandle {
+    fn drop(&mut self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 pub struct ScriptAnalyzer {
@@ -59,6 +72,7 @@ pub struct ScriptAnalyzer {
     change_type: Option<String>,
     matches_cache: Arc<Mutex<Vec<MatchDetail>>>,
     current_change_type: Arc<Mutex<String>>,
+    runtime_outcomes: Arc<Mutex<Vec<AnalyzerRuntimeOutcome>>>,
 }
 
 impl ScriptAnalyzer {
@@ -79,6 +93,7 @@ impl ScriptAnalyzer {
             change_type,
             matches_cache: Arc::new(Mutex::new(Vec::new())),
             current_change_type: Arc::new(Mutex::new(String::new())),
+            runtime_outcomes: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -135,12 +150,32 @@ impl ScriptAnalyzer {
             let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
 
             guard.replace(ProcessHandle {
-                _child: child,
+                child: Arc::new(Mutex::new(child)),
                 stdin,
                 stdout_reader: BufReader::new(stdout),
             });
         }
         Ok(())
+    }
+
+    fn record_runtime_outcome(
+        &self,
+        kind: &str,
+        severity: &str,
+        message: impl Into<String>,
+        limit: Option<String>,
+        observed: Option<String>,
+    ) {
+        self.runtime_outcomes
+            .lock()
+            .unwrap()
+            .push(AnalyzerRuntimeOutcome {
+                kind: kind.to_string(),
+                severity: severity.to_string(),
+                message: message.into(),
+                limit,
+                observed,
+            });
     }
 }
 
@@ -164,15 +199,18 @@ impl Analyzer for ScriptAnalyzer {
     fn analyze(&self, file_path: &str, content: &str) -> Vec<MetricEntry> {
         if let Err(e) = self.ensure_process() {
             eprintln!("{}", e);
+            self.record_runtime_outcome("startup_error", "high", e, None, None);
             return vec![];
         }
 
         // Reset matches cache for this file
         self.matches_cache.lock().unwrap().clear();
 
-        // Lock the process for the duration of this analysis interaction
+        // Move the process interaction to a worker so a misbehaving script
+        // cannot block the scan indefinitely. On timeout the parent is killed
+        // and the next file gets a fresh process.
         let mut guard = self.process.lock().unwrap();
-        if let Some(handle) = guard.as_mut() {
+        if let Some(mut handle) = guard.take() {
             // Prepare Input
             let change_type = self.current_change_type.lock().unwrap().clone();
             let input = ScriptInput {
@@ -185,28 +223,57 @@ impl Analyzer for ScriptAnalyzer {
             // But content might contain newlines which are escaped as \n.
             let mut json_input = match serde_json::to_string(&input) {
                 Ok(s) => s,
-                Err(_) => return vec![],
-            };
-            json_input.push('\n');
-
-            // Write Input
-            if let Err(e) = handle.stdin.write_all(json_input.as_bytes()) {
-                eprintln!("Failed to write to analyzer script: {}", e);
-                return vec![];
-            }
-            if let Err(e) = handle.stdin.flush() {
-                eprintln!("Failed to flush to analyzer: {}", e);
-                return vec![];
-            }
-
-            // Read Output
-            let mut line = String::new();
-            match handle.stdout_reader.read_line(&mut line) {
-                Ok(0) => {
-                    eprintln!("Analyzer script process ended unexpectedly (EOF).");
+                Err(error) => {
+                    self.record_runtime_outcome(
+                        "protocol_error",
+                        "warning",
+                        error.to_string(),
+                        None,
+                        None,
+                    );
                     return vec![];
                 }
-                Ok(_) => {
+            };
+            json_input.push('\n');
+            if json_input.len() > MAX_SCRIPT_INPUT_BYTES {
+                eprintln!(
+                    "Analyzer script input exceeds {} bytes",
+                    MAX_SCRIPT_INPUT_BYTES
+                );
+                self.record_runtime_outcome(
+                    "input_limit",
+                    "high",
+                    "Analyzer input exceeds the execution limit",
+                    Some(format!("{} bytes", MAX_SCRIPT_INPUT_BYTES)),
+                    Some(format!("{} bytes", json_input.len())),
+                );
+                return vec![];
+            }
+
+            let child = handle.child.clone();
+            let (tx, rx) = mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let result = (|| -> Result<(ProcessHandle, String), String> {
+                    handle
+                        .stdin
+                        .write_all(json_input.as_bytes())
+                        .map_err(|e| e.to_string())?;
+                    handle.stdin.flush().map_err(|e| e.to_string())?;
+                    let mut line = String::new();
+                    match handle.stdout_reader.read_line(&mut line) {
+                        Ok(0) => {
+                            Err("Analyzer script process ended unexpectedly (EOF).".to_string())
+                        }
+                        Ok(_) => Ok((handle, line)),
+                        Err(e) => Err(format!("Failed to read from analyzer: {}", e)),
+                    }
+                })();
+                let _ = tx.send(result);
+            });
+
+            match rx.recv_timeout(SCRIPT_IO_TIMEOUT) {
+                Ok(Ok((returned_handle, line))) => {
+                    *guard = Some(returned_handle);
                     // Parse Output — try standard metric format first, then
                     // duplication block format (auto-detect at call time).
                     let raw_outputs: Vec<ScriptOutput> = match serde_json::from_str(&line) {
@@ -223,6 +290,13 @@ impl Analyzer for ScriptAnalyzer {
                                 return vec![];
                             }
                             eprintln!("Failed to parse analyzer output: {}", first_err);
+                            self.record_runtime_outcome(
+                                "protocol_error",
+                                "warning",
+                                first_err.to_string(),
+                                None,
+                                None,
+                            );
                             return vec![];
                         }
                     };
@@ -258,8 +332,37 @@ impl Analyzer for ScriptAnalyzer {
                         })
                         .collect();
                 }
-                Err(e) => {
-                    eprintln!("Failed to read from analyzer: {}", e);
+                Ok(Err(e)) => {
+                    eprintln!("Analyzer script failed: {}", e);
+                    self.record_runtime_outcome("execution_error", "warning", e, None, None);
+                    return vec![];
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    eprintln!(
+                        "Analyzer script timed out after {} seconds",
+                        SCRIPT_IO_TIMEOUT.as_secs()
+                    );
+                    if let Ok(mut process) = child.lock() {
+                        let _ = process.kill();
+                    }
+                    self.record_runtime_outcome(
+                        "timeout",
+                        "warning",
+                        "Analyzer script exceeded its per-file execution limit",
+                        Some(format!("{} seconds", SCRIPT_IO_TIMEOUT.as_secs())),
+                        Some(format!("{} seconds", SCRIPT_IO_TIMEOUT.as_secs())),
+                    );
+                    return vec![];
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    eprintln!("Analyzer script worker ended unexpectedly");
+                    self.record_runtime_outcome(
+                        "execution_error",
+                        "warning",
+                        "Analyzer script worker ended unexpectedly",
+                        None,
+                        None,
+                    );
                     return vec![];
                 }
             }
@@ -270,5 +373,9 @@ impl Analyzer for ScriptAnalyzer {
 
     fn extract_matches(&self, _path: &str, _content: &str) -> Vec<MatchDetail> {
         self.matches_cache.lock().unwrap().clone()
+    }
+
+    fn take_runtime_outcomes(&self) -> Vec<AnalyzerRuntimeOutcome> {
+        std::mem::take(&mut *self.runtime_outcomes.lock().unwrap())
     }
 }

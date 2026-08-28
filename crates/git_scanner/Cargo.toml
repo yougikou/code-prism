@@ -1,13 +1,13 @@
 [package]
 name = "codeprism-scanner"
-version = "0.1.0"
+version = "0.4.1"
 edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
-codeprism-analyzer = { version = "0.1.0", path = "../analyzer" }
-codeprism-core = { version = "0.1.0", path = "../core" }
-codeprism-database = { version = "0.1.0", path = "../database" }
+codeprism-analyzer = { version = "0.4.1", path = "../analyzer" }
+codeprism-core = { version = "0.4.1", path = "../core" }
+codeprism-database = { version = "0.4.1", path = "../database" }
 git2 = "0.20.3"
 ignore = "0.4.25"
 indicatif = "0.18.3"

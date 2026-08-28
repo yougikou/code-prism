@@ -1,4 +1,4 @@
-use crate::{config::AppConfig, git_cache::GitCache};
+use crate::{config::AppConfig, git_cache::GitCache, scan_scheduler::ScanScheduler};
 use codeprism_core::CodePrismConfig;
 use codeprism_database::Db;
 use std::sync::{Arc, RwLock};
@@ -9,6 +9,8 @@ pub struct AppState {
     pub(crate) db: Db,
     pub(crate) core_config: Arc<RwLock<CodePrismConfig>>,
     pub(crate) git_cache: GitCache,
+    pub(crate) api_token: Option<Arc<str>>,
+    pub(crate) scan_scheduler: ScanScheduler,
     pub config_path: String,
 }
 
@@ -27,6 +29,8 @@ impl AppState {
             db,
             core_config,
             git_cache: GitCache::new(cloned_repos_dir),
+            api_token: None,
+            scan_scheduler: ScanScheduler::from_env(),
             config_path,
         }
     }

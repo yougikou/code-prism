@@ -1,7 +1,8 @@
 use anyhow::Result;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{Pool, Sqlite};
 use std::str::FromStr;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct Db {
@@ -10,7 +11,11 @@ pub struct Db {
 
 impl Db {
     pub async fn new(db_url: &str) -> Result<Self> {
-        let options = SqliteConnectOptions::from_str(db_url)?.create_if_missing(true);
+        let options = SqliteConnectOptions::from_str(db_url)?
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
 
         let pool = SqlitePoolOptions::new().connect_with(options).await?;
 
@@ -64,5 +69,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(paths, vec!["new.rs"]);
+    }
+
+    #[tokio::test]
+    async fn connections_enable_foreign_key_enforcement() {
+        let db = Db::new("sqlite::memory:").await.unwrap();
+        let enabled: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(enabled, 1);
     }
 }
