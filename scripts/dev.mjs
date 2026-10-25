@@ -406,7 +406,10 @@ async function verifyVersion() {
 }
 
 async function runCapture(command, args) {
-  const child = spawn(command, args, { cwd: root, stdio: ['ignore', 'pipe', 'inherit'] });
+  const commandShim = process.platform === 'win32' && command.toLowerCase().endsWith('.cmd');
+  const executable = commandShim ? (process.env.ComSpec ?? 'cmd.exe') : command;
+  const spawnArgs = commandShim ? ['/d', '/s', '/c', [command, ...args].join(' ')] : args;
+  const child = spawn(executable, spawnArgs, { cwd: root, stdio: ['ignore', 'pipe', 'inherit'] });
   let output = '';
   child.stdout.on('data', chunk => { output += chunk; });
   const code = await new Promise((resolvePromise, reject) => {
