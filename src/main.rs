@@ -493,7 +493,6 @@ async fn resume_project_deletion(
             "scan_summaries",
             "matches",
             "metrics",
-            "file_changes",
             "intermediate_blocks",
         ] {
             let query = format!(

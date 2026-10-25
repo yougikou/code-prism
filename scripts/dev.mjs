@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import net from 'node:net';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const root = resolve(scriptDir, '..');
@@ -68,6 +69,46 @@ async function ensureDevelopmentWorkspace() {
   await run(binaryPath, ['--config', configPath, 'init'], { cwd: runtimeDir });
 }
 
+function canBindLoopback(port) {
+  return new Promise((resolvePromise, reject) => {
+    const server = net.createServer();
+    server.once('error', error => {
+      if (error.code === 'EADDRINUSE' || error.code === 'EACCES' || error.code === 'EPERM') {
+        resolvePromise(false);
+      } else {
+        reject(error);
+      }
+    });
+    server.listen(port, '127.0.0.1', () => {
+      server.close(error => {
+        if (error) reject(error);
+        else resolvePromise(true);
+      });
+    });
+  });
+}
+
+async function findDevelopmentApiPort() {
+  const configuredPort = process.env.CODEPRISM_API_PORT;
+  if (configuredPort !== undefined) {
+    const port = Number(configuredPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error(`CODEPRISM_API_PORT must be an integer from 1 to 65535; received '${configuredPort}'.`);
+    }
+    if (!(await canBindLoopback(port))) {
+      throw new Error(`Development API port ${port} is unavailable. Choose another port with CODEPRISM_API_PORT.`);
+    }
+    return port;
+  }
+
+  // Windows reserves port ranges for Hyper-V, WSL, and other system services.
+  // Probe instead of assuming the application's normal port is bindable.
+  for (let port = 3000; port <= 3999; port += 1) {
+    if (await canBindLoopback(port)) return port;
+  }
+  throw new Error('No available loopback API port found in 3000-3999. Set CODEPRISM_API_PORT to an available port.');
+}
+
 async function startDevelopment() {
   await ensureWebDependencies();
   await run('cargo', ['build', '--locked'], { cwd: root });
@@ -86,9 +127,12 @@ async function startDevelopment() {
     throw new Error('Vite was not found after npm ci. Check web/package-lock.json and try again.');
   }
 
+  const apiPort = await findDevelopmentApiPort();
+
   const env = {
     ...process.env,
     CODEPRISM_ANALYZERS_DIR: join(root, 'custom_analyzers'),
+    CODEPRISM_API_PORT: String(apiPort),
   };
   const children = [];
   let stopping = false;
@@ -115,7 +159,9 @@ async function startDevelopment() {
       cwd,
       env,
       stdio: 'inherit',
-      shell: process.platform === 'win32',
+      // Both services are native executables (the backend .exe and node.exe).
+      // Going through cmd.exe breaks executable paths such as "C:\\Program Files\\nodejs\\node.exe".
+      shell: false,
       detached: process.platform !== 'win32',
     });
     children.push(child);
@@ -136,8 +182,9 @@ async function startDevelopment() {
   process.once('SIGTERM', () => { void stopChildren('SIGTERM'); });
 
   console.log(`Development data: ${runtimeDir}`);
+  console.log(`API: http://127.0.0.1:${apiPort}`);
   console.log('Dashboard: http://127.0.0.1:5173');
-  spawnService(binaryPath, ['--config', configPath, 'serve'], runtimeDir);
+  spawnService(binaryPath, ['--config', configPath, 'serve', '--port', String(apiPort)], runtimeDir);
   spawnService(process.execPath, [vite, '--host', '127.0.0.1', '--strictPort'], webDir);
 
   await new Promise(resolvePromise => {
@@ -275,13 +322,25 @@ async function packageBuild({ target, prebuilt = false } = {}) {
   const archive = join(releaseDir, archiveName);
   if (windowsTarget) {
     if (process.platform !== 'win32') throw new Error('Windows packages must be built on Windows to validate the target binary');
-    await run('powershell', ['-NoProfile', '-Command', 'Compress-Archive -Path $args[0] -DestinationPath $args[1] -Force', `${stage}\\*`, archive], { cwd: root });
+    await run('powershell.exe', ['-NoProfile', '-Command', 'Compress-Archive -Path (Join-Path $env:CODEPRISM_PACKAGE_STAGE "*") -DestinationPath $env:CODEPRISM_PACKAGE_ARCHIVE -Force'], {
+      cwd: root,
+      env: { ...process.env, CODEPRISM_PACKAGE_STAGE: stage, CODEPRISM_PACKAGE_ARCHIVE: archive },
+      shell: false,
+    });
   } else {
-    await run('tar', ['-czf', archive, '-C', stage, '.'], { cwd: root });
+    await run('tar', ['-czf', archive, '-C', stage, '.'], { cwd: root, shell: false });
   }
   const extracted = await mkdtemp(join(tmpdir(), 'codeprism-package-'));
   try {
-    await run('tar', ['-xf', archive, '-C', extracted], { cwd: root });
+    if (windowsTarget) {
+      await run('powershell.exe', ['-NoProfile', '-Command', 'Expand-Archive -LiteralPath $env:CODEPRISM_PACKAGE_ARCHIVE -DestinationPath $env:CODEPRISM_PACKAGE_EXTRACTED -Force'], {
+        cwd: root,
+        env: { ...process.env, CODEPRISM_PACKAGE_ARCHIVE: archive, CODEPRISM_PACKAGE_EXTRACTED: extracted },
+        shell: false,
+      });
+    } else {
+      await run('tar', ['-xf', archive, '-C', extracted], { cwd: root, shell: false });
+    }
     const extractedBinary = join(extracted, binaryName);
     if (!existsSync(extractedBinary)) throw new Error('Release archive extraction did not contain the executable');
     await verifyPayload(extracted, extractedBinary, root);
@@ -320,9 +379,23 @@ async function updateVersion(version) {
 async function verifyVersion() {
   const webVersion = JSON.parse(await readFile(join(webDir, 'package.json'), 'utf8')).version;
   const lock = JSON.parse(await readFile(join(webDir, 'package-lock.json'), 'utf8'));
-  const rootVersion = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
+  const rootPackage = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  const rootVersion = rootPackage.version;
+  const nodeVersion = (await readFile(join(root, '.node-version'), 'utf8')).trim();
+  if (rootPackage.engines?.node !== nodeVersion) {
+    throw new Error(`Node version mismatch: .node-version=${nodeVersion}, package.json engines.node=${rootPackage.engines?.node}`);
+  }
+  if (!/^\d+\.\d+\.\d+$/.test(rootPackage.engines?.npm ?? '')) {
+    throw new Error(`package.json must pin npm through engines.npm; found '${rootPackage.engines?.npm ?? ''}'`);
+  }
   const cargo = await readFile(join(root, 'Cargo.toml'), 'utf8');
   const cargoVersion = cargo.match(/\[workspace\.package\][\s\S]*?^version\s*=\s*"([^"]+)"/m)?.[1];
+  const cargoRustVersion = cargo.match(/\[workspace\.package\][\s\S]*?^rust-version\s*=\s*"([^"]+)"/m)?.[1];
+  const rustToolchain = await readFile(join(root, 'rust-toolchain.toml'), 'utf8');
+  const rustChannel = rustToolchain.match(/^channel\s*=\s*"([^"]+)"\s*$/m)?.[1];
+  if (!cargoRustVersion || !rustChannel?.startsWith(`${cargoRustVersion}.`)) {
+    throw new Error(`Rust toolchain mismatch: Cargo MSRV=${cargoRustVersion ?? 'missing'}, rust-toolchain channel=${rustChannel ?? 'missing'}`);
+  }
   const packageLockVersion = lock.packages?.['']?.version ?? lock.version;
   if (!cargoVersion || new Set([cargoVersion, webVersion, packageLockVersion, rootVersion]).size !== 1) {
     throw new Error(`Version mismatch: Cargo=${cargoVersion}, web=${webVersion}, web lock=${packageLockVersion}, root=${rootVersion}`);
@@ -361,6 +434,18 @@ const tasks = {
   }),
   version: () => updateVersion(args[0]),
   'version-check': verifyVersion,
+  'rust-toolchain-version': async () => {
+    const toolchain = await readFile(join(root, 'rust-toolchain.toml'), 'utf8');
+    const channel = toolchain.match(/^channel\s*=\s*"([^"]+)"\s*$/m)?.[1];
+    if (!channel) throw new Error('rust-toolchain.toml must declare a pinned channel');
+    console.log(channel);
+  },
+  'npm-version': async () => {
+    const packageJson = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+    const version = packageJson.engines?.npm;
+    if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) throw new Error('package.json must pin npm through engines.npm');
+    console.log(version);
+  },
   'verify-payload': async () => {
     const payload = resolve(process.cwd(), args[0] ?? '.');
     const binary = join(payload, process.platform === 'win32' ? 'codeprism.exe' : 'codeprism');

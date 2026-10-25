@@ -6,6 +6,7 @@
   },
   "header": {
     "project": "Project:",
+    "noProject": "No repository added",
     "snapshot": "Snapshot",
     "diff": "Diff",
     "switchToLight": "Switch to Light Mode",
@@ -24,6 +25,9 @@
     "noViewsTitle": "No configured views found",
     "noViewsDesc": "This project has no views configured in codeprism.yaml, or has no scan data yet. Start by scanning a repository.",
     "goToExecute": "Go to Execute Page",
+    "noRepositoryTitle": "No project yet",
+    "noRepositoryDesc": "Projects start with a repository. Add a local repository or clone a remote one to configure and scan it.",
+    "addRepository": "Add or clone repository",
     "scanSummary": "Scan Execution Summary",
     "totalFiles": "Files Scanned",
     "analyzersLoaded": "Analyzers Loaded",
@@ -68,7 +72,7 @@
     "failedToLoadBranches": "Failed to load branches",
     "failedToDeleteRepo": "Failed to delete repo",
     "branchLabel": "branch:",
-    "switchRepo": "Switch Repo",
+    "switchRepo": "Add / Switch Repo",
     "step2Title": "Select Branch & Checkout",
     "branchesFound": "{{count}} branch found",
     "branchesFound_plural": "{{count}} branches found",
@@ -146,6 +150,9 @@
   },
   "config": {
     "title": "Configuration",
+    "noRepository": "No repository has been added, so there is no project configuration yet.",
+    "noRepositoryForProject": "Project '{{project}}' has no repository yet. Add a local repository or clone one before configuring it.",
+    "addRepository": "Add or clone repository",
     "loading": "Loading configuration...",
     "saving": "Saving...",
     "save": "Save",
@@ -279,7 +286,11 @@
     "techStacks": "tech stack(s)",
     "regexAnalyzers": "regex analyzer(s)",
     "views": "view(s)",
-    "deleteConfirm": "Delete template '{{name}}'?"
+    "deleteConfirm": "Delete template '{{name}}'?",
+    "applyToProject": "Apply to current project",
+    "applyConfirm": "Apply template '{{name}}' to project '{{project}}'? This replaces the project settings and keeps its current repository path.",
+    "applied": "Applied template '{{name}}' to project '{{project}}'.",
+    "applyError": "Failed to apply template"
   },
   "common": {
     "loading": "Loading...",

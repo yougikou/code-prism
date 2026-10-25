@@ -67,6 +67,21 @@ impl AppState {
         .map_err(Into::into)
     }
 
+    pub(crate) async fn pending_project_deletion(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<Option<(String, Option<String>)>> {
+        sqlx::query_as(
+            "SELECT operation_id, last_error FROM project_deletion_operations \
+             WHERE project_name = ? AND stage != 'completed' \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(name)
+        .fetch_optional(self.db.pool())
+        .await
+        .map_err(Into::into)
+    }
+
     pub(crate) async fn lock_config_writer(&self) -> OwnedMutexGuard<()> {
         self.config_writer.clone().lock_owned().await
     }

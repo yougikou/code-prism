@@ -309,15 +309,23 @@ pub async fn delete_project(
         );
     };
     let _config_guard = state.lock_config_writer().await;
-    match state.project_deletion_pending(&project_name).await {
-        Ok(true) => {
-            return lifecycle_error(
-                StatusCode::CONFLICT,
-                "A previous permanent deletion is incomplete; inspect its operation record before retrying",
+    match state.pending_project_deletion(&project_name).await {
+        Ok(Some((operation_id, last_error))) => {
+            let executable = std::env::current_exe()
+                .ok()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "codeprism".to_string());
+            let recovery = format!(
+                "A previous permanent deletion is incomplete (operation_id={operation_id}; last_error={}). Stop the server, then run `\"{}\" --config \"{}\" resume-project-deletion {operation_id} --confirmation-name \"{}\"` before retrying.",
+                last_error.as_deref().unwrap_or("not recorded"),
+                executable,
+                state.config_path.as_str(),
+                project_name,
             );
+            return lifecycle_error(StatusCode::CONFLICT, recovery);
         }
         Err(error) => return lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
-        Ok(false) => {}
+        Ok(None) => {}
     }
     match project_exists(&state, &project_name).await {
         Ok(true) => {}
@@ -502,8 +510,6 @@ pub async fn delete_project(
             sqlx::query("DELETE FROM matches WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
                 .bind(pid).execute(&mut *tx).await?;
             sqlx::query("DELETE FROM metrics WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
-                .bind(pid).execute(&mut *tx).await?;
-            sqlx::query("DELETE FROM file_changes WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
                 .bind(pid).execute(&mut *tx).await?;
             sqlx::query("DELETE FROM intermediate_blocks WHERE scan_id IN (SELECT id FROM scans WHERE project_id = ?)")
                 .bind(pid).execute(&mut *tx).await?;
@@ -1048,6 +1054,8 @@ pub struct ScanRequest {
 pub struct AddLocalProjectRequest {
     pub name: String,
     pub path: String,
+    #[serde(default)]
+    pub template_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -2278,16 +2286,30 @@ pub async fn add_local_project(
     };
     core_config.normalize_project_format();
 
-    // Upsert project config with repo_path
+    // Upsert project config with repo_path. Apply a selected template only when
+    // this operation creates a new project; attaching another local repository
+    // to an existing project must preserve that project's current settings.
     let pos = core_config.projects.iter().position(|p| p.name == req.name);
     if let Some(pos) = pos {
         core_config.projects[pos].repo_path = Some(canonical_path.clone());
     } else {
-        core_config.projects.push(codeprism_core::ProjectConfig {
-            name: req.name.clone(),
-            repo_path: Some(canonical_path.clone()),
-            ..Default::default()
-        });
+        let mut project_config = match req.template_name.as_deref() {
+            Some(template_name) => match core_config.project_templates.get(template_name) {
+                Some(template) => template.clone(),
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"error": format!("Project template '{}' does not exist", template_name)})),
+                    )
+                        .into_response();
+                }
+            },
+            None => codeprism_core::ProjectConfig::default(),
+        };
+        project_config.name = req.name.clone();
+        project_config.repo_path = Some(canonical_path.clone());
+        project_config.archived = false;
+        core_config.projects.push(project_config);
     }
 
     // Atomic write: tmp + rename

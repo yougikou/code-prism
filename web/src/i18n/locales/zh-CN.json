@@ -6,6 +6,7 @@
   },
   "header": {
     "project": "项目：",
+    "noProject": "尚未添加仓库",
     "snapshot": "快照",
     "diff": "差异",
     "switchToLight": "切换到浅色模式",
@@ -24,6 +25,9 @@
     "noViewsTitle": "未找到配置的视图",
     "noViewsDesc": "该项目在 codeprism.yaml 中没有配置视图，或尚无扫描数据。请先扫描仓库。",
     "goToExecute": "前往执行页面",
+    "noRepositoryTitle": "还没有项目",
+    "noRepositoryDesc": "项目从仓库开始。添加本地仓库或克隆远程仓库后，即可配置并扫描。",
+    "addRepository": "添加或克隆仓库",
     "scanSummary": "扫描执行摘要",
     "totalFiles": "扫描文件数",
     "analyzersLoaded": "已加载分析器数",
@@ -68,7 +72,7 @@
     "failedToLoadBranches": "加载分支失败",
     "failedToDeleteRepo": "删除仓库失败",
     "branchLabel": "分支：",
-    "switchRepo": "切换仓库",
+    "switchRepo": "添加 / 切换仓库",
     "step2Title": "选择分支与检出",
     "branchesFound": "共 {{count}} 个分支",
     "branchesFound_plural": "共 {{count}} 个分支",
@@ -146,6 +150,9 @@
   },
   "config": {
     "title": "配置管理",
+    "noRepository": "尚未添加仓库，因此还没有项目配置。",
+    "noRepositoryForProject": "项目“{{project}}”还没有关联仓库。先添加本地仓库或克隆远程仓库，再配置项目。",
+    "addRepository": "添加或克隆仓库",
     "loading": "加载配置中...",
     "saving": "保存中...",
     "save": "保存",
@@ -279,7 +286,11 @@
     "techStacks": "个技术栈",
     "regexAnalyzers": "个正则分析器",
     "views": "个视图",
-    "deleteConfirm": "删除模板 '{{name}}'？"
+    "deleteConfirm": "删除模板 '{{name}}'？",
+    "applyToProject": "应用到当前项目",
+    "applyConfirm": "将模板“{{name}}”应用到项目“{{project}}”？这会替换项目配置，并保留该项目当前的仓库路径。",
+    "applied": "已将模板“{{name}}”应用到项目“{{project}}”。",
+    "applyError": "应用模板失败"
   },
   "common": {
     "loading": "加载中...",

@@ -33,9 +33,9 @@ interface AppContextType extends AppState {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [currentProject, setCurrentProject] = useState('code-prism');
+  const [currentProject, setCurrentProject] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('snapshot');
-  const [selectedRunId, setSelectedRunId] = useState<string | null>('1'); // Default to first run
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedTechStack, setSelectedTechStack] = useState<TechStack>('Summary');
   const [availableTechStacks, setAvailableTechStacks] = useState<TechStackInfo[]>([]);
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');

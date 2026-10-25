@@ -29,15 +29,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
-      - run: npm install --global npm@10.9.8
+      - run: npm install --global npm@$(node scripts/dev.mjs npm-version)
+        shell: bash
       - name: Resolve existing tag
         id: resolve
         env:
           INPUT_TAG: ${{ inputs.tag }}
           PUSH_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           TAG="$INPUT_TAG"
           if [ -z "$TAG" ]; then TAG="$PUSH_TAG"; fi
@@ -47,7 +50,18 @@ jobs:
           fi
           git show-ref --verify --quiet "refs/tags/$TAG" || { echo "Tag does not exist: $TAG" >&2; exit 1; }
           COMMIT="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          CHECKED_OUT_COMMIT="$(git rev-parse HEAD)"
+          if [ "$COMMIT" != "$CHECKED_OUT_COMMIT" ]; then
+            echo "Checked out $CHECKED_OUT_COMMIT but tag $TAG resolves to $COMMIT" >&2
+            exit 1
+          fi
           VERSION="${TAG#v}"
+          if EXISTING_RELEASE_COMMIT="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.target_commitish' 2>/dev/null)"; then
+            if [[ ! "$EXISTING_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ || "$EXISTING_RELEASE_COMMIT" != "$COMMIT" ]]; then
+              echo "Release $TAG already exists for '$EXISTING_RELEASE_COMMIT'; refusing to republish from $COMMIT" >&2
+              exit 1
+            fi
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
@@ -66,10 +80,14 @@ jobs:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm install --global npm@10.9.8
+      - run: npm install --global npm@$(node scripts/dev.mjs npm-version)
+        shell: bash
+      - id: rust-toolchain
+        run: echo "version=$(node scripts/dev.mjs rust-toolchain-version)" >> "$GITHUB_OUTPUT"
+        shell: bash
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.92.0
+          toolchain: ${{ steps.rust-toolchain.outputs.version }}
           components: clippy,rustfmt
       - uses: actions/setup-python@v5
         with:
@@ -102,10 +120,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
-      - run: npm install --global npm@10.9.8
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm install --global npm@$(node scripts/dev.mjs npm-version)
+        shell: bash
+      - id: rust-toolchain
+        run: echo "version=$(node scripts/dev.mjs rust-toolchain-version)" >> "$GITHUB_OUTPUT"
+        shell: bash
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.92.0
+          toolchain: ${{ steps.rust-toolchain.outputs.version }}
           targets: ${{ matrix.target }}
       - uses: actions/setup-python@v5
         with:
@@ -174,7 +198,7 @@ jobs:
         run: |
           find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -print0 | sort -z | xargs -0 sha256sum > artifacts/SHA256SUMS
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.resolve.outputs.tag }}
           target_commitish: ${{ needs.resolve.outputs.commit }}

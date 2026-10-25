@@ -14,7 +14,7 @@ export const Header: React.FC = () => {
   } = useApp();
 
   const activeProjects = projectList.filter(project => !project.archived);
-  const isMultiProject = projectList.length > 1;
+  const isMultiProject = projectList.length > 1 || (projectList.length === 1 && projectList[0].archived);
 
   const pageNav = [
     { key: 'dashboard' as const, label: t('nav.dashboard') },
@@ -67,7 +67,7 @@ export const Header: React.FC = () => {
           </div>
         ) : (
           <span className="px-2 py-1 text-sm font-medium text-slate-500 dark:text-slate-500 opacity-80 cursor-default">
-            {currentProject || activeProjects[0]?.name || 'default'}
+            {currentProject || activeProjects[0]?.name || t('header.noProject')}
           </span>
         )}
 

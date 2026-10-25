@@ -497,11 +497,11 @@ export async function cloneRepo(gitUrl: string, projectName?: string): Promise<C
   return res.json();
 }
 
-export async function addLocalProject(name: string, path: string): Promise<CloneResponse> {
+export async function addLocalProject(name: string, path: string, templateName?: string): Promise<CloneResponse> {
   const res = await fetch('/api/v1/projects/add-local', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, path }),
+    body: JSON.stringify({ name, path, template_name: templateName || null }),
   });
   if (!res.ok) {
     const err = await res.json();

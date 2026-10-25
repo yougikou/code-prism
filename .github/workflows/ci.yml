@@ -20,10 +20,14 @@ jobs:
           node-version-file: .node-version
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm install --global npm@10.9.8
+      - run: npm install --global npm@$(node scripts/dev.mjs npm-version)
+        shell: bash
+      - id: rust-toolchain
+        run: echo "version=$(node scripts/dev.mjs rust-toolchain-version)" >> "$GITHUB_OUTPUT"
+        shell: bash
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.92.0
+          toolchain: ${{ steps.rust-toolchain.outputs.version }}
           components: clippy,rustfmt
       - uses: actions/setup-python@v5
         with:

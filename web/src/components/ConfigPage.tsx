@@ -11,7 +11,6 @@ import {
   saveTemplate,
   deleteTemplate,
   reloadConfig,
-  createProject,
   fetchProjectDeletionPreview,
   permanentlyDeleteProject,
   setProjectArchived,
@@ -1380,8 +1379,11 @@ const TABS: { key: ConfigTab; labelKey: string }[] = [
 
 export default function ConfigPage() {
   const { t } = useTranslation()
-  const { currentProject, setProject, triggerConfigRefresh, configVersion, projectList } = useApp()
+  const { currentProject, setProject, navigateTo, triggerConfigRefresh, configVersion, projectList } = useApp()
   const currentProjectArchived = projectList.some(project => project.name === currentProject && project.archived)
+  const currentProjectHasRepo = projectList.some(project =>
+    project.name === currentProject && (project.has_cached_repo || Boolean(project.config_repo_path)),
+  )
   const toast = useToast()
 
   const [config, setConfig] = useState<FullProjectConfig | null>(null)
@@ -1401,7 +1403,13 @@ export default function ConfigPage() {
 
   // Load full project config (re-fetch when configVersion changes)
   useEffect(() => {
-    if (!currentProject) return
+    if (!currentProject) {
+      setConfig(null)
+      setOriginalConfig('')
+      setMessage(null)
+      setLoading(false)
+      return
+    }
     setLoading(true)
     setMessage(null)
     fetchFullProjectConfig(currentProject)
@@ -1484,6 +1492,37 @@ export default function ConfigPage() {
       toast.error(errMsg)
     } finally {
       setTemplateSaving(false)
+    }
+  }
+
+  const handleApplyTemplate = async (templateName: string, templateConfig: FullProjectConfig) => {
+    if (!currentProject || currentProjectArchived) return
+    if (!window.confirm(t('templates.applyConfirm', { name: templateName, project: currentProject }))) return
+
+    const appliedConfig: FullProjectConfig = {
+      ...templateConfig,
+      name: currentProject,
+      // A template may have been saved from another project. Never transfer
+      // that repository path; preserve the current project's binding instead.
+      repo_path: config?.repo_path,
+    }
+
+    setSaving(true)
+    setMessage(null)
+    try {
+      const result = await updateProjectConfig(currentProject, appliedConfig)
+      setConfig(appliedConfig)
+      setOriginalConfig(JSON.stringify(appliedConfig))
+      triggerConfigRefresh()
+      const successMessage = t('templates.applied', { name: templateName, project: currentProject })
+      setMessage({ type: 'success', text: result.message || successMessage })
+      toast.success(result.message || successMessage)
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : t('templates.applyError')
+      setMessage({ type: 'error', text: errorMessage })
+      toast.error(errorMessage)
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -1616,6 +1655,17 @@ export default function ConfigPage() {
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
               <span className="ml-3 text-sm text-slate-500">{t('config.loading')}</span>
             </div>
+          ) : !currentProject ? (
+            <div className="text-center py-20 text-slate-400 space-y-4">
+              <Database className="w-12 h-12 mx-auto text-slate-300 dark:text-slate-600" />
+              <p>{t('config.noRepository')}</p>
+              <button
+                onClick={() => navigateTo('execute')}
+                className="px-4 py-2 text-sm rounded-lg bg-sky-500 text-white hover:bg-sky-600 transition-colors"
+              >
+                {t('config.addRepository')}
+              </button>
+            </div>
           ) : config ? (
             <fieldset disabled={currentProjectArchived} className="min-w-0 disabled:opacity-80">
               {renderTabContent()}
@@ -1623,19 +1673,12 @@ export default function ConfigPage() {
           ) : (
             <div className="text-center py-20 text-slate-400 space-y-4">
               <Database className="w-12 h-12 mx-auto text-slate-300 dark:text-slate-600" />
-              <p>{t('config.noConfigForProject', { project: currentProject })}</p>
+              <p>{t('config.noRepositoryForProject', { project: currentProject })}</p>
               <button
-                onClick={async () => {
-                  try {
-                    await createProject(currentProject)
-                    triggerConfigRefresh()
-                  } catch (err) {
-                    console.error(err)
-                  }
-                }}
+                onClick={() => navigateTo('execute')}
                 className="px-4 py-2 text-sm rounded-lg bg-sky-500 text-white hover:bg-sky-600 transition-colors"
               >
-                {t('config.createConfig') || 'Create Config'}
+                {t('config.addRepository')}
               </button>
             </div>
           )}
@@ -1680,15 +1723,12 @@ export default function ConfigPage() {
         <ProjectManagementModal
           projectList={projectList}
           currentProject={currentProject}
-          onSelect={(name) => { setProject(name); setShowProjectManager(false) }}
-          onCreateConfig={async (name) => {
-            try {
-              await createProject(name)
-              triggerConfigRefresh()
-            } catch (err) {
-              console.error(err)
-            }
+          onAddRepository={(name) => {
+            setProject(name)
+            navigateTo('execute')
+            setShowProjectManager(false)
           }}
+          onSelect={(name) => { setProject(name); setShowProjectManager(false) }}
           onDelete={async (name) => {
             void name
             triggerConfigRefresh()
@@ -1766,6 +1806,9 @@ export default function ConfigPage() {
       {showTemplateManager && (
         <TemplateManagementModal
           onClose={() => setShowTemplateManager(false)}
+          currentProject={currentProject}
+          canApply={!currentProjectArchived && currentProjectHasRepo && !saving}
+          onApply={handleApplyTemplate}
           t={t}
         />
       )}
@@ -1775,11 +1818,11 @@ export default function ConfigPage() {
 
 // ─── Project Management Modal ───────────────────────────────────────────
 
-function ProjectManagementModal({ projectList, currentProject, onSelect, onCreateConfig, onDelete, onArchive, onClose, t }: {
+function ProjectManagementModal({ projectList, currentProject, onSelect, onAddRepository, onDelete, onArchive, onClose, t }: {
   projectList: UnifiedProjectInfo[]
   currentProject: string
   onSelect: (name: string) => void
-  onCreateConfig: (name: string) => Promise<void>
+  onAddRepository: (name: string) => void
   onDelete: (name: string) => Promise<void>
   onArchive: (name: string, archived: boolean) => Promise<void>
   onClose: () => void
@@ -1790,7 +1833,6 @@ function ProjectManagementModal({ projectList, currentProject, onSelect, onCreat
   const [confirmName, setConfirmName] = useState('')
   const [removeManagedFiles, setRemoveManagedFiles] = useState(false)
   const [previewError, setPreviewError] = useState('')
-  const [creating, setCreating] = useState<string | null>(null)
   const [archiving, setArchiving] = useState<string | null>(null)
 
   return (
@@ -1835,11 +1877,11 @@ function ProjectManagementModal({ projectList, currentProject, onSelect, onCreat
                       <span className="text-xs px-2 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">Yes</span>
                     ) : (
                       <button
-                        onClick={async () => { setCreating(p.name); await onCreateConfig(p.name); setCreating(null) }}
-                        disabled={creating === p.name}
+                        onClick={() => onAddRepository(p.name)}
+                        disabled={p.archived}
                         className="text-xs px-2 py-0.5 rounded bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 hover:bg-sky-200 dark:hover:bg-sky-900/50 disabled:opacity-40"
                       >
-                        {creating === p.name ? '...' : 'Create'}
+                        {t('config.addRepository')}
                       </button>
                     )}
                   </td>
@@ -1929,13 +1971,17 @@ function ProjectManagementModal({ projectList, currentProject, onSelect, onCreat
 
 // ─── Template Management Modal ─────────────────────────────────────────
 
-function TemplateManagementModal({ onClose, t }: {
+function TemplateManagementModal({ onClose, currentProject, canApply, onApply, t }: {
   onClose: () => void
+  currentProject: string
+  canApply: boolean
+  onApply: (name: string, config: FullProjectConfig) => Promise<void>
   t: TFunction
 }) {
   const [templateList, setTemplateList] = useState<Record<string, FullProjectConfig>>({})
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [applying, setApplying] = useState<string | null>(null)
 
   const loadTemplates = useCallback(async () => {
     setLoading(true)
@@ -1992,14 +2038,27 @@ function TemplateManagementModal({ onClose, t }: {
                 <Card key={name}>
                   <CardHeader className="flex flex-row items-center justify-between pb-2">
                     <CardTitle className="text-base">{name}</CardTitle>
-                    <button
-                      onClick={() => handleDelete(name)}
-                      disabled={deleting === name}
-                      className="p-1.5 rounded text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
-                      title={t('config.techStack.delete')}
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={async () => {
+                          setApplying(name)
+                          try { await onApply(name, cfg) } finally { setApplying(null) }
+                        }}
+                        disabled={!canApply || applying === name}
+                        className="px-2.5 py-1 text-xs rounded bg-sky-600 text-white hover:bg-sky-700 transition-colors disabled:opacity-50"
+                        title={t('templates.applyToProject', { project: currentProject })}
+                      >
+                        {applying === name ? t('config.saving') : t('templates.applyToProject')}
+                      </button>
+                      <button
+                        onClick={() => handleDelete(name)}
+                        disabled={deleting === name}
+                        className="p-1.5 rounded text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
+                        title={t('config.techStack.delete')}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </CardHeader>
                   <CardContent>
                     <p className="text-xs text-slate-500">
