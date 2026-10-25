@@ -225,16 +225,17 @@ Download the latest release for your platform from [GitHub Releases](https://git
 | **macOS (Apple Silicon)** | `codeprism-aarch64-apple-darwin.tar.gz` |
 | **Windows x86_64** | `codeprism-x86_64-pc-windows-msvc.zip` |
 
-Release archives include `custom_analyzers/` and
-`scripts/verify-release-payload.py` for running the packaged Camel analyzer
-self-tests. Built-in project templates, including `camel-java-dsl`, are written
+Release archives include `custom_analyzers/` and their required support files.
+Built-in project templates, including `camel-java-dsl`, are written
 directly into `codeprism.yaml` by `codeprism init` or `codeprism init-config`.
 
 ```bash
 # Linux / macOS
 tar xzf codeprism-*.tar.gz
 chmod +x codeprism
-sudo mv codeprism /usr/local/bin/
+sudo install -D codeprism /usr/local/bin/codeprism
+sudo install -d /usr/local/share/codeprism
+sudo cp -R custom_analyzers scripts /usr/local/share/codeprism/
 
 # Verify installation
 codeprism --version
@@ -245,22 +246,24 @@ codeprism --version
 ```bash
 git clone https://github.com/yougikou/code-prism.git
 cd code-prism
-cargo build --release
+npm run build
 # Binary will be at target/release/codeprism
 ```
 
-### Build Frontend Web
-
-The build process (specifically `crates/server/build.rs`) will automatically attempt to build the frontend assets using `npm` if available.
-
-If you want to manually build the frontend or if the automatic build fails:
+Use the unified repository commands from the project root:
 
 ```bash
-cd web
-npm install
-npm run build
-# Assets will be generated in web/dist
+npm run dev       # Local development data stays in .codeprism-dev/
+npm run check     # Frontend and backend quality checks
+npm run build     # Release executable
+npm run package   # Current platform archive and SHA256SUMS
 ```
+
+The pinned toolchain is Node.js 22.23.2, npm 10.9.8, and Rust 1.92.0. Direct `cargo build` remains available after running `npm ci` in `web/`; the unified command prepares the embedded frontend automatically.
+
+Project lifecycle actions are remove repository registration, archive, and permanent deletion. Permanent deletion keeps repository files by default; the UI only offers managed clone deletion when server checks pass and the user explicitly selects it. Permanent deletion cannot be undone.
+
+If permanent deletion fails, CodePrism records an operation ID and blocks further writes for that project. Stop the server and use `codeprism --config <config-file> resume-project-deletion <operation-id> --confirmation-name <original-name>` to continue after it validates the configuration and database binding. The server and maintenance command share a data-directory process lock.
 
 
 

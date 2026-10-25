@@ -13,6 +13,8 @@ pub struct TechStackInfo {
 #[derive(Debug, Deserialize, serde::Serialize, Clone, utoipa::ToSchema)]
 pub struct ProjectAppConfig {
     pub name: String,
+    #[serde(default)]
+    pub archived: bool,
     pub views: Vec<ViewConfig>,
     pub tech_stacks: Vec<TechStackInfo>,
     #[serde(default = "default_columns")]

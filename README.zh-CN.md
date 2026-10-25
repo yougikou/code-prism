@@ -162,13 +162,15 @@ GET /api/v1/projects/:project_name/scans/:scan_id/matches?file_path=<路径>[&an
 | **macOS (Apple Silicon)** | `codeprism-aarch64-apple-darwin.tar.gz` |
 | **Windows x86_64** | `codeprism-x86_64-pc-windows-msvc.zip` |
 
-Release 压缩包包含 `custom_analyzers/`，以及可运行已打包 Camel 分析器自测试的 `scripts/verify-release-payload.py`。包括 `camel-java-dsl` 在内的内置项目模板由 `codeprism init` 或 `codeprism init-config` 直接写入 `codeprism.yaml`。
+Release 压缩包包含 `custom_analyzers/` 及其依赖的支持文件。包括 `camel-java-dsl` 在内的内置项目模板由 `codeprism init` 或 `codeprism init-config` 直接写入 `codeprism.yaml`。
 
 ```bash
 # Linux / macOS
 tar xzf codeprism-*.tar.gz
 chmod +x codeprism
-sudo mv codeprism /usr/local/bin/
+sudo install -D codeprism /usr/local/bin/codeprism
+sudo install -d /usr/local/share/codeprism
+sudo cp -R custom_analyzers scripts /usr/local/share/codeprism/
 
 # 验证安装
 codeprism --version
@@ -179,22 +181,24 @@ codeprism --version
 ```bash
 git clone https://github.com/yougikou/code-prism.git
 cd code-prism
-cargo build --release
+npm run build
 # 可执行文件位于 target/release/codeprism
 ```
 
-### 构建前端 Web
-
-构建过程（`crates/server/build.rs`）将在 `npm` 可用时自动尝试构建前端资源。
-
-如果您想手动构建前端，或者自动构建失败：
+日常开发、检查和打包也统一从仓库根目录执行：
 
 ```bash
-cd web
-npm install
-npm run build
-# 资源文件将生成在 web/dist 目录
+npm run dev       # 本地开发，数据隔离在 .codeprism-dev/
+npm run check     # 前后端质量检查
+npm run build     # 构建发布版可执行文件
+npm run package   # 生成当前平台压缩包和 SHA256SUMS
 ```
+
+首次运行需要 Node.js 22.23.2、npm 10.9.8 和 Rust 1.92.0。直接运行 `cargo build` 仍可用，但需先在 `web/` 执行 `npm ci`；推荐使用统一入口避免遗漏前端资源。
+
+项目删除提供三种操作：移除仓库登记、归档项目、永久删除项目。永久删除默认保留磁盘文件；只有服务端检查通过并在确认界面主动勾选时，才会删除托管克隆。永久删除不可恢复。
+
+如果永久删除中途失败，服务会保留操作编号并阻止同名项目继续写入。停止服务后，可按错误信息提示使用 `codeprism --config <配置文件> resume-project-deletion <操作编号> --confirmation-name <项目原名>` 显式继续；该命令会校验原配置和数据库绑定，并与服务共用数据目录锁。
 
 
 

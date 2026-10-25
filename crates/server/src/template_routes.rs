@@ -35,8 +35,10 @@ pub async fn get_template(
 pub async fn upsert_template(
     State(state): State<AppState>,
     Path(name): Path<String>,
-    Json(template_config): Json<ProjectConfig>,
+    Json(mut template_config): Json<ProjectConfig>,
 ) -> impl IntoResponse {
+    let _config_guard = state.lock_config_writer().await;
+    template_config.archived = false;
     // Read current YAML file
     let yaml_content = match std::fs::read_to_string(&state.config_path) {
         Ok(c) => c,
@@ -78,17 +80,10 @@ pub async fn upsert_template(
         }
     };
 
-    let tmp_path = format!("{}.tmp", state.config_path);
-    if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write config: {}", e)})),
-        )
-            .into_response();
-    }
-    if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
-        let _ = std::fs::remove_file(&tmp_path);
+    if let Err(e) = crate::config_persistence::write_atomic(
+        std::path::Path::new(&state.config_path),
+        yaml_str.as_bytes(),
+    ) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to save config: {}", e)})),
@@ -108,6 +103,7 @@ pub async fn delete_template(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    let _config_guard = state.lock_config_writer().await;
     // Read current YAML file
     let yaml_content = match std::fs::read_to_string(&state.config_path) {
         Ok(c) => c,
@@ -153,17 +149,10 @@ pub async fn delete_template(
         }
     };
 
-    let tmp_path = format!("{}.tmp", state.config_path);
-    if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write config: {}", e)})),
-        )
-            .into_response();
-    }
-    if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
-        let _ = std::fs::remove_file(&tmp_path);
+    if let Err(e) = crate::config_persistence::write_atomic(
+        std::path::Path::new(&state.config_path),
+        yaml_str.as_bytes(),
+    ) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to save config: {}", e)})),

@@ -252,6 +252,59 @@ pub async fn clone_repo(State(state): State<AppState>, Json(req): Json<CloneRequ
     if req.git_url.trim().is_empty() {
         return err_response(StatusCode::BAD_REQUEST, "Git URL is required".to_string());
     }
+    if req.project_name.as_deref().is_some_and(|name| {
+        state
+            .core_config
+            .read()
+            .unwrap()
+            .get_project(name)
+            .is_some_and(|project| project.archived)
+    }) {
+        return err_response(
+            StatusCode::CONFLICT,
+            "Archived projects cannot be bound to a cloned repository".to_string(),
+        );
+    }
+    let _project_guard = if let Some(name) = req.project_name.as_deref() {
+        match state.try_project_lock(name) {
+            Some(guard) => Some(guard),
+            None => {
+                return err_response(
+                    StatusCode::CONFLICT,
+                    "Project has an active scan or lifecycle operation".to_string(),
+                );
+            }
+        }
+    } else {
+        None
+    };
+    if req.project_name.as_deref().is_some_and(|name| {
+        state
+            .core_config
+            .read()
+            .unwrap()
+            .get_project(name)
+            .is_some_and(|project| project.archived)
+    }) {
+        return err_response(
+            StatusCode::CONFLICT,
+            "Archived projects cannot be bound to a cloned repository".to_string(),
+        );
+    }
+    if let Some(name) = req.project_name.as_deref() {
+        match state.project_deletion_pending(name).await {
+            Ok(true) => {
+                return err_response(
+                    StatusCode::CONFLICT,
+                    "A previous permanent deletion is incomplete".to_string(),
+                );
+            }
+            Err(error) => {
+                return err_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+            }
+            Ok(false) => {}
+        }
+    }
 
     let git_url = req.git_url.clone();
     let repo_id = uuid::Uuid::new_v4().to_string();
@@ -288,19 +341,26 @@ pub async fn clone_repo(State(state): State<AppState>, Json(req): Json<CloneRequ
         Ok(Ok((path, branches, current_branch))) => {
             let clone_path = path.clone();
             let project_name = req.project_name.clone();
-            state.git_cache.insert(
+            if let Err(error) = state.git_cache.insert(
                 repo_id.clone(),
                 crate::git_cache::GitRepo {
                     path,
                     git_url: req.git_url.clone(),
                     current_branch: current_branch.clone(),
                     managed: true,
+                    managed_origin_id: Some(repo_id.clone()),
                     project_name: project_name.clone(),
                 },
-            );
+            ) {
+                return err_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to persist cloned repository registration: {error}"),
+                );
+            }
 
             // Persist repo_path to YAML config
             if let Some(ref proj_name) = project_name {
+                let _config_guard = state.lock_config_writer().await;
                 let yaml_content = match std::fs::read_to_string(&state.config_path) {
                     Ok(c) => c,
                     Err(_) => {
@@ -327,12 +387,24 @@ pub async fn clone_repo(State(state): State<AppState>, Json(req): Json<CloneRequ
                     {
                         core_config.projects[pos].repo_path = Some(clone_path.clone());
                     }
-                    // Atomic write: tmp + rename
-                    if let Ok(yaml_str) = serde_yaml::to_string(&core_config) {
-                        let tmp_path = format!("{}.tmp", state.config_path);
-                        if std::fs::write(&tmp_path, &yaml_str).is_ok() {
-                            let _ = std::fs::rename(&tmp_path, &state.config_path);
+                    core_config.normalize_project_format();
+                    let yaml_str = match serde_yaml::to_string(&core_config) {
+                        Ok(yaml) => yaml,
+                        Err(error) => {
+                            return err_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("Failed to serialize project configuration: {error}"),
+                            );
                         }
+                    };
+                    if let Err(error) = crate::config_persistence::write_atomic(
+                        std::path::Path::new(&state.config_path),
+                        yaml_str.as_bytes(),
+                    ) {
+                        return err_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed to save project configuration: {error}"),
+                        );
                     }
                     // Rebuild both in-memory configs (core + AppConfig UI subset)
                     let projects_config = core_config.get_projects();
@@ -351,6 +423,7 @@ pub async fn clone_repo(State(state): State<AppState>, Json(req): Json<CloneRequ
                         tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
                         project_app_configs.push(crate::config::ProjectAppConfig {
                             name: project.name.clone(),
+                            archived: project.archived,
                             views,
                             tech_stacks,
                             columns: project.columns,
@@ -386,12 +459,18 @@ pub async fn list_repos(State(state): State<AppState>) -> Response {
     let items: Vec<serde_json::Value> = repos
         .into_iter()
         .map(|(id, repo)| {
+            let trusted_managed =
+                repo.managed && repo.managed_origin_id.as_deref() == Some(id.as_str());
+            let can_remove_files = state.git_cache.can_remove_files(&id, &repo);
             serde_json::json!({
                 "repo_id": id,
                 "git_url": repo.git_url,
                 "current_branch": repo.current_branch,
                 "path": repo.path,
                 "project_name": repo.project_name,
+                "source": if trusted_managed { "managed_clone" } else { "local_or_unknown" },
+                "managed": trusted_managed,
+                "can_remove_files": can_remove_files,
             })
         })
         .collect();
@@ -404,43 +483,133 @@ pub struct DeleteRepoParams {
     pub remove_files: bool,
 }
 
-/// DELETE /api/v1/git/{repo_id}?remove_files=true — remove a cached repo
+/// DELETE /api/v1/git/{repo_id} — remove a repository registration
 ///
 /// By default only removes the cache entry and keeps files on disk.
-/// Pass `remove_files=true` to also physically delete a CodePrism-managed clone.
-/// Local repositories are never deleted.
+/// Physical deletion is handled only by confirmed permanent project deletion.
 /// Does NOT touch project config or scan data.
 pub async fn delete_repo(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
     Query(params): Query<DeleteRepoParams>,
 ) -> Response {
-    let repo_info = match state.git_cache.get(&repo_id) {
-        Some(info) => info,
-        None => return err_response(StatusCode::NOT_FOUND, "Repository not found".to_string()),
+    if params.remove_files {
+        return err_response(
+            StatusCode::BAD_REQUEST,
+            "Physical repository deletion is only available through permanent project deletion"
+                .to_string(),
+        );
+    }
+
+    let Some(repo_info) = state.git_cache.get(&repo_id) else {
+        return err_response(StatusCode::NOT_FOUND, "Repository not found".to_string());
     };
+    let _project_guard = if let Some(name) = repo_info.project_name.as_deref() {
+        match state.try_project_lock(name) {
+            Some(guard) => Some(guard),
+            None => {
+                return err_response(
+                    StatusCode::CONFLICT,
+                    "Project has an active scan or lifecycle operation".to_string(),
+                );
+            }
+        }
+    } else {
+        None
+    };
+    let _config_guard = state.lock_config_writer().await;
+    if let Some(name) = repo_info.project_name.as_deref() {
+        match state.project_deletion_pending(name).await {
+            Ok(true) => {
+                return err_response(
+                    StatusCode::CONFLICT,
+                    "A previous permanent deletion is incomplete".to_string(),
+                );
+            }
+            Err(error) => {
+                return err_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+            }
+            Ok(false) => {}
+        }
+    }
 
-    state.git_cache.remove(&repo_id);
+    let mut updated_config = None;
+    let mut previous_config_yaml = None;
+    if let Some(project_name) = repo_info.project_name.as_deref() {
+        let yaml = match std::fs::read_to_string(&state.config_path) {
+            Ok(yaml) => yaml,
+            Err(error) => {
+                return err_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to read project configuration: {error}"),
+                );
+            }
+        };
+        let mut config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml) {
+            Ok(config) => config,
+            Err(error) => {
+                return err_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to parse project configuration: {error}"),
+                );
+            }
+        };
+        config.normalize_project_format();
+        let registered_path = std::fs::canonicalize(&repo_info.path).ok();
+        let project = config.projects.iter_mut().find(|p| p.name == project_name);
+        if let (Some(project), Some(registered_path)) = (project, registered_path)
+            && project
+                .repo_path
+                .as_deref()
+                .and_then(|path| std::fs::canonicalize(path).ok())
+                .as_ref()
+                == Some(&registered_path)
+        {
+            project.repo_path = None;
+            let serialized = match serde_yaml::to_string(&config) {
+                Ok(serialized) => serialized,
+                Err(error) => {
+                    return err_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Failed to serialize project configuration: {error}"),
+                    );
+                }
+            };
+            if let Err(error) = crate::config_persistence::write_atomic(
+                std::path::Path::new(&state.config_path),
+                serialized.as_bytes(),
+            ) {
+                return err_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to save project configuration: {error}"),
+                );
+            }
+            previous_config_yaml = Some(yaml);
+            updated_config = Some(config);
+        }
+    }
 
-    let files_removed = params.remove_files && state.git_cache.can_remove_files(&repo_info);
-    if files_removed {
-        let path = repo_info.path.clone();
-        tokio::spawn(async move {
-            let _ = tokio::fs::remove_dir_all(&path).await;
-        });
+    if let Err(error) = state.git_cache.remove(&repo_id) {
+        if let Some(previous_yaml) = previous_config_yaml {
+            let _ = crate::config_persistence::write_atomic(
+                std::path::Path::new(&state.config_path),
+                previous_yaml.as_bytes(),
+            );
+        }
+        return err_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to persist repository removal: {error}"),
+        );
+    }
+    if let Some(config) = updated_config {
+        *state.core_config.write().unwrap() = config;
     }
 
     (
         StatusCode::OK,
         Json(serde_json::json!({
-            "message": if files_removed {
-                "Managed repository removed"
-            } else if params.remove_files {
-                "Repository cache entry removed; local repository files were preserved"
-            } else {
-                "Repository removed"
-            },
-            "files_removed": files_removed,
+            "message": "Repository registration removed; files were preserved",
+            "files_removed": false,
         })),
     )
         .into_response()
@@ -464,13 +633,18 @@ pub async fn list_branches(State(state): State<AppState>, Path(repo_id): Path<St
     match result {
         Ok(Ok((branches, current_branch))) => {
             // Update cached current_branch
-            state.git_cache.insert(
+            if let Err(error) = state.git_cache.insert(
                 repo_id,
                 crate::git_cache::GitRepo {
                     current_branch: current_branch.clone(),
                     ..repo_info
                 },
-            );
+            ) {
+                return err_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to persist repository details: {error}"),
+                );
+            }
 
             (
                 StatusCode::OK,
@@ -499,8 +673,61 @@ pub async fn checkout_branch(
         Some(info) => info,
         None => return err_response(StatusCode::NOT_FOUND, "Repository not found".to_string()),
     };
+    if repo_info.project_name.as_deref().is_some_and(|name| {
+        state
+            .core_config
+            .read()
+            .unwrap()
+            .get_project(name)
+            .is_some_and(|project| project.archived)
+    }) {
+        return err_response(
+            StatusCode::CONFLICT,
+            "Archived projects are read-only".to_string(),
+        );
+    }
 
     let path = repo_info.path.clone();
+    let _project_guard = if let Some(name) = repo_info.project_name.as_deref() {
+        match state.try_project_lock(name) {
+            Some(guard) => Some(guard),
+            None => {
+                return err_response(
+                    StatusCode::CONFLICT,
+                    "Project has an active scan or lifecycle operation".to_string(),
+                );
+            }
+        }
+    } else {
+        None
+    };
+    if repo_info.project_name.as_deref().is_some_and(|name| {
+        state
+            .core_config
+            .read()
+            .unwrap()
+            .get_project(name)
+            .is_some_and(|project| project.archived)
+    }) {
+        return err_response(
+            StatusCode::CONFLICT,
+            "Archived projects are read-only".to_string(),
+        );
+    }
+    if let Some(name) = repo_info.project_name.as_deref() {
+        match state.project_deletion_pending(name).await {
+            Ok(true) => {
+                return err_response(
+                    StatusCode::CONFLICT,
+                    "A previous permanent deletion is incomplete".to_string(),
+                );
+            }
+            Err(error) => {
+                return err_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+            }
+            Ok(false) => {}
+        }
+    }
     let branch_name = req.branch.clone();
 
     let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
@@ -556,13 +783,18 @@ pub async fn checkout_branch(
 
     match result {
         Ok(Ok(branch)) => {
-            state.git_cache.insert(
+            if let Err(error) = state.git_cache.insert(
                 repo_id,
                 crate::git_cache::GitRepo {
                     current_branch: branch.clone(),
                     ..repo_info
                 },
-            );
+            ) {
+                return err_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to persist checked out branch: {error}"),
+                );
+            }
 
             (
                 StatusCode::OK,
@@ -587,8 +819,61 @@ pub async fn pull_branch(State(state): State<AppState>, Path(repo_id): Path<Stri
         Some(info) => info,
         None => return err_response(StatusCode::NOT_FOUND, "Repository not found".to_string()),
     };
+    if repo_info.project_name.as_deref().is_some_and(|name| {
+        state
+            .core_config
+            .read()
+            .unwrap()
+            .get_project(name)
+            .is_some_and(|project| project.archived)
+    }) {
+        return err_response(
+            StatusCode::CONFLICT,
+            "Archived projects are read-only".to_string(),
+        );
+    }
 
     let path = repo_info.path.clone();
+    let _project_guard = if let Some(name) = repo_info.project_name.as_deref() {
+        match state.try_project_lock(name) {
+            Some(guard) => Some(guard),
+            None => {
+                return err_response(
+                    StatusCode::CONFLICT,
+                    "Project has an active scan or lifecycle operation".to_string(),
+                );
+            }
+        }
+    } else {
+        None
+    };
+    if repo_info.project_name.as_deref().is_some_and(|name| {
+        state
+            .core_config
+            .read()
+            .unwrap()
+            .get_project(name)
+            .is_some_and(|project| project.archived)
+    }) {
+        return err_response(
+            StatusCode::CONFLICT,
+            "Archived projects are read-only".to_string(),
+        );
+    }
+    if let Some(name) = repo_info.project_name.as_deref() {
+        match state.project_deletion_pending(name).await {
+            Ok(true) => {
+                return err_response(
+                    StatusCode::CONFLICT,
+                    "A previous permanent deletion is incomplete".to_string(),
+                );
+            }
+            Err(error) => {
+                return err_response(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+            }
+            Ok(false) => {}
+        }
+    }
     let current_branch = repo_info.current_branch.clone();
     let branch_for_response = current_branch.clone();
 

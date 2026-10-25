@@ -2,10 +2,56 @@
 //!
 //! These tests verify the server endpoints work correctly.
 
+use axum::{
+    extract::{Json, Path, State},
+    response::IntoResponse,
+};
+use codeprism_core::CodePrismConfig;
+use codeprism_database::Db;
 use codeprism_server::aggregation::{SumAggregator, ViewFilters};
 use codeprism_server::config::{
     AppConfig, ProjectAppConfig, SourceConfig, TechStackInfo, TopNParams, ViewConfig, ViewKind,
 };
+use codeprism_server::{
+    routes::{DeleteProjectRequest, delete_project},
+    state::AppState,
+};
+use std::sync::{Arc, RwLock};
+
+async fn deletion_test_state() -> AppState {
+    let db = Db::new("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    AppState::new(
+        Arc::new(RwLock::new(AppConfig { projects: vec![] })),
+        db,
+        Arc::new(RwLock::new(CodePrismConfig::default())),
+        "unused-codeprism-test-config.yaml".to_string(),
+    )
+}
+
+#[tokio::test]
+async fn permanent_project_deletion_requires_an_exact_confirmation_name() {
+    let missing = delete_project(
+        State(deletion_test_state().await),
+        Path("sample".to_string()),
+        None,
+    )
+    .await
+    .into_response();
+    assert_eq!(missing.status(), axum::http::StatusCode::BAD_REQUEST);
+
+    let mismatch = delete_project(
+        State(deletion_test_state().await),
+        Path("sample".to_string()),
+        Some(Json(DeleteProjectRequest {
+            confirmation_name: "other".to_string(),
+            remove_managed_files: false,
+        })),
+    )
+    .await
+    .into_response();
+    assert_eq!(mismatch.status(), axum::http::StatusCode::BAD_REQUEST);
+}
 
 /// Test that AppConfig can be serialized to JSON correctly
 #[test]
@@ -13,6 +59,7 @@ fn test_app_config_serialization() {
     let config = AppConfig {
         projects: vec![ProjectAppConfig {
             name: "test_project".to_string(),
+            archived: false,
             views: vec![ViewConfig {
                 id: "test_view".to_string(),
                 title: "Test View".to_string(),
@@ -58,6 +105,7 @@ fn test_app_config_helpers() {
         projects: vec![
             ProjectAppConfig {
                 name: "project_a".to_string(),
+                archived: false,
                 views: vec![],
                 tech_stacks: vec![TechStackInfo {
                     name: "Rust".to_string(),
@@ -67,6 +115,7 @@ fn test_app_config_helpers() {
             },
             ProjectAppConfig {
                 name: "project_b".to_string(),
+                archived: false,
                 views: vec![],
                 tech_stacks: vec![TechStackInfo {
                     name: "Python".to_string(),
@@ -101,6 +150,7 @@ fn test_single_project_mode() {
     let config = AppConfig {
         projects: vec![ProjectAppConfig {
             name: "only_project".to_string(),
+            archived: false,
             views: vec![],
             tech_stacks: vec![TechStackInfo {
                 name: "Rust".to_string(),

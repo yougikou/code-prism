@@ -15,6 +15,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../web/vite.config.ts");
     println!("cargo:rerun-if-changed=../../web/index.html");
     println!("cargo:rerun-if-changed=../../web/src");
+    println!("cargo:rerun-if-changed=../../web/dist");
 
     println!("cargo:rerun-if-env-changed=CODEPRISM_SKIP_WEB_BUILD");
 
@@ -85,5 +86,30 @@ fn main() {
         eprintln!("\nThen try running cargo build again.\n\n");
 
         process::exit(1);
+    }
+
+    let index_path = dist_dir.join("index.html");
+    let html = std::fs::read_to_string(&index_path).unwrap_or_else(|error| {
+        eprintln!(
+            "Frontend entry point '{}' is missing or unreadable: {error}",
+            index_path.display()
+        );
+        process::exit(1);
+    });
+    if html.trim().is_empty() {
+        eprintln!("Frontend entry point '{}' is empty.", index_path.display());
+        process::exit(1);
+    }
+    for quote in ['"', '\''] {
+        let marker = format!("{quote}/assets/");
+        for tail in html.split(&marker).skip(1) {
+            let Some(asset) = tail.split(quote).next() else {
+                continue;
+            };
+            if !dist_dir.join("assets").join(asset).is_file() {
+                eprintln!("Frontend entry point references missing asset '{}'.", asset);
+                process::exit(1);
+            }
+        }
     }
 }

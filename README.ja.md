@@ -162,13 +162,15 @@ GET /api/v1/projects/:project_name/scans/:scan_id/matches?file_path=<パス>[&an
 | **macOS (Apple Silicon)** | `codeprism-aarch64-apple-darwin.tar.gz` |
 | **Windows x86_64** | `codeprism-x86_64-pc-windows-msvc.zip` |
 
-Release アーカイブには `custom_analyzers/` と、同梱された Camel アナライザーのセルフテストを実行する `scripts/verify-release-payload.py` が含まれます。`camel-java-dsl` を含む組み込みプロジェクトテンプレートは、`codeprism init` または `codeprism init-config` によって `codeprism.yaml` に直接書き込まれます。
+Release アーカイブには `custom_analyzers/` と必要なサポートファイルが含まれます。`camel-java-dsl` を含む組み込みプロジェクトテンプレートは、`codeprism init` または `codeprism init-config` によって `codeprism.yaml` に直接書き込まれます。
 
 ```bash
 # Linux / macOS
 tar xzf codeprism-*.tar.gz
 chmod +x codeprism
-sudo mv codeprism /usr/local/bin/
+sudo install -D codeprism /usr/local/bin/codeprism
+sudo install -d /usr/local/share/codeprism
+sudo cp -R custom_analyzers scripts /usr/local/share/codeprism/
 
 # インストール確認
 codeprism --version
@@ -179,22 +181,24 @@ codeprism --version
 ```bash
 git clone https://github.com/yougikou/code-prism.git
 cd code-prism
-cargo build --release
+npm run build
 # バイナリは target/release/codeprism にあります
 ```
 
-### フロントエンド Web のビルド
-
-ビルドプロセス（`crates/server/build.rs`）は、`npm` が利用可能な場合、フロントエンドアセットを自動的にビルドしようとします。
-
-手動でフロントエンドをビルドする場合、または自動ビルドが失敗する場合：
+日常開発、検査、パッケージ作成はリポジトリのルートから実行します。
 
 ```bash
-cd web
-npm install
-npm run build
-# アセットは web/dist に生成されます
+npm run dev       # ローカルデータは .codeprism-dev/ に分離
+npm run check     # フロントエンドとバックエンドの品質確認
+npm run build     # リリース実行ファイル
+npm run package   # 現在のプラットフォーム向け圧縮ファイルと SHA256SUMS
 ```
+
+固定ツールチェーンは Node.js 22.23.2、npm 10.9.8、Rust 1.92.0 です。`cargo build` を直接使う場合は、先に `web/` で `npm ci` を実行してください。
+
+プロジェクトの操作は登録解除、アーカイブ、完全削除の3種類です。完全削除では既定でディスク上のファイルを保持します。サーバーの安全確認に合格した管理対象クローンだけ、確認画面で明示的に選択すると削除されます。完全削除は元に戻せません。
+
+完全削除が途中で失敗すると、操作IDを保存し、そのプロジェクトへの書き込みを停止します。サーバーを停止し、エラーに表示されたIDで `codeprism --config <設定ファイル> resume-project-deletion <operation-id> --confirmation-name <元のプロジェクト名>` を実行すると、設定とデータベースの対応を確認して続行します。サーバーと保守コマンドは同じデータディレクトリロックを使います。
 
 
 

@@ -33,9 +33,9 @@ interface AppContextType extends AppState {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [currentProject, setCurrentProject] = useState('code-prism');
+  const [currentProject, setCurrentProject] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('snapshot');
-  const [selectedRunId, setSelectedRunId] = useState<string | null>('1'); // Default to first run
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedTechStack, setSelectedTechStack] = useState<TechStack>('Summary');
   const [availableTechStacks, setAvailableTechStacks] = useState<TechStackInfo[]>([]);
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
@@ -68,12 +68,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     try {
       const projects = await fetchUnifiedProjects();
       setProjectList(projects);
-      // Auto-select first project if current project is not in the list
+      const activeProjects = projects.filter(project => !project.archived);
+      // Keep archived projects available for history views, never as the active workspace.
       setCurrentProject(prev => {
-        if (projects.length > 0 && !projects.find(p => p.name === prev)) {
-          return projects[0].name;
+        if (projects.some(project => project.name === prev)) {
+          return prev;
         }
-        return prev;
+        if (activeProjects.length > 0) {
+          return activeProjects[0].name;
+        }
+        return '';
       });
     } catch (e) {
       console.error('Failed to load unified projects:', e);

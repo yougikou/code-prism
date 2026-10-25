@@ -11,8 +11,9 @@ import {
   saveTemplate,
   deleteTemplate,
   reloadConfig,
-  createProject,
-  deleteProject as deleteProjectApi,
+  fetchProjectDeletionPreview,
+  permanentlyDeleteProject,
+  setProjectArchived,
   type FullProjectConfig,
   type FullTechStack,
   type AggregationFunc,
@@ -1378,7 +1379,11 @@ const TABS: { key: ConfigTab; labelKey: string }[] = [
 
 export default function ConfigPage() {
   const { t } = useTranslation()
-  const { currentProject, setProject, triggerConfigRefresh, configVersion, projectList } = useApp()
+  const { currentProject, setProject, navigateTo, triggerConfigRefresh, configVersion, projectList } = useApp()
+  const currentProjectArchived = projectList.some(project => project.name === currentProject && project.archived)
+  const currentProjectHasRepo = projectList.some(project =>
+    project.name === currentProject && (project.has_cached_repo || Boolean(project.config_repo_path)),
+  )
   const toast = useToast()
 
   const [config, setConfig] = useState<FullProjectConfig | null>(null)
@@ -1398,7 +1403,13 @@ export default function ConfigPage() {
 
   // Load full project config (re-fetch when configVersion changes)
   useEffect(() => {
-    if (!currentProject) return
+    if (!currentProject) {
+      setConfig(null)
+      setOriginalConfig('')
+      setMessage(null)
+      setLoading(false)
+      return
+    }
     setLoading(true)
     setMessage(null)
     fetchFullProjectConfig(currentProject)
@@ -1413,7 +1424,7 @@ export default function ConfigPage() {
   const hasChanges = config && originalConfig !== JSON.stringify(config)
 
   const handleSave = async () => {
-    if (!config || !currentProject) return
+    if (!config || !currentProject || currentProjectArchived) return
 
     // Validate no duplicate analyzer names across all categories
     const allNames = new Set<string>()
@@ -1484,6 +1495,37 @@ export default function ConfigPage() {
     }
   }
 
+  const handleApplyTemplate = async (templateName: string, templateConfig: FullProjectConfig) => {
+    if (!currentProject || currentProjectArchived) return
+    if (!window.confirm(t('templates.applyConfirm', { name: templateName, project: currentProject }))) return
+
+    const appliedConfig: FullProjectConfig = {
+      ...templateConfig,
+      name: currentProject,
+      // A template may have been saved from another project. Never transfer
+      // that repository path; preserve the current project's binding instead.
+      repo_path: config?.repo_path,
+    }
+
+    setSaving(true)
+    setMessage(null)
+    try {
+      const result = await updateProjectConfig(currentProject, appliedConfig)
+      setConfig(appliedConfig)
+      setOriginalConfig(JSON.stringify(appliedConfig))
+      triggerConfigRefresh()
+      const successMessage = t('templates.applied', { name: templateName, project: currentProject })
+      setMessage({ type: 'success', text: result.message || successMessage })
+      toast.success(result.message || successMessage)
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : t('templates.applyError')
+      setMessage({ type: 'error', text: errorMessage })
+      toast.error(errorMessage)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const renderTabContent = () => {
     if (!config) return null
     switch (activeTab) {
@@ -1530,7 +1572,7 @@ export default function ConfigPage() {
             )}
             <button
               onClick={handleSave}
-              disabled={!hasChanges || saving || loading}
+              disabled={!hasChanges || saving || loading || currentProjectArchived}
               className="p-1.5 rounded-lg bg-sky-500 text-white hover:bg-sky-600 disabled:opacity-40 transition-colors"
               title={t('config.save')}
             >
@@ -1539,7 +1581,7 @@ export default function ConfigPage() {
             {config && (
               <button
                 onClick={() => setShowSaveAsTemplate(true)}
-                disabled={loading}
+                disabled={loading || currentProjectArchived}
                 className="p-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 transition-colors"
                 title={t('templates.saveAsTemplate')}
               >
@@ -1549,7 +1591,7 @@ export default function ConfigPage() {
             {config && (
               <button
                 onClick={() => setShowCopyTo(true)}
-                disabled={loading}
+                disabled={loading || currentProjectArchived}
                 className="p-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 transition-colors"
                 title={t('config.copyTo') || 'Copy to'}
               >
@@ -1558,7 +1600,7 @@ export default function ConfigPage() {
             )}
             <button
               onClick={handleReset}
-              disabled={!hasChanges || loading}
+              disabled={!hasChanges || loading || currentProjectArchived}
               className="p-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 transition-colors"
               title={t('config.reset')}
             >
@@ -1603,29 +1645,40 @@ export default function ConfigPage() {
 
       {/* Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+          {currentProjectArchived && (
+            <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              {t('config.archivedReadOnly')}
+            </div>
+          )}
           {loading ? (
             <div className="flex items-center justify-center py-20">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
               <span className="ml-3 text-sm text-slate-500">{t('config.loading')}</span>
             </div>
+          ) : !currentProject ? (
+            <div className="text-center py-20 text-slate-400 space-y-4">
+              <Database className="w-12 h-12 mx-auto text-slate-300 dark:text-slate-600" />
+              <p>{t('config.noRepository')}</p>
+              <button
+                onClick={() => navigateTo('execute')}
+                className="px-4 py-2 text-sm rounded-lg bg-sky-500 text-white hover:bg-sky-600 transition-colors"
+              >
+                {t('config.addRepository')}
+              </button>
+            </div>
           ) : config ? (
-            renderTabContent()
+            <fieldset disabled={currentProjectArchived} className="min-w-0 disabled:opacity-80">
+              {renderTabContent()}
+            </fieldset>
           ) : (
             <div className="text-center py-20 text-slate-400 space-y-4">
               <Database className="w-12 h-12 mx-auto text-slate-300 dark:text-slate-600" />
-              <p>{t('config.noConfigForProject', { project: currentProject })}</p>
+              <p>{t('config.noRepositoryForProject', { project: currentProject })}</p>
               <button
-                onClick={async () => {
-                  try {
-                    await createProject(currentProject)
-                    triggerConfigRefresh()
-                  } catch (err) {
-                    console.error(err)
-                  }
-                }}
+                onClick={() => navigateTo('execute')}
                 className="px-4 py-2 text-sm rounded-lg bg-sky-500 text-white hover:bg-sky-600 transition-colors"
               >
-                {t('config.createConfig') || 'Create Config'}
+                {t('config.addRepository')}
               </button>
             </div>
           )}
@@ -1670,19 +1723,19 @@ export default function ConfigPage() {
         <ProjectManagementModal
           projectList={projectList}
           currentProject={currentProject}
-          onSelect={(name) => { setProject(name); setShowProjectManager(false) }}
-          onCreateConfig={async (name) => {
-            try {
-              await createProject(name)
-              triggerConfigRefresh()
-            } catch (err) {
-              console.error(err)
-            }
+          onAddRepository={(name) => {
+            setProject(name)
+            navigateTo('execute')
+            setShowProjectManager(false)
           }}
+          onSelect={(name) => { setProject(name); setShowProjectManager(false) }}
           onDelete={async (name) => {
-            if (!confirm(t('config.deleteProjectConfirm', { name }) || `Delete project '${name}'? This will remove all config, scan data, and cached repos.`)) return
+            void name
+            triggerConfigRefresh()
+          }}
+          onArchive={async (name, archived) => {
             try {
-              await deleteProjectApi(name)
+              await setProjectArchived(name, archived)
               triggerConfigRefresh()
             } catch (err) {
               console.error(err)
@@ -1753,6 +1806,9 @@ export default function ConfigPage() {
       {showTemplateManager && (
         <TemplateManagementModal
           onClose={() => setShowTemplateManager(false)}
+          currentProject={currentProject}
+          canApply={!currentProjectArchived && currentProjectHasRepo && !saving}
+          onApply={handleApplyTemplate}
           t={t}
         />
       )}
@@ -1762,17 +1818,22 @@ export default function ConfigPage() {
 
 // ─── Project Management Modal ───────────────────────────────────────────
 
-function ProjectManagementModal({ projectList, currentProject, onSelect, onCreateConfig, onDelete, onClose, t }: {
+function ProjectManagementModal({ projectList, currentProject, onSelect, onAddRepository, onDelete, onArchive, onClose, t }: {
   projectList: UnifiedProjectInfo[]
   currentProject: string
   onSelect: (name: string) => void
-  onCreateConfig: (name: string) => Promise<void>
+  onAddRepository: (name: string) => void
   onDelete: (name: string) => Promise<void>
+  onArchive: (name: string, archived: boolean) => Promise<void>
   onClose: () => void
   t: TFunction
 }) {
   const [deleting, setDeleting] = useState<string | null>(null)
-  const [creating, setCreating] = useState<string | null>(null)
+  const [deletionPreview, setDeletionPreview] = useState<Awaited<ReturnType<typeof fetchProjectDeletionPreview>> | null>(null)
+  const [confirmName, setConfirmName] = useState('')
+  const [removeManagedFiles, setRemoveManagedFiles] = useState(false)
+  const [previewError, setPreviewError] = useState('')
+  const [archiving, setArchiving] = useState<string | null>(null)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
@@ -1801,23 +1862,26 @@ function ProjectManagementModal({ projectList, currentProject, onSelect, onCreat
               {[...projectList].sort((a, b) => a.name.localeCompare(b.name)).map(p => (
                 <tr key={p.name} className={`border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/30 ${p.name === currentProject ? 'bg-sky-50 dark:bg-sky-900/20' : ''}`}>
                   <td className="py-2.5 px-2">
-                    <button
-                      onClick={() => onSelect(p.name)}
-                      className="text-sky-600 dark:text-sky-400 hover:underline font-medium text-left"
-                    >
-                      {p.name}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => onSelect(p.name)}
+                        className={`font-medium text-left ${p.archived ? 'text-slate-500' : 'text-sky-600 dark:text-sky-400 hover:underline'}`}
+                      >
+                        {p.name}
+                      </button>
+                      {p.archived && <span className="text-[10px] rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">{t('config.archived')}</span>}
+                    </div>
                   </td>
                   <td className="py-2.5 px-2 text-center">
                     {p.has_config ? (
                       <span className="text-xs px-2 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">Yes</span>
                     ) : (
                       <button
-                        onClick={async () => { setCreating(p.name); await onCreateConfig(p.name); setCreating(null) }}
-                        disabled={creating === p.name}
+                        onClick={() => onAddRepository(p.name)}
+                        disabled={p.archived}
                         className="text-xs px-2 py-0.5 rounded bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 hover:bg-sky-200 dark:hover:bg-sky-900/50 disabled:opacity-40"
                       >
-                        {creating === p.name ? '...' : 'Create'}
+                        {t('config.addRepository')}
                       </button>
                     )}
                   </td>
@@ -1835,7 +1899,19 @@ function ProjectManagementModal({ projectList, currentProject, onSelect, onCreat
                   </td>
                   <td className="py-2.5 px-2 text-right">
                     <button
-                      onClick={async () => { setDeleting(p.name); await onDelete(p.name); setDeleting(null) }}
+                      onClick={async () => { setArchiving(p.name); await onArchive(p.name, !p.archived); setArchiving(null) }}
+                      disabled={archiving === p.name}
+                      className="text-xs px-2 py-1 rounded text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-900/20 disabled:opacity-50"
+                    >
+                      {archiving === p.name ? '...' : t(p.archived ? 'config.unarchiveProject' : 'config.archiveProject')}
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setDeleting(p.name); setPreviewError(''); setConfirmName(''); setRemoveManagedFiles(false)
+                        try { setDeletionPreview(await fetchProjectDeletionPreview(p.name)) }
+                        catch (error) { setPreviewError(error instanceof Error ? error.message : ''); }
+                        finally { setDeleting(null) }
+                      }}
                       disabled={deleting === p.name}
                       className="text-xs px-2 py-1 rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
                     >
@@ -1855,19 +1931,57 @@ function ProjectManagementModal({ projectList, currentProject, onSelect, onCreat
           </table>
         </div>
       </div>
+      {(deletionPreview || previewError) && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60" onClick={() => { setDeletionPreview(null); setPreviewError('') }}>
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-xl w-full mx-4 p-5 space-y-4" onClick={e => e.stopPropagation()}>
+            <h3 className="font-semibold text-slate-900 dark:text-slate-100">{t('config.permanentDelete')}</h3>
+            {previewError ? <p className="text-sm text-red-600">{previewError}</p> : deletionPreview && <>
+              <p className="text-sm text-slate-600 dark:text-slate-300">{t('config.deletePreviewScans', { count: deletionPreview.scan_count })}</p>
+              <ul className="max-h-36 overflow-auto text-xs font-mono space-y-1">
+                {deletionPreview.repo_paths.map(repo => <li key={repo.repo_id} className="break-all">{repo.path} · {repo.source}</li>)}
+              </ul>
+              {deletionPreview.blockers.length > 0 && <p className="text-xs text-amber-700 dark:text-amber-300">{deletionPreview.blockers.join('；')}</p>}
+              {deletionPreview.can_remove_managed_files && <label className="flex gap-2 text-sm text-red-700 dark:text-red-300">
+                <input type="checkbox" checked={removeManagedFiles} onChange={e => setRemoveManagedFiles(e.target.checked)} />
+                {t('config.deleteManagedFiles')}
+              </label>}
+              <label className="block text-sm">{t('config.typeProjectName', { name: deletionPreview.project_name })}
+                <input className="mt-1 w-full rounded border px-2 py-1 dark:bg-slate-900 dark:border-slate-600" value={confirmName} onChange={e => setConfirmName(e.target.value)} />
+              </label>
+            </>}
+            <div className="flex justify-end gap-2">
+              <button className="px-3 py-1.5 text-sm rounded bg-slate-100 dark:bg-slate-700" onClick={() => { setDeletionPreview(null); setPreviewError('') }}>{t('execute.cancel')}</button>
+              {deletionPreview && <button disabled={confirmName !== deletionPreview.project_name} className="px-3 py-1.5 text-sm rounded bg-red-600 text-white disabled:opacity-40" onClick={async () => {
+                const target = deletionPreview.project_name
+                setDeleting(target)
+                try {
+                  await permanentlyDeleteProject(target, removeManagedFiles)
+                  setDeletionPreview(null)
+                  await onDelete(target)
+                } catch (error) { setPreviewError(error instanceof Error ? error.message : '') }
+                finally { setDeleting(null) }
+              }}>{t('config.permanentDelete')}</button>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 // ─── Template Management Modal ─────────────────────────────────────────
 
-function TemplateManagementModal({ onClose, t }: {
+function TemplateManagementModal({ onClose, currentProject, canApply, onApply, t }: {
   onClose: () => void
+  currentProject: string
+  canApply: boolean
+  onApply: (name: string, config: FullProjectConfig) => Promise<void>
   t: TFunction
 }) {
   const [templateList, setTemplateList] = useState<Record<string, FullProjectConfig>>({})
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [applying, setApplying] = useState<string | null>(null)
 
   const loadTemplates = useCallback(async () => {
     setLoading(true)
@@ -1924,14 +2038,27 @@ function TemplateManagementModal({ onClose, t }: {
                 <Card key={name}>
                   <CardHeader className="flex flex-row items-center justify-between pb-2">
                     <CardTitle className="text-base">{name}</CardTitle>
-                    <button
-                      onClick={() => handleDelete(name)}
-                      disabled={deleting === name}
-                      className="p-1.5 rounded text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
-                      title={t('config.techStack.delete')}
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={async () => {
+                          setApplying(name)
+                          try { await onApply(name, cfg) } finally { setApplying(null) }
+                        }}
+                        disabled={!canApply || applying === name}
+                        className="px-2.5 py-1 text-xs rounded bg-sky-600 text-white hover:bg-sky-700 transition-colors disabled:opacity-50"
+                        title={t('templates.applyToProject', { project: currentProject })}
+                      >
+                        {applying === name ? t('config.saving') : t('templates.applyToProject')}
+                      </button>
+                      <button
+                        onClick={() => handleDelete(name)}
+                        disabled={deleting === name}
+                        className="p-1.5 rounded text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
+                        title={t('config.techStack.delete')}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </CardHeader>
                   <CardContent>
                     <p className="text-xs text-slate-500">

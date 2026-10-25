@@ -3,8 +3,10 @@ pub mod api_error;
 pub mod assets;
 pub mod auth;
 pub mod config;
+pub mod config_persistence;
 pub mod git_cache;
 pub mod git_routes;
+pub mod process_lock;
 pub mod routes;
 pub mod scan_routes;
 pub mod scan_scheduler;
@@ -30,7 +32,7 @@ use crate::git_routes::{
 };
 use crate::routes::{
     add_local_project, create_project, delete_project, execute_scan, get_findings, get_matches,
-    get_scans, get_view, list_unified_projects, static_handler,
+    get_project_deletion_preview, get_scans, get_view, list_unified_projects, static_handler,
 };
 use crate::scan_routes::{cancel_scan_job, get_execution_outcomes, get_scan_job, get_scan_summary};
 use crate::state::AppState;
@@ -221,6 +223,7 @@ pub async fn run_server(
     host: String,
     port: u16,
 ) -> Result<()> {
+    let _process_lock = crate::process_lock::ProcessLock::acquire(&config_path)?;
     let api_token = crate::auth::api_token_from_env()?;
     if !crate::auth::is_loopback_host(&host) && api_token.is_none() {
         anyhow::bail!(
@@ -230,6 +233,19 @@ pub async fn run_server(
     }
     let scan_scheduler = crate::scan_scheduler::ScanScheduler::from_env();
     scan_scheduler.recover_interrupted_jobs(&db).await?;
+    let pending_deletions: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT operation_id, project_name, last_error FROM project_deletion_operations WHERE stage != 'completed' ORDER BY created_at",
+    ).fetch_all(db.pool()).await?;
+    for (operation_id, project_name, last_error) in pending_deletions {
+        eprintln!(
+            "Project '{}' is blocked by incomplete permanent deletion {}: {}",
+            project_name,
+            operation_id,
+            last_error
+                .as_deref()
+                .unwrap_or("resume with the maintenance command")
+        );
+    }
     // Convert CodePrismConfig (Core) to AppConfig (Server) with multi-project support
     let projects_config = core_config.get_projects();
 
@@ -250,6 +266,7 @@ pub async fn run_server(
 
         project_app_configs.push(ProjectAppConfig {
             name: project.name.clone(),
+            archived: project.archived,
             views,
             tech_stacks,
             columns: project.columns,
@@ -287,10 +304,11 @@ pub async fn run_server(
                         path: repo_path.clone(),
                         git_url: String::new(),
                         current_branch,
-                        managed: git_cache.is_managed_path(repo_path),
+                        managed: false,
+                        managed_origin_id: None,
                         project_name: Some(project.name.clone()),
                     },
-                );
+                )?;
             }
         }
     }
@@ -303,6 +321,8 @@ pub async fn run_server(
         git_cache,
         api_token,
         scan_scheduler,
+        project_locks: Default::default(),
+        config_writer: Default::default(),
         config_path,
     };
 
@@ -332,6 +352,14 @@ pub async fn run_server(
             get(crate::routes::list_projects).post(create_project),
         )
         .route("/api/v1/projects/unified", get(list_unified_projects))
+        .route(
+            "/api/v1/projects/:project_name/archive",
+            post(crate::routes::set_project_archived),
+        )
+        .route(
+            "/api/v1/projects/:project_name/deletion-preview",
+            get(get_project_deletion_preview),
+        )
         .route("/api/v1/projects/:project_name", delete(delete_project))
         .route("/api/v1/projects/add-local", post(add_local_project))
         // Git operations

@@ -15,7 +15,7 @@ import { fetchConfig, fetchRuns, fetchView, fetchScanSummary, fetchExecutionOutc
 import TrendRenderer from './widgets/TrendRenderer';
 import { TrendScanSelector } from './dashboard/TrendScanSelector';
 import { ChartSkeleton } from '@/components/ui/skeleton';
-import { BarChart3, FileText, Maximize2, Minimize2, SlidersHorizontal, TrendingUp } from 'lucide-react';
+import { BarChart3, FileText, GitBranch, Maximize2, Minimize2, SlidersHorizontal, TrendingUp } from 'lucide-react';
 
 const TIME_RANGE_PRESETS: Record<string, number> = {
   '1m': 30,
@@ -158,6 +158,15 @@ const Dashboard = () => {
 
   // Fetch Config
   useEffect(() => {
+    if (!currentProject) {
+      setAppConfig(null);
+      setViewsConfig([]);
+      setAvailableTechStacks([]);
+      setSelectedRunId(null);
+      setLoading(false);
+      return;
+    }
+
     const loadConfig = async () => {
       const config = await fetchConfig();
       setAppConfig(config);
@@ -180,9 +189,9 @@ const Dashboard = () => {
         if (!['Summary', ...stackNames].includes(selectedTechStack)) {
           setSelectedTechStack('Summary');
         }
-      } else if (projectList.length > 0) {
+      } else if (projectList.some(p => !p.archived)) {
         // No config but we have projects — use the first one
-        setProject(projectList[0].name);
+        setProject(projectList.find(p => !p.archived)!.name);
         setViewsConfig([]);
         setAvailableTechStacks([]);
       }
@@ -1046,6 +1055,27 @@ const Dashboard = () => {
     return () => window.removeEventListener('keydown', handler);
   }, [fullscreenView.open]);
 
+  if (!currentProject) {
+    return (
+      <div className="h-full flex items-center justify-center bg-slate-50 dark:bg-slate-900 px-6">
+        <div className="max-w-lg text-center">
+          <GitBranch className="w-12 h-12 mx-auto mb-4 text-sky-500" />
+          <h1 className="text-xl font-semibold text-slate-800 dark:text-slate-100 mb-2">
+            {t('dashboard.noRepositoryTitle')}
+          </h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+            {t('dashboard.noRepositoryDesc')}
+          </p>
+          <button
+            onClick={() => navigateTo('execute')}
+            className="px-4 py-2 bg-sky-600 text-white rounded-lg text-sm font-medium hover:bg-sky-700 transition-colors"
+          >
+            {t('dashboard.addRepository')}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full overflow-hidden bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 transition-colors">

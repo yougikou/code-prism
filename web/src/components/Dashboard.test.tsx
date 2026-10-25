@@ -55,6 +55,7 @@ describe('Dashboard', () => {
     vi.mocked(dataService.getProjectNames).mockReturnValue(['test_project']);
     vi.mocked(dataService.fetchUnifiedProjects).mockResolvedValue([{
       name: 'test_project',
+      archived: false,
       has_config: true,
       config_repo_path: null,
       has_cached_repo: false,
@@ -80,15 +81,14 @@ describe('Dashboard', () => {
     });
   });
 
-  it('shows empty state when no projects exist', async () => {
-    vi.mocked(dataService.fetchConfig).mockResolvedValue({ projects: [] });
-    vi.mocked(dataService.isMultiProject).mockReturnValue(false);
-    vi.mocked(dataService.getDefaultProject).mockReturnValue(undefined);
-    vi.mocked(dataService.getProjectNames).mockReturnValue([]);
+  it('shows repository onboarding when no projects exist', async () => {
+    vi.mocked(dataService.fetchUnifiedProjects).mockResolvedValue([]);
 
     renderWithProviders(<Dashboard />);
 
-    expect(await screen.findByText('No configured views found')).toBeDefined();
+    expect(await screen.findByText('No project yet')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Add or clone repository' })).toBeDefined();
+    expect(dataService.fetchConfig).not.toHaveBeenCalled();
   });
 
   it('fetches configuration on mount', async () => {
@@ -109,7 +109,18 @@ describe('Dashboard', () => {
     });
     vi.mocked(dataService.getProjectNames).mockReturnValue(['test_project']);
     vi.mocked(dataService.fetchRuns).mockResolvedValue([]);
-    vi.mocked(dataService.fetchUnifiedProjects).mockResolvedValue([]);
+    vi.mocked(dataService.fetchUnifiedProjects).mockResolvedValue([{
+      name: 'test_project',
+      archived: false,
+      has_config: true,
+      config_repo_path: null,
+      has_cached_repo: false,
+      cached_repo_id: null,
+      cached_repo_branch: null,
+      total_scans: 0,
+      last_scan_time: null,
+      scan_modes: [],
+    }]);
 
     renderWithProviders(<Dashboard />);
 

@@ -549,6 +549,9 @@ dependencies = [
  "codeprism-database",
  "codeprism-scanner",
  "codeprism-server",
+ "git2",
+ "serde",
+ "serde_json",
  "sqlx",
  "tokio",
 ]
@@ -637,6 +640,7 @@ dependencies = [
  "utoipa",
  "utoipa-swagger-ui",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

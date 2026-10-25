@@ -23,6 +23,7 @@ use std::sync::{
 
 pub struct Scanner {
     db: Db,
+    analyzer_dir: Option<std::path::PathBuf>,
     analyzers: HashMap<String, Box<dyn Analyzer>>,
     cross_file_analyzers: HashMap<String, Box<dyn FileProcessor>>,
     cross_file_configs: HashMap<String, CrossFileAnalyzerConfig>,
@@ -89,6 +90,58 @@ fn scan_mode_matches(configured_mode: &str, current_mode: &str) -> bool {
         || configured_mode.eq_ignore_ascii_case(current_mode)
 }
 
+/// Resolve the directory that contains custom Python analyzers.
+///
+/// An explicit environment override is useful for development and packaged
+/// installations. If it is set but invalid, report that error rather than
+/// silently loading a different directory from the process working directory.
+pub fn analyzer_dir() -> anyhow::Result<std::path::PathBuf> {
+    let config_dir = std::env::var_os("CODEPRISM_CONFIG_DIR").map(std::path::PathBuf::from);
+    analyzer_dir_with_config(config_dir.as_deref())
+}
+
+pub fn analyzer_dir_with_config(config_dir: Option<&Path>) -> anyhow::Result<std::path::PathBuf> {
+    let explicit = std::env::var_os("CODEPRISM_ANALYZERS_DIR").map(std::path::PathBuf::from);
+    let executable = std::env::current_exe().ok();
+    resolve_analyzer_dir(
+        explicit.as_deref(),
+        config_dir,
+        executable.as_deref(),
+        &std::env::current_dir()?,
+    )
+}
+
+/// Resolve analyzer resources without changing process cwd. The final cwd
+/// candidate preserves the original development/CLI behavior.
+pub fn resolve_analyzer_dir(
+    explicit: Option<&std::path::Path>,
+    config_dir: Option<&std::path::Path>,
+    executable: Option<&std::path::Path>,
+    cwd: &std::path::Path,
+) -> anyhow::Result<std::path::PathBuf> {
+    if let Some(path) = explicit {
+        anyhow::ensure!(
+            path.is_dir(),
+            "CODEPRISM_ANALYZERS_DIR does not point to a directory: {}",
+            path.display()
+        );
+        return Ok(path.to_path_buf());
+    }
+    let mut candidates = Vec::new();
+    if let Some(config_dir) = config_dir {
+        candidates.push(config_dir.join("custom_analyzers"));
+    }
+    if let Some(executable) = executable.and_then(std::path::Path::parent) {
+        candidates.push(executable.join("custom_analyzers"));
+        candidates.push(executable.join("../share/codeprism/custom_analyzers"));
+    }
+    candidates.push(cwd.join("custom_analyzers"));
+    if let Some(found) = candidates.iter().find(|candidate| candidate.is_dir()) {
+        return Ok(std::fs::canonicalize(found).unwrap_or_else(|_| found.clone()));
+    }
+    Ok(cwd.join("custom_analyzers"))
+}
+
 // Event to decouple Git (Sync) from DB (Async)
 
 #[derive(Debug)]
@@ -121,6 +174,10 @@ impl Scanner {
     }
 
     pub fn with_config(db: Db, config: CodePrismConfig) -> Self {
+        Self::with_config_dir(db, config, None)
+    }
+
+    pub fn with_config_dir(db: Db, config: CodePrismConfig, config_dir: Option<&Path>) -> Self {
         let mut analyzers: HashMap<String, Box<dyn Analyzer>> = HashMap::new();
         let mut load_errors: Vec<String> = Vec::new();
 
@@ -202,60 +259,112 @@ impl Scanner {
         // are resolved later, at the start of each scan.
         let mut all_cross_file_names: HashSet<String> =
             config.custom_cross_file_analyzers.keys().cloned().collect();
+        let mut non_python_analyzers: HashSet<String> = ["file_count", "char_count"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        non_python_analyzers.extend(regex_defs.keys().cloned());
+        non_python_analyzers.extend(external_defs.keys().cloned());
+        let references_unresolved_analyzers = config
+            .tech_stacks
+            .iter()
+            .flat_map(|stack| stack.analyzers.iter())
+            .chain(config.projects.iter().flat_map(|project| {
+                project
+                    .tech_stacks
+                    .iter()
+                    .flat_map(|stack| stack.analyzers.iter())
+            }))
+            .any(|name| !non_python_analyzers.contains(name));
+        let requires_python_resources = !impl_defs.is_empty()
+            || !config.custom_cross_file_analyzers.is_empty()
+            || config.projects.iter().any(|project| {
+                !project.custom_impl_analyzers.is_empty()
+                    || !project.custom_cross_file_analyzers.is_empty()
+            })
+            || references_unresolved_analyzers;
         for project in &config.projects {
             all_cross_file_names.extend(project.custom_cross_file_analyzers.keys().cloned());
         }
 
-        // 4. Auto-discover Python Analyzers in 'custom_analyzers/'
-        if let Ok(entries) = std::fs::read_dir("custom_analyzers") {
-            for entry in entries.filter_map(Result::ok) {
-                let path = entry.path();
-                if path.is_file()
-                    && let Some(ext) = path.extension()
-                    && ext == "py"
-                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-                {
-                    let analyzer_id = stem.to_string();
+        // 4. Auto-discover Python analyzers from the shared resource resolver.
+        let analyzer_dir = match analyzer_dir_with_config(config_dir) {
+            Ok(dir) => Some(dir),
+            Err(error) => {
+                load_errors.push(error.to_string());
+                None
+            }
+        };
+        if let Some(analyzer_dir) = &analyzer_dir {
+            match std::fs::read_dir(analyzer_dir) {
+                Ok(entries) => {
+                    let mut discovered = HashSet::new();
+                    for entry in entries.filter_map(Result::ok) {
+                        let path = entry.path();
+                        if path.is_file()
+                            && let Some(ext) = path.extension()
+                            && ext == "py"
+                            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                        {
+                            let analyzer_id = stem.to_string();
+                            discovered.insert(analyzer_id.clone());
 
-                    if analyzer_id.starts_with('_') {
-                        continue;
+                            if analyzer_id.starts_with('_') {
+                                continue;
+                            }
+
+                            // Cross-file scripts are instantiated per project at scan time.
+                            if all_cross_file_names.contains(&analyzer_id) {
+                                continue;
+                            }
+
+                            let full_path = path.to_string_lossy().to_string();
+
+                            // Check for overrides (search root then projects)
+                            let (tag_overrides, scan_mode, change_type) =
+                                if let Some(conf) = impl_defs.get(&analyzer_id) {
+                                    (
+                                        conf.resolve_tags(),
+                                        conf.scan_mode.clone(),
+                                        conf.change_type.clone(),
+                                    )
+                                } else {
+                                    (HashMap::new(), None, None)
+                                };
+
+                            // Create ScriptAnalyzer
+                            let sa = ScriptAnalyzer::new(
+                                &analyzer_id,
+                                &full_path,
+                                tag_overrides,
+                                scan_mode,
+                                change_type,
+                            );
+                            analyzers.insert(analyzer_id, Box::new(sa));
+                            println!("Loaded custom analyzer: {}", stem);
+                        }
                     }
-
-                    // Cross-file scripts are instantiated per project at scan time.
-                    if all_cross_file_names.contains(&analyzer_id) {
-                        continue;
+                    for name in impl_defs.keys().chain(all_cross_file_names.iter()) {
+                        if !discovered.contains(name) {
+                            load_errors.push(format!(
+                                "Configured Python analyzer '{}' is missing from '{}'",
+                                name,
+                                analyzer_dir.display()
+                            ));
+                        }
                     }
-
-                    let full_path = path.to_string_lossy().to_string();
-
-                    // Check for overrides (search root then projects)
-                    let (tag_overrides, scan_mode, change_type) =
-                        if let Some(conf) = impl_defs.get(&analyzer_id) {
-                            (
-                                conf.resolve_tags(),
-                                conf.scan_mode.clone(),
-                                conf.change_type.clone(),
-                            )
-                        } else {
-                            (HashMap::new(), None, None)
-                        };
-
-                    // Create ScriptAnalyzer
-                    let sa = ScriptAnalyzer::new(
-                        &analyzer_id,
-                        &full_path,
-                        tag_overrides,
-                        scan_mode,
-                        change_type,
-                    );
-                    analyzers.insert(analyzer_id, Box::new(sa));
-                    println!("Loaded custom analyzer: {}", stem);
                 }
+                Err(error) if requires_python_resources => load_errors.push(format!(
+                    "Custom Python analyzers are configured, but directory '{}' could not be read: {error}",
+                    analyzer_dir.display()
+                )),
+                Err(_) => {}
             }
         }
 
         Self {
             db,
+            analyzer_dir,
             analyzers,
             cross_file_analyzers: HashMap::new(),
             cross_file_configs: HashMap::new(),
@@ -290,7 +399,10 @@ impl Scanner {
     }
 
     pub fn completed_with_errors(&self) -> bool {
-        !self.cross_file_error_details.is_empty()
+        !self.analyzer_load_errors.is_empty()
+            || !self.cross_file_load_errors.is_empty()
+            || !self.analyzer_error_details.is_empty()
+            || !self.cross_file_error_details.is_empty()
     }
 
     /// Build the cross-file analyzer runtime for the project being scanned.
@@ -305,22 +417,33 @@ impl Scanner {
         let active_configs = resolve_cross_file_configs(self.config.as_ref(), project_config);
 
         for (name, analyzer_config) in &active_configs {
-            let script_path = format!("custom_analyzers/{}.py", name);
-            if Path::new(&script_path).exists() {
-                let analyzer = ScriptCrossFileAnalyzer::new(name, analyzer_config.resolve_tags());
-                self.cross_file_analyzers
-                    .insert(name.clone(), Box::new(analyzer));
-                println!(
-                    "Loaded cross-file analyzer for project '{}': {}",
-                    project_config.name, name
-                );
-            } else {
-                let message = format!(
-                    "Cross-file analyzer '{}' script not found at '{}' for project '{}'",
-                    name, script_path, project_config.name
-                );
-                eprintln!("Warning: {}", message);
-                self.cross_file_load_errors.push(message);
+            let resolved = self
+                .analyzer_dir
+                .as_ref()
+                .map(|dir| dir.join(format!("{name}.py")))
+                .ok_or_else(|| anyhow::anyhow!("custom analyzer directory could not be resolved"));
+            match resolved {
+                Ok(script_path) if script_path.is_file() => {
+                    let analyzer =
+                        ScriptCrossFileAnalyzer::new(name, analyzer_config.resolve_tags());
+                    self.cross_file_analyzers
+                        .insert(name.clone(), Box::new(analyzer));
+                    println!(
+                        "Loaded cross-file analyzer for project '{}': {}",
+                        project_config.name, name
+                    );
+                }
+                Ok(script_path) => {
+                    let message = format!(
+                        "Cross-file analyzer '{}' script not found at '{}' for project '{}'",
+                        name,
+                        script_path.display(),
+                        project_config.name
+                    );
+                    eprintln!("Warning: {}", message);
+                    self.cross_file_load_errors.push(message);
+                }
+                Err(error) => self.cross_file_load_errors.push(error.to_string()),
             }
         }
 
@@ -1547,6 +1670,59 @@ impl Scanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analyzer_path_resolution_prefers_explicit_then_config_and_install_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let explicit = temp.path().join("explicit");
+        let configured = temp.path().join("config/custom_analyzers");
+        let executable_dir = temp.path().join("bin");
+        let cwd = temp.path().join("working");
+        for path in [&explicit, &configured, &executable_dir, &cwd] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        assert_eq!(
+            resolve_analyzer_dir(
+                Some(&explicit),
+                Some(configured.parent().unwrap()),
+                Some(&executable_dir.join("codeprism")),
+                &cwd
+            )
+            .unwrap(),
+            explicit
+        );
+        assert_eq!(
+            resolve_analyzer_dir(
+                None,
+                Some(configured.parent().unwrap()),
+                Some(&executable_dir.join("codeprism")),
+                &cwd
+            )
+            .unwrap(),
+            std::fs::canonicalize(configured).unwrap()
+        );
+    }
+
+    #[test]
+    fn analyzer_path_resolution_rejects_missing_explicit_override() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("missing");
+        assert!(resolve_analyzer_dir(Some(&missing), None, None, temp.path()).is_err());
+    }
+
+    #[test]
+    fn analyzer_path_resolution_finds_installed_share_directory_from_executable() {
+        let temp = tempfile::tempdir().unwrap();
+        let bin = temp.path().join("bin");
+        let shared = temp.path().join("share/codeprism/custom_analyzers");
+        let cwd = temp.path().join("other-working-directory");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        let executable = bin.join("codeprism");
+        let resolved = resolve_analyzer_dir(None, None, Some(&executable), &cwd).unwrap();
+        assert_eq!(resolved, std::fs::canonicalize(shared).unwrap());
+    }
 
     #[test]
     fn scan_mode_matching_accepts_documented_and_legacy_case() {
