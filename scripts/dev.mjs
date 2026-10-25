@@ -275,7 +275,7 @@ async function verifyPayload(payloadDir, binary, executionCwd = payloadDir) {
   const config = join(payloadDir, 'codeprism.release-test.yaml');
   await run(binary, ['init-config', config], { cwd: executionCwd });
   await run(binary, ['--config', config, 'check-config'], { cwd: executionCwd });
-  const packagedEnv = { ...process.env };
+  const packagedEnv = { ...process.env, PYTHONDONTWRITEBYTECODE: '1' };
   delete packagedEnv.CODEPRISM_ANALYZERS_DIR;
   delete packagedEnv.CODEPRISM_CONFIG_DIR;
   await run(binary, ['test-analyzers'], { cwd: executionCwd, env: packagedEnv });
