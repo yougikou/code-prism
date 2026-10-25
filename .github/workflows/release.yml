@@ -149,6 +149,7 @@ jobs:
         with:
           name: codeprism-${{ matrix.target }}
           path: .codeprism-release/codeprism-${{ matrix.target }}.*
+          include-hidden-files: true
 
   docker-verify:
     name: Build and run Docker image
