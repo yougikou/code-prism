@@ -57,7 +57,7 @@ jobs:
           fi
           VERSION="${TAG#v}"
           if EXISTING_RELEASE_COMMIT="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.target_commitish' 2>/dev/null)"; then
-            if [[ ! "$EXISTING_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ || "$EXISTING_RELEASE_COMMIT" != "$COMMIT" ]]; then
+            if [[ "$EXISTING_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ && "$EXISTING_RELEASE_COMMIT" != "$COMMIT" ]]; then
               echo "Release $TAG already exists for '$EXISTING_RELEASE_COMMIT'; refusing to republish from $COMMIT" >&2
               exit 1
             fi
