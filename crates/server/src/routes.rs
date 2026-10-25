@@ -34,6 +34,7 @@ pub struct ProjectInfo {
 #[derive(Serialize)]
 pub struct UnifiedProjectInfo {
     pub name: String,
+    pub archived: bool,
     pub has_config: bool,
     pub config_repo_path: Option<String>,
     pub has_cached_repo: bool,
@@ -91,6 +92,7 @@ pub async fn list_unified_projects(State(state): State<AppState>) -> impl IntoRe
             p.name.clone(),
             UnifiedProjectInfo {
                 name: p.name.clone(),
+                archived: p.archived,
                 has_config: true,
                 config_repo_path: p.repo_path.clone(),
                 has_cached_repo: false,
@@ -109,6 +111,7 @@ pub async fn list_unified_projects(State(state): State<AppState>) -> impl IntoRe
             .entry(name.clone())
             .or_insert(UnifiedProjectInfo {
                 name: name.clone(),
+                archived: false,
                 has_config: false,
                 config_repo_path: None,
                 has_cached_repo: false,
@@ -132,6 +135,7 @@ pub async fn list_unified_projects(State(state): State<AppState>) -> impl IntoRe
             .entry(name.clone())
             .or_insert(UnifiedProjectInfo {
                 name: name.clone(),
+                archived: false,
                 has_config: false,
                 config_repo_path: None,
                 has_cached_repo: false,
@@ -171,6 +175,23 @@ pub async fn create_project(
         )
             .into_response();
     }
+    let Some(_project_guard) = state.try_project_lock(&name) else {
+        return lifecycle_error(
+            StatusCode::CONFLICT,
+            "Project has an active scan or lifecycle operation",
+        );
+    };
+    match state.project_deletion_pending(&name).await {
+        Ok(true) => {
+            return lifecycle_error(
+                StatusCode::CONFLICT,
+                "A previous permanent deletion is incomplete",
+            );
+        }
+        Err(error) => return lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        Ok(false) => {}
+    }
+    let _config_guard = state.lock_config_writer().await;
 
     let yaml_content = match std::fs::read_to_string(&state.config_path) {
         Ok(c) => c,
@@ -194,6 +215,7 @@ pub async fn create_project(
                 .into_response();
         }
     };
+    core_config.normalize_project_format();
 
     // Idempotent: if project already exists in config, just return OK
     if core_config.projects.iter().any(|p| p.name == name) {
@@ -217,17 +239,10 @@ pub async fn create_project(
                 .into_response();
         }
     };
-    let tmp_path = format!("{}.tmp", state.config_path);
-    if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write config: {}", e)})),
-        )
-            .into_response();
-    }
-    if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
-        let _ = std::fs::remove_file(&tmp_path);
+    if let Err(e) = crate::config_persistence::write_atomic(
+        std::path::Path::new(&state.config_path),
+        yaml_str.as_bytes(),
+    ) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to save config: {}", e)})),
@@ -252,6 +267,7 @@ pub async fn create_project(
         tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
+            archived: project.archived,
             views,
             tech_stacks,
             columns: project.columns,
@@ -269,7 +285,57 @@ pub async fn create_project(
 pub async fn delete_project(
     State(state): State<AppState>,
     Path(project_name): Path<String>,
+    request: Option<AxumJson<DeleteProjectRequest>>,
 ) -> impl IntoResponse {
+    let Some(AxumJson(request)) = request else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "confirmation_name is required"})),
+        )
+            .into_response();
+    };
+    if request.confirmation_name != project_name {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "confirmation_name must exactly match the project name"})),
+        )
+            .into_response();
+    }
+
+    let Some(_project_guard) = state.try_project_lock(&project_name) else {
+        return lifecycle_error(
+            StatusCode::CONFLICT,
+            "Project has an active scan or lifecycle operation",
+        );
+    };
+    let _config_guard = state.lock_config_writer().await;
+    match state.project_deletion_pending(&project_name).await {
+        Ok(true) => {
+            return lifecycle_error(
+                StatusCode::CONFLICT,
+                "A previous permanent deletion is incomplete; inspect its operation record before retrying",
+            );
+        }
+        Err(error) => return lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        Ok(false) => {}
+    }
+    match project_exists(&state, &project_name).await {
+        Ok(true) => {}
+        Ok(false) => return lifecycle_error(StatusCode::NOT_FOUND, "Project not found"),
+        Err(error) => return lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+
+    let preview = match project_deletion_preview(&state, &project_name).await {
+        Ok(preview) => preview,
+        Err(error) => return lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+    if request.remove_managed_files && !preview.can_remove_managed_files {
+        return lifecycle_error(
+            StatusCode::CONFLICT,
+            format!("托管仓库不能安全删除：{}", preview.blockers.join("；")),
+        );
+    }
+
     let pool = state.db.pool();
 
     // Read and serialize the replacement config before mutating persisted state.
@@ -294,6 +360,7 @@ pub async fn delete_project(
                 .into_response();
         }
     };
+    core_config.normalize_project_format();
     core_config.projects.retain(|p| p.name != project_name);
     let yaml_str = match serde_yaml::to_string(&core_config) {
         Ok(s) => s,
@@ -306,14 +373,120 @@ pub async fn delete_project(
         }
     };
 
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    let selected_repos: Vec<_> = if request.remove_managed_files {
+        state
+            .git_cache
+            .list_all()
+            .into_iter()
+            .filter(|(_, repo)| repo.project_name.as_deref() == Some(&project_name))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let directories_json = serde_json::to_string(
+        &selected_repos
+            .iter()
+            .map(|(repo_id, repo)| serde_json::json!({"repo_id": repo_id, "path": repo.path}))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap_or_else(|_| "[]".to_string());
+    let registrations_json = serde_json::to_string(
+        &state
+            .git_cache
+            .list_all()
+            .iter()
+            .filter(|(_, repo)| repo.project_name.as_deref() == Some(&project_name))
+            .map(|(repo_id, _)| repo_id.clone())
+            .collect::<Vec<_>>(),
+    )
+    .unwrap_or_else(|_| "[]".to_string());
+    let database_path = state
+        .core_config
+        .read()
+        .unwrap()
+        .database_url
+        .clone()
+        .unwrap_or_default();
+    let canonical_config_path = std::fs::canonicalize(&state.config_path)
+        .unwrap_or_else(|_| std::path::PathBuf::from(&state.config_path))
+        .to_string_lossy()
+        .to_string();
+    if let Err(error) = sqlx::query(
+        "INSERT INTO project_deletion_operations (operation_id, project_name, config_path, database_path, cache_path, directories_json, registrations_json, config_before, config_after, stage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'intent')"
+    ).bind(&operation_id).bind(&project_name).bind(canonical_config_path).bind(database_path)
+        .bind(state.git_cache.storage_path().to_string_lossy().to_string())
+        .bind(directories_json).bind(registrations_json).bind(&yaml_content).bind(&yaml_str)
+        .execute(state.db.pool()).await {
+        return lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to persist deletion intent: {error}"));
+    }
+    let mut deleted_directories = Vec::new();
+    for (repo_id, repo) in &selected_repos {
+        let current_preview = match project_deletion_preview(&state, &project_name).await {
+            Ok(preview) => preview,
+            Err(error) => {
+                let _ = sqlx::query("UPDATE project_deletion_operations SET stage = 'failed_files', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE operation_id = ?")
+                    .bind(&error).bind(&operation_id).execute(state.db.pool()).await;
+                return lifecycle_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{error}; operation_id={operation_id}"),
+                );
+            }
+        };
+        if !current_preview.can_remove_managed_files {
+            let message = format!(
+                "仓库状态在预览后发生变化，已拒绝删除：{}",
+                current_preview.blockers.join("；")
+            );
+            let _ = sqlx::query("UPDATE project_deletion_operations SET stage = 'failed_files', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE operation_id = ?")
+                .bind(&message).bind(&operation_id).execute(state.db.pool()).await;
+            return lifecycle_error(
+                StatusCode::CONFLICT,
+                format!("{message}; operation_id={operation_id}"),
+            );
+        }
+        if !state.git_cache.can_remove_files(repo_id, repo) {
+            let message = format!("Repository path changed after deletion preview: {repo_id}");
+            let _ = sqlx::query("UPDATE project_deletion_operations SET stage = 'failed_files', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE operation_id = ?")
+                .bind(&message).bind(&operation_id).execute(state.db.pool()).await;
+            return lifecycle_error(
+                StatusCode::CONFLICT,
+                format!("{message}; operation_id={operation_id}"),
+            );
+        }
+        let path = std::path::Path::new(&repo.path);
+        if path.exists()
+            && let Err(error) = std::fs::remove_dir_all(path)
+        {
+            let message =
+                format!("托管仓库删除失败，文件可能已部分删除；项目记录和配置已保留。{error}");
+            let _ = sqlx::query("UPDATE project_deletion_operations SET stage = 'failed_files', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE operation_id = ?")
+                .bind(&message).bind(&operation_id).execute(state.db.pool()).await;
+            return lifecycle_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("{message}; operation_id={operation_id}"),
+            );
+        }
+        deleted_directories.push(repo_id.clone());
+        let completed =
+            serde_json::to_string(&deleted_directories).unwrap_or_else(|_| "[]".to_string());
+        if let Err(error) = sqlx::query("UPDATE project_deletion_operations SET stage = 'files_removed', completed_steps = ?, updated_at = CURRENT_TIMESTAMP WHERE operation_id = ?")
+            .bind(completed).bind(&operation_id).execute(state.db.pool()).await {
+            let message = format!("仓库文件已删除，但记录删除进度失败；项目元数据仍保留。operation_id={operation_id}: {error}");
+            return lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, message);
+        }
+    }
+
     // Keep all database changes in one transaction. Configuration is written
     // before the commit, so a filesystem failure rolls the database work back.
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(e) => {
+            let _ = sqlx::query("UPDATE project_deletion_operations SET stage = 'failed_database', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE operation_id = ?")
+                .bind(e.to_string()).bind(&operation_id).execute(pool).await;
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Failed to start database transaction: {}", e)})),
+            Json(serde_json::json!({"error": format!("Failed to start database transaction: {e}; operation_id={operation_id}")})),
             )
                 .into_response();
         }
@@ -352,56 +525,79 @@ pub async fn delete_project(
     }
     .await;
     if let Err(e) = delete_result {
+        let _ = sqlx::query("UPDATE project_deletion_operations SET stage = 'failed_database', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE operation_id = ?")
+            .bind(e.to_string()).bind(&operation_id).execute(pool).await;
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to delete project data: {}", e)})),
+            Json(serde_json::json!({"error": format!("Failed to delete project data: {e}; operation_id={operation_id}")})),
         )
             .into_response();
     }
 
-    let tmp_path = format!("{}.tmp", state.config_path);
-    if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return (
+    if let Err(e) = crate::config_persistence::write_atomic(
+        std::path::Path::new(&state.config_path),
+        yaml_str.as_bytes(),
+    ) {
+        let _ = sqlx::query("UPDATE project_deletion_operations SET stage = 'failed_config', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE operation_id = ?")
+            .bind(e.to_string()).bind(&operation_id).execute(pool).await;
+        return lifecycle_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write config: {}", e)})),
-        )
-            .into_response();
+            format!("Failed to save config: {e}; operation_id={operation_id}"),
+        );
     }
-    if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to save config: {}", e)})),
-        )
-            .into_response();
+
+    // Remove registrations while the database transaction is still open. If
+    // any persistence step fails, restore both YAML and already removed rows.
+    let repos = state.git_cache.list_all();
+    let mut removed_repos = Vec::new();
+    for (repo_id, repo) in &repos {
+        if repo.project_name.as_deref() == Some(&project_name) {
+            match state.git_cache.remove(repo_id) {
+                Ok(Some(removed)) => removed_repos.push((repo_id.clone(), removed)),
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = crate::config_persistence::write_atomic(
+                        std::path::Path::new(&state.config_path),
+                        yaml_content.as_bytes(),
+                    );
+                    for (id, repo) in removed_repos.drain(..) {
+                        let _ = state.git_cache.insert(id, repo);
+                    }
+                    let _ = sqlx::query("UPDATE project_deletion_operations SET stage = 'failed_registry', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE operation_id = ?")
+                        .bind(error.to_string()).bind(&operation_id).execute(pool).await;
+                    return lifecycle_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!(
+                            "Failed to remove repository registration: {error}; operation_id={operation_id}"
+                        ),
+                    );
+                }
+            }
+        }
     }
     if let Err(e) = tx.commit().await {
         // Preserve the prior YAML if SQLite rejects the transaction commit.
-        let _ = std::fs::write(&state.config_path, &yaml_content);
+        let _ = crate::config_persistence::write_atomic(
+            std::path::Path::new(&state.config_path),
+            yaml_content.as_bytes(),
+        );
+        for (id, repo) in removed_repos {
+            let _ = state.git_cache.insert(id, repo);
+        }
+        let _ = sqlx::query("UPDATE project_deletion_operations SET stage = 'failed_commit', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE operation_id = ?")
+            .bind(e.to_string()).bind(&operation_id).execute(pool).await;
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(
-                serde_json::json!({"error": format!("Failed to finalize project deletion: {}", e)}),
+                serde_json::json!({"error": format!("Failed to finalize project deletion: {e}; operation_id={operation_id}")} ),
             ),
         )
             .into_response();
     }
 
-    // Remove cache entries. Only CodePrism-managed clones are eligible for
-    // deletion; local repositories are always preserved.
-    let repos = state.git_cache.list_all();
-    for (repo_id, repo) in &repos {
-        if repo.project_name.as_deref() == Some(&project_name) {
-            let remove_files = state.git_cache.can_remove_files(repo);
-            let path = repo.path.clone();
-            state.git_cache.remove(repo_id);
-            if remove_files {
-                tokio::spawn(async move {
-                    let _ = tokio::fs::remove_dir_all(&path).await;
-                });
-            }
-        }
+    if let Err(error) = sqlx::query("UPDATE project_deletion_operations SET stage = 'completed', last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE operation_id = ?")
+        .bind(&operation_id).execute(pool).await {
+        return lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Project was deleted but operation finalization failed; operation_id={operation_id}: {error}"));
     }
 
     // Rebuild in-memory state
@@ -421,6 +617,7 @@ pub async fn delete_project(
         tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
+            archived: project.archived,
             views,
             tech_stacks,
             columns: project.columns,
@@ -430,7 +627,341 @@ pub async fn delete_project(
         projects: project_app_configs,
     };
 
-    Json(serde_json::json!({"status": "ok", "message": format!("Project '{}' deleted", project_name)})).into_response()
+    Json(serde_json::json!({
+        "status": "ok",
+        "message": format!("Project '{}' permanently deleted", project_name),
+        "files_removed": request.remove_managed_files,
+        "operation_id": operation_id,
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct DeleteProjectRequest {
+    pub confirmation_name: String,
+    #[serde(default)]
+    pub remove_managed_files: bool,
+}
+
+#[derive(Serialize)]
+pub struct ProjectDeletionPreview {
+    pub project_name: String,
+    pub scan_count: i64,
+    pub repo_paths: Vec<serde_json::Value>,
+    pub can_remove_managed_files: bool,
+    pub blockers: Vec<String>,
+}
+
+async fn project_deletion_preview(
+    state: &AppState,
+    project_name: &str,
+) -> Result<ProjectDeletionPreview, String> {
+    let scan_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM scans s JOIN projects p ON p.id = s.project_id WHERE p.name = ?",
+    )
+    .bind(project_name)
+    .fetch_one(state.db.pool())
+    .await
+    .map_err(|e| e.to_string())?;
+    let active_jobs: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM scan_jobs WHERE project_name = ? AND status IN ('queued', 'running')",
+    )
+    .bind(project_name)
+    .fetch_one(state.db.pool())
+    .await
+    .map_err(|e| e.to_string())?;
+    let repos: Vec<_> = state
+        .git_cache
+        .list_all()
+        .into_iter()
+        .filter(|(_, repo)| repo.project_name.as_deref() == Some(project_name))
+        .collect();
+    let mut blockers = Vec::new();
+    if active_jobs > 0 {
+        blockers.push(format!("项目有 {active_jobs} 个排队或运行中的扫描任务"));
+    }
+    let mut repo_paths = Vec::new();
+    let mut canonical_paths = std::collections::HashSet::new();
+    for (repo_id, repo) in &repos {
+        let path = std::path::Path::new(&repo.path);
+        let canonical = std::fs::canonicalize(path).ok();
+        let mut repo_blockers = Vec::new();
+        if !state.git_cache.can_remove_files(repo_id, repo) {
+            repo_blockers.push("仓库来源或缓存路径无法验证".to_string());
+        }
+        if canonical
+            .as_ref()
+            .is_none_or(|path| !canonical_paths.insert(path.clone()))
+        {
+            repo_blockers.push("仓库路径重复或无法解析".to_string());
+        }
+        if state.git_cache.list_all().iter().any(|(other_id, other)| {
+            other_id != repo_id
+                && std::fs::canonicalize(&other.path)
+                    .ok()
+                    .is_some_and(|other_path| {
+                        canonical.as_ref().is_some_and(|target| {
+                            other_path == *target
+                                || other_path.starts_with(target)
+                                || target.starts_with(&other_path)
+                        })
+                    })
+        }) {
+            repo_blockers.push("仓库目录与其他登记重复或存在嵌套引用".to_string());
+        }
+        if state
+            .core_config
+            .read()
+            .unwrap()
+            .get_projects()
+            .iter()
+            .any(|project| {
+                project.name != project_name
+                    && project
+                        .repo_path
+                        .as_deref()
+                        .and_then(|other| std::fs::canonicalize(other).ok())
+                        .is_some_and(|other_path| {
+                            canonical.as_ref().is_some_and(|target| {
+                                other_path == *target
+                                    || other_path.starts_with(target)
+                                    || target.starts_with(&other_path)
+                            })
+                        })
+            })
+        {
+            repo_blockers.push("仓库目录被其他项目配置引用".to_string());
+        }
+        match git2::Repository::open(path) {
+            Ok(repository) => {
+                let mut options = git2::StatusOptions::new();
+                options.include_untracked(true).recurse_untracked_dirs(true);
+                match repository.statuses(Some(&mut options)) {
+                    Ok(statuses) if !statuses.is_empty() => {
+                        repo_blockers.push("存在未提交修改或未跟踪文件".to_string())
+                    }
+                    Err(error) => repo_blockers.push(format!("无法检查工作区状态: {error}")),
+                    _ => {}
+                }
+                if let Ok(head) = repository.head() {
+                    let tracking = head
+                        .shorthand()
+                        .and_then(|name| repository.find_branch(name, git2::BranchType::Local).ok())
+                        .and_then(|branch| branch.upstream().ok())
+                        .and_then(|branch| branch.get().target());
+                    match (head.target(), tracking) {
+                        (Some(local), Some(remote)) => {
+                            match repository.graph_ahead_behind(local, remote) {
+                                Ok((ahead, _)) if ahead > 0 => {
+                                    repo_blockers.push("存在未推送提交".to_string())
+                                }
+                                Ok(_) => {}
+                                Err(error) => {
+                                    repo_blockers.push(format!("无法验证远端跟踪状态: {error}"))
+                                }
+                            }
+                        }
+                        _ => repo_blockers.push("没有可验证的远端跟踪分支".to_string()),
+                    }
+                } else {
+                    repo_blockers.push("无法验证当前分支和远端跟踪状态".to_string());
+                }
+            }
+            Err(error) => repo_blockers.push(format!("无法打开 Git 仓库: {error}")),
+        }
+        blockers.extend(
+            repo_blockers
+                .iter()
+                .map(|message| format!("{repo_id}: {message}")),
+        );
+        repo_paths.push(serde_json::json!({
+            "repo_id": repo_id,
+            "path": repo.path,
+            "source": if repo.managed && repo.managed_origin_id.as_deref() == Some(repo_id) { "managed_clone" } else { "local_or_unknown" },
+            "retained_by_default": true,
+            "retained_by_default": true,
+            "remove_eligible": repo.managed && repo_blockers.is_empty(),
+            "blockers": repo_blockers,
+        }));
+    }
+    Ok(ProjectDeletionPreview {
+        project_name: project_name.to_string(),
+        scan_count,
+        repo_paths,
+        can_remove_managed_files: !repos.is_empty() && blockers.is_empty(),
+        blockers,
+    })
+}
+
+async fn project_exists(state: &AppState, project_name: &str) -> Result<bool, String> {
+    let configured = state
+        .core_config
+        .read()
+        .unwrap()
+        .get_project(project_name)
+        .is_some();
+    let cached = state
+        .git_cache
+        .list_all()
+        .iter()
+        .any(|(_, repo)| repo.project_name.as_deref() == Some(project_name));
+    let persisted: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE name = ?)")
+            .bind(project_name)
+            .fetch_one(state.db.pool())
+            .await
+            .map_err(|error| error.to_string())?;
+    Ok(configured || cached || persisted)
+}
+
+/// GET /api/v1/projects/:project_name/deletion-preview
+pub async fn get_project_deletion_preview(
+    State(state): State<AppState>,
+    Path(project_name): Path<String>,
+) -> Response {
+    match project_exists(&state, &project_name).await {
+        Ok(true) => {}
+        Ok(false) => return lifecycle_error(StatusCode::NOT_FOUND, "Project not found"),
+        Err(error) => return lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+    match project_deletion_preview(&state, &project_name).await {
+        Ok(preview) => Json(preview).into_response(),
+        Err(error) => lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ArchiveProjectRequest {
+    pub archived: bool,
+}
+
+fn lifecycle_error(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, Json(serde_json::json!({ "error": message.into() }))).into_response()
+}
+
+/// POST /api/v1/projects/{project_name}/archive — archive or restore a project.
+pub async fn set_project_archived(
+    State(state): State<AppState>,
+    Path(project_name): Path<String>,
+    AxumJson(request): AxumJson<ArchiveProjectRequest>,
+) -> Response {
+    let Some(_project_guard) = state.try_project_lock(&project_name) else {
+        return lifecycle_error(
+            StatusCode::CONFLICT,
+            "Project has an active scan or lifecycle operation",
+        );
+    };
+    let _config_guard = state.lock_config_writer().await;
+    match state.project_deletion_pending(&project_name).await {
+        Ok(true) => {
+            return lifecycle_error(
+                StatusCode::CONFLICT,
+                "A previous permanent deletion is incomplete",
+            );
+        }
+        Err(error) => return lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        Ok(false) => {}
+    }
+    let yaml = match std::fs::read_to_string(&state.config_path) {
+        Ok(yaml) => yaml,
+        Err(error) => {
+            return lifecycle_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read project configuration: {error}"),
+            );
+        }
+    };
+    let mut config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml) {
+        Ok(config) => config,
+        Err(error) => {
+            return lifecycle_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to parse project configuration: {error}"),
+            );
+        }
+    };
+    config.normalize_project_format();
+    if let Some(project) = config
+        .projects
+        .iter_mut()
+        .find(|project| project.name == project_name)
+    {
+        project.archived = request.archived;
+    } else if request.archived {
+        let has_history: bool =
+            match sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE name = ?)")
+                .bind(&project_name)
+                .fetch_one(state.db.pool())
+                .await
+            {
+                Ok(has_history) => has_history,
+                Err(error) => {
+                    return lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+                }
+            };
+        if !has_history {
+            return lifecycle_error(StatusCode::NOT_FOUND, "Project not found");
+        }
+        config.projects.push(codeprism_core::ProjectConfig {
+            name: project_name.clone(),
+            archived: true,
+            ..Default::default()
+        });
+    } else {
+        return lifecycle_error(StatusCode::NOT_FOUND, "Project not found");
+    }
+
+    let yaml = match serde_yaml::to_string(&config) {
+        Ok(yaml) => yaml,
+        Err(error) => {
+            return lifecycle_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to serialize project configuration: {error}"),
+            );
+        }
+    };
+    if let Err(error) = crate::config_persistence::write_atomic(
+        std::path::Path::new(&state.config_path),
+        yaml.as_bytes(),
+    ) {
+        return lifecycle_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to save project configuration: {error}"),
+        );
+    }
+
+    let app_projects = config
+        .get_projects()
+        .iter()
+        .map(|project| {
+            let mut tech_stacks: Vec<_> = project
+                .tech_stacks
+                .iter()
+                .map(|stack| crate::config::TechStackInfo {
+                    name: stack.name.clone(),
+                    category: stack.category.clone(),
+                })
+                .collect();
+            tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
+            crate::config::ProjectAppConfig {
+                name: project.name.clone(),
+                archived: project.archived,
+                views: crate::convert_project_views(project),
+                tech_stacks,
+                columns: project.columns,
+            }
+        })
+        .collect();
+    *state.core_config.write().unwrap() = config;
+    *state.config.write().unwrap() = crate::config::AppConfig {
+        projects: app_projects,
+    };
+
+    Json(serde_json::json!({
+        "name": project_name,
+        "archived": request.archived,
+    }))
+    .into_response()
 }
 
 /// GET /api/v1/projects — list all projects that have scan data in the DB
@@ -1456,6 +1987,36 @@ pub async fn update_project_config(
     Path(project_name): Path<String>,
     AxumJson(mut updated_config): AxumJson<codeprism_core::ProjectConfig>,
 ) -> impl IntoResponse {
+    let Some(_project_guard) = state.try_project_lock(&project_name) else {
+        return lifecycle_error(
+            StatusCode::CONFLICT,
+            "Project has an active scan or lifecycle operation",
+        );
+    };
+    let _config_guard = state.lock_config_writer().await;
+    match state.project_deletion_pending(&project_name).await {
+        Ok(true) => {
+            return lifecycle_error(
+                StatusCode::CONFLICT,
+                "A previous permanent deletion is incomplete",
+            );
+        }
+        Err(error) => return lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        Ok(false) => {}
+    }
+    if state
+        .core_config
+        .read()
+        .unwrap()
+        .get_project(&project_name)
+        .is_some_and(|project| project.archived)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "Archived projects are read-only"})),
+        )
+            .into_response();
+    }
     if updated_config.name != project_name {
         return (
             StatusCode::BAD_REQUEST,
@@ -1463,6 +2024,9 @@ pub async fn update_project_config(
         )
             .into_response();
     }
+    // Archive state has a dedicated lifecycle endpoint and cannot be changed
+    // as a side effect of a generic project config update.
+    updated_config.archived = false;
 
     // Validate no duplicate analyzer names across all categories
     {
@@ -1499,7 +2063,6 @@ pub async fn update_project_config(
                 .into_response();
         }
     };
-
     let mut core_config: codeprism_core::CodePrismConfig = match serde_yaml::from_str(&yaml_content)
     {
         Ok(c) => c,
@@ -1511,6 +2074,7 @@ pub async fn update_project_config(
                 .into_response();
         }
     };
+    core_config.normalize_project_format();
 
     // Upsert: replace existing project or append new one
     let pos = core_config
@@ -1543,17 +2107,10 @@ pub async fn update_project_config(
         }
     };
 
-    let tmp_path = format!("{}.tmp", state.config_path);
-    if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write config: {}", e)})),
-        )
-            .into_response();
-    }
-    if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
-        let _ = std::fs::remove_file(&tmp_path);
+    if let Err(e) = crate::config_persistence::write_atomic(
+        std::path::Path::new(&state.config_path),
+        yaml_str.as_bytes(),
+    ) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to save config: {}", e)})),
@@ -1577,6 +2134,7 @@ pub async fn update_project_config(
         tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
+            archived: project.archived,
             views,
             tech_stacks,
             columns: project.columns,
@@ -1599,6 +2157,36 @@ pub async fn add_local_project(
     State(state): State<AppState>,
     AxumJson(req): AxumJson<AddLocalProjectRequest>,
 ) -> Response {
+    let Some(_project_guard) = state.try_project_lock(&req.name) else {
+        return lifecycle_error(
+            StatusCode::CONFLICT,
+            "Project has an active scan or lifecycle operation",
+        );
+    };
+    let _config_guard = state.lock_config_writer().await;
+    match state.project_deletion_pending(&req.name).await {
+        Ok(true) => {
+            return lifecycle_error(
+                StatusCode::CONFLICT,
+                "A previous permanent deletion is incomplete",
+            );
+        }
+        Err(error) => return lifecycle_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        Ok(false) => {}
+    }
+    if state
+        .core_config
+        .read()
+        .unwrap()
+        .get_project(&req.name)
+        .is_some_and(|project| project.archived)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "Archived projects are read-only"})),
+        )
+            .into_response();
+    }
     if req.name.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -1688,6 +2276,7 @@ pub async fn add_local_project(
                 .into_response();
         }
     };
+    core_config.normalize_project_format();
 
     // Upsert project config with repo_path
     let pos = core_config.projects.iter().position(|p| p.name == req.name);
@@ -1712,17 +2301,10 @@ pub async fn add_local_project(
                 .into_response();
         }
     };
-    let tmp_path = format!("{}.tmp", state.config_path);
-    if let Err(e) = std::fs::write(&tmp_path, &yaml_str) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write config: {}", e)})),
-        )
-            .into_response();
-    }
-    if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
-        let _ = std::fs::remove_file(&tmp_path);
+    if let Err(e) = crate::config_persistence::write_atomic(
+        std::path::Path::new(&state.config_path),
+        yaml_str.as_bytes(),
+    ) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to save config: {}", e)})),
@@ -1732,16 +2314,23 @@ pub async fn add_local_project(
 
     // Generate repo_id and add to GitCache
     let repo_id = uuid::Uuid::new_v4().to_string();
-    state.git_cache.insert(
+    if let Err(error) = state.git_cache.insert(
         repo_id.clone(),
         crate::git_cache::GitRepo {
             path: canonical_path.clone(),
             git_url: String::new(),
             current_branch: current_branch.clone(),
             managed: false,
+            managed_origin_id: None,
             project_name: Some(req.name.clone()),
         },
-    );
+    ) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to save repository registration: {error}")})),
+        )
+            .into_response();
+    }
 
     // Rebuild in-memory state
     *state.core_config.write().unwrap() = core_config;
@@ -1760,6 +2349,7 @@ pub async fn add_local_project(
         tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
+            archived: project.archived,
             views,
             tech_stacks,
             columns: project.columns,
@@ -1820,6 +2410,7 @@ pub async fn reload_config(State(state): State<AppState>) -> impl IntoResponse {
         tech_stacks.sort_by(|a, b| a.name.cmp(&b.name));
         project_app_configs.push(crate::config::ProjectAppConfig {
             name: project.name.clone(),
+            archived: project.archived,
             views,
             tech_stacks,
             columns: project.columns,
@@ -1870,6 +2461,66 @@ pub async fn execute_scan(
         .project_name
         .clone()
         .unwrap_or_else(|| "scanned_project".to_string());
+
+    let Some(project_guard) = state.try_project_lock(&project_name) else {
+        return (
+            StatusCode::CONFLICT,
+            Json(ScanResponseData {
+                scan_id: 0,
+                project_name,
+                status: "error".to_string(),
+                message: "A scan or lifecycle operation is already active for this project"
+                    .to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match state.project_deletion_pending(&project_name).await {
+        Ok(true) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(ScanResponseData {
+                    scan_id: 0,
+                    project_name,
+                    status: "error".to_string(),
+                    message: "A previous permanent deletion is incomplete".to_string(),
+                }),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ScanResponseData {
+                    scan_id: 0,
+                    project_name,
+                    status: "error".to_string(),
+                    message: error.to_string(),
+                }),
+            )
+                .into_response();
+        }
+        Ok(false) => {}
+    }
+
+    if state
+        .core_config
+        .read()
+        .unwrap()
+        .get_project(&project_name)
+        .is_some_and(|project| project.archived)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(ScanResponseData {
+                scan_id: 0,
+                project_name,
+                status: "error".to_string(),
+                message: "Archived projects cannot start new scans".to_string(),
+            }),
+        )
+            .into_response();
+    }
 
     // Validate every request before creating a durable job. Otherwise rejected
     // requests leave scan_jobs stuck in the queued state forever.
@@ -1953,6 +2604,11 @@ pub async fn execute_scan(
 
     let job_handle = ScanJobHandle::new(state.db.clone(), job_id);
     let cancellation = state.scan_scheduler.register(job_id).await;
+    let analyzer_config_dir = std::path::Path::new(&state.config_path)
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .to_path_buf();
 
     // ── Flow 1: repo_id provided — use cached cloned repo ──────────────
     if let Some(ref repo_id) = request.repo_id {
@@ -1970,15 +2626,18 @@ pub async fn execute_scan(
         let job = job_handle;
         let scheduler = state.scan_scheduler.clone();
         let cancellation = cancellation.clone();
+        let _project_guard = project_guard;
+        let analyzer_config_dir = analyzer_config_dir.clone();
 
         tokio::spawn(async move {
+            let _project_guard = _project_guard;
             let Some(_permit) = scheduler.acquire(&cancellation).await else {
                 job.set_cancelled().await;
                 scheduler.finish(job_id).await;
                 return;
             };
             job.set_running().await;
-            let mut scanner = Scanner::with_config(db, core_config);
+            let mut scanner = Scanner::with_config_dir(db, core_config, Some(&analyzer_config_dir));
             scanner.set_scan_job_id(job.job_id());
             scanner.set_cancellation_token(cancellation.clone());
 
@@ -2040,8 +2699,11 @@ pub async fn execute_scan(
     let scheduler = state.scan_scheduler.clone();
     let job = job_handle;
     let cancellation = cancellation.clone();
+    let _project_guard = project_guard;
+    let analyzer_config_dir = analyzer_config_dir.clone();
 
     tokio::spawn(async move {
+        let _project_guard = _project_guard;
         let Some(_permit) = scheduler.acquire(&cancellation).await else {
             job.set_cancelled().await;
             scheduler.finish(job_id).await;
@@ -2078,7 +2740,8 @@ pub async fn execute_scan(
                     let _ = std::fs::remove_dir_all(&temp_dir);
                     Err(anyhow::anyhow!("Scan cancelled"))
                 } else {
-                    let mut scanner = Scanner::with_config(db, core_config);
+                    let mut scanner =
+                        Scanner::with_config_dir(db, core_config, Some(&analyzer_config_dir));
                     scanner.set_scan_job_id(job.job_id());
                     scanner.set_cancellation_token(cancellation.clone());
                     let result = if scan_mode == "snapshot" {

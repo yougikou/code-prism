@@ -7,6 +7,9 @@ __pycache__/
 *.py[cod]
 
 # CodePrism specific
+.codeprism-dev/
+.codeprism-release/
+.codeprism-write.lock
 codeprism.db
 codeprism.db-shm
 codeprism.db-wal

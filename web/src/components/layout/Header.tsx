@@ -13,6 +13,7 @@ export const Header: React.FC = () => {
     theme, toggleTheme,
   } = useApp();
 
+  const activeProjects = projectList.filter(project => !project.archived);
   const isMultiProject = projectList.length > 1;
 
   const pageNav = [
@@ -34,11 +35,11 @@ export const Header: React.FC = () => {
         {isMultiProject ? (
           <div className="relative group">
             <button className="px-2 py-1 rounded-md text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center gap-1">
-              {currentProject || projectList[0]?.name}
+              {currentProject || activeProjects[0]?.name}
               <ChevronDown className="w-3.5 h-3.5" />
             </button>
             <div className="absolute top-full left-0 mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-[70] min-w-[130px]">
-              {projectList.map(p => (
+              {activeProjects.map(p => (
                 <button
                   key={p.name}
                   onClick={() => setProject(p.name)}
@@ -50,11 +51,23 @@ export const Header: React.FC = () => {
                   {p.name}
                 </button>
               ))}
+              {projectList.some(project => project.archived) && (
+                <div className="border-t border-slate-200 dark:border-slate-700 my-1" />
+              )}
+              {projectList.filter(project => project.archived).map(project => (
+                <button
+                  key={project.name}
+                  onClick={() => setProject(project.name)}
+                  className={`w-full text-left px-3 py-1.5 text-sm hover:bg-slate-100 dark:hover:bg-slate-700 ${project.name === currentProject ? 'text-amber-600' : 'text-slate-500'}`}
+                >
+                  {project.name} · {t('config.archived')}
+                </button>
+              ))}
             </div>
           </div>
         ) : (
           <span className="px-2 py-1 text-sm font-medium text-slate-500 dark:text-slate-500 opacity-80 cursor-default">
-            {currentProject || projectList[0]?.name || 'default'}
+            {currentProject || activeProjects[0]?.name || 'default'}
           </span>
         )}
 

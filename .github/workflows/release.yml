@@ -2,220 +2,204 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Version tag (e.g., v1.0.0)'
+        description: Existing version tag to publish
         required: true
         type: string
 
-env:
-  CARGO_TERM_COLOR: always
-  BINARY_NAME: codeprism
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
+  resolve:
+    name: Resolve and validate release source
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      commit: ${{ steps.resolve.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - run: npm install --global npm@10.9.8
+      - name: Resolve existing tag
+        id: resolve
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          PUSH_TAG: ${{ github.ref_name }}
+        run: |
+          TAG="$INPUT_TAG"
+          if [ -z "$TAG" ]; then TAG="$PUSH_TAG"; fi
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $TAG" >&2
+            exit 1
+          fi
+          git show-ref --verify --quiet "refs/tags/$TAG" || { echo "Tag does not exist: $TAG" >&2; exit 1; }
+          COMMIT="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          CODEPRISM_RELEASE_TAG="$TAG" node scripts/dev.mjs version-check
+
+  quality:
+    name: Release quality gate
+    needs: resolve
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm install --global npm@10.9.8
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          components: clippy,rustfmt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: Swatinem/rust-cache@v2
+      - run: npm run check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+  package:
+    name: Package ${{ matrix.target }}
+    needs: [resolve, quality]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            archive: tar.gz
-          
-          # macOS ARM64 (Apple Silicon)
+            os: ubuntu-22.04
           - target: aarch64-apple-darwin
-            os: macos-latest
-            archive: tar.gz
-          
-          # Windows x86_64
+            os: macos-14
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            archive: zip
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.resolve.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - run: npm install --global npm@10.9.8
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
           targets: ${{ matrix.target }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Build web frontend
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
-
-      - name: Install cross-compilation tools
-        if: matrix.cross
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Build (native)
-        if: ${{ !matrix.cross }}
-        env:
-          CODEPRISM_SKIP_WEB_BUILD: '1'
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Build (cross)
-        if: matrix.cross
-        env:
-          CODEPRISM_SKIP_WEB_BUILD: '1'
-        run: |
-          cargo install cross --git https://github.com/cross-rs/cross
-          cross build --release --target ${{ matrix.target }}
-
-      - name: Prepare artifacts (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          cd target/${{ matrix.target }}/release
-          strip ${{ env.BINARY_NAME }} || true
-          cp -r ../../../custom_analyzers .
-          mkdir -p scripts/lib
-          cp ../../../scripts/codeprism-scan scripts/
-          cp ../../../scripts/codeprism-scan-list scripts/
-          cp ../../../scripts/codeprism-repo-list scripts/
-          cp ../../../scripts/codeprism-repo-clone scripts/
-          cp ../../../scripts/lib/codeprism-common.sh scripts/lib/
-          cp ../../../scripts/README.md scripts/
-          cp ../../../scripts/verify-release-payload.py scripts/
-          python ../../../scripts/verify-release-payload.py .
-          ./${{ env.BINARY_NAME }} init-config codeprism.release-test.yaml
-          grep -q "^  camel-java-dsl:" codeprism.release-test.yaml
-          rm codeprism.release-test.yaml
-          tar czf ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }} \
-            ${{ env.BINARY_NAME }} custom_analyzers scripts
-
-      - name: Prepare artifacts (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          cd target/${{ matrix.target }}/release
-          Copy-Item -Recurse ../../../custom_analyzers .
-          New-Item -ItemType Directory -Path scripts -Force | Out-Null
-          Copy-Item ../../../scripts/codeprism-scan.ps1 scripts/
-          Copy-Item ../../../scripts/codeprism-scan-list.ps1 scripts/
-          Copy-Item ../../../scripts/codeprism-repo-list.ps1 scripts/
-          Copy-Item ../../../scripts/codeprism-repo-clone.ps1 scripts/
-          Copy-Item ../../../scripts/README.md scripts/
-          Copy-Item ../../../scripts/verify-release-payload.py scripts/
-          python ../../../scripts/verify-release-payload.py .
-          & ./${{ env.BINARY_NAME }}.exe init-config codeprism.release-test.yaml
-          if (-not (Select-String -Path codeprism.release-test.yaml -Pattern '^  camel-java-dsl:' -Quiet)) {
-            throw "Generated codeprism.yaml does not contain the Camel Java DSL template"
-          }
-          Remove-Item codeprism.release-test.yaml
-          7z a ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }} `
-            ${{ env.BINARY_NAME }}.exe custom_analyzers\ scripts\
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
         with:
-          name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
-          path: ${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }}
+          name: web-dist
+          path: web/dist
+      - name: Build target binary
+        env:
+          CODEPRISM_SKIP_WEB_BUILD: '1'
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Assemble and verify package
+        run: npm run package -- --target ${{ matrix.target }} --prebuilt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codeprism-${{ matrix.target }}
+          path: .codeprism-release/codeprism-${{ matrix.target }}.*
 
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
+  docker-verify:
+    name: Build and run Docker image
+    needs: [resolve, package]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: codeprism-x86_64-unknown-linux-gnu
+          path: package
+      - name: Prepare Docker context
+        run: |
+          mkdir docker-build
+          tar xzf package/codeprism-x86_64-unknown-linux-gnu.tar.gz -C docker-build
+      - name: Build and verify image locally
+        run: |
+          docker build -t codeprism-release-check:${{ needs.resolve.outputs.version }} .
+          docker run --rm codeprism-release-check:${{ needs.resolve.outputs.version }} --version
+          mkdir -p docker-config
+          docker run --rm -v "$PWD/docker-config:/workspace" codeprism-release-check:${{ needs.resolve.outputs.version }} init-config codeprism.yaml
+          docker run --rm -v "$PWD/docker-config:/workspace" codeprism-release-check:${{ needs.resolve.outputs.version }} --config codeprism.yaml check-config
+          docker run --rm -v "$PWD/docker-config:/workspace" -e CODEPRISM_ANALYZERS_DIR=/usr/local/share/codeprism/custom_analyzers codeprism-release-check:${{ needs.resolve.outputs.version }} test-analyzers
+          docker save codeprism-release-check:${{ needs.resolve.outputs.version }} -o codeprism-image.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codeprism-docker-image
+          path: codeprism-image.tar
+
+  publish:
+    name: Publish verified release
+    needs: [resolve, package, docker-verify]
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
-
+      packages: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts
-
-      - name: Get version
-        id: version
+      - name: Create combined checksums
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ inputs.tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -print0 | sort -z | xargs -0 sha256sum > artifacts/SHA256SUMS
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: CodePrism ${{ steps.version.outputs.version }}
-          draft: false
-          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          target_commitish: ${{ needs.resolve.outputs.commit }}
+          name: CodePrism ${{ needs.resolve.outputs.tag }}
+          prerelease: ${{ contains(needs.resolve.outputs.version, '-') }}
           generate_release_notes: true
           files: |
-            artifacts/**/*
-
-  build-docker:
-    name: Build Docker Image
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      packages: write
-      contents: read
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download Linux artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.BINARY_NAME }}-x86_64-unknown-linux-gnu
-          path: docker-build
-
-      - name: Extract binary
-        run: |
-          cd docker-build
-          tar xzf *.tar.gz
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+            artifacts/SHA256SUMS
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Get version
-        id: version
+      - name: Publish validated Docker image
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+          PRERELEASE: ${{ contains(needs.resolve.outputs.version, '-') }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ inputs.tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          docker load -i artifacts/codeprism-docker-image/codeprism-image.tar
+          docker tag "codeprism-release-check:$VERSION" "$IMAGE:$VERSION"
+          docker push "$IMAGE:$VERSION"
+          if [ "$PRERELEASE" = "false" ]; then
+            docker tag "codeprism-release-check:$VERSION" "$IMAGE:latest"
+            docker push "$IMAGE:latest"
           fi
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository }}:latest

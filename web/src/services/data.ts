@@ -85,6 +85,7 @@ export interface TechStackInfo {
 // Project-specific configuration
 export interface ProjectConfig {
   name: string;
+  archived?: boolean;
   views: ViewConfig[];
   tech_stacks: TechStackInfo[];
   columns?: number;
@@ -743,6 +744,9 @@ export interface RepoInfo {
   current_branch: string;
   path: string;
   project_name?: string | null;
+  source?: 'managed_clone' | 'local_or_unknown';
+  managed?: boolean;
+  can_remove_files?: boolean;
 }
 
 export interface ListReposResponse {
@@ -758,8 +762,8 @@ export async function listRepos(): Promise<RepoInfo[]> {
   return data.repos;
 }
 
-export async function deleteRepo(repoId: string, removeFiles = false): Promise<void> {
-  const res = await fetch(`/api/v1/git/${repoId}?remove_files=${removeFiles}`, {
+export async function deleteRepo(repoId: string): Promise<void> {
+  const res = await fetch(`/api/v1/git/${repoId}`, {
     method: 'DELETE',
   });
   if (!res.ok) {
@@ -772,6 +776,7 @@ export async function deleteRepo(repoId: string, removeFiles = false): Promise<v
 
 export interface UnifiedProjectInfo {
   name: string;
+  archived: boolean;
   has_config: boolean;
   config_repo_path: string | null;
   has_cached_repo: boolean;
@@ -780,6 +785,18 @@ export interface UnifiedProjectInfo {
   total_scans: number;
   last_scan_time: string | null;
   scan_modes: string[];
+}
+
+export async function setProjectArchived(projectName: string, archived: boolean): Promise<void> {
+  const res = await fetch(`/api/v1/projects/${encodeURIComponent(projectName)}/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ archived }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to update project archive state' }));
+    throw new Error(err.error || 'Failed to update project archive state');
+  }
 }
 
 export async function fetchUnifiedProjects(): Promise<UnifiedProjectInfo[]> {
@@ -806,13 +823,31 @@ export async function createProject(name: string): Promise<{ status: string; mes
   return await res.json();
 }
 
-export async function deleteProject(projectName: string): Promise<{ status: string; message: string }> {
+export interface ProjectDeletionPreview {
+  project_name: string;
+  scan_count: number;
+  repo_paths: Array<{ repo_id: string; path: string; source: string; retained_by_default: boolean; remove_eligible: boolean; blockers: string[] }>;
+  can_remove_managed_files: boolean;
+  blockers: string[];
+}
+
+export async function fetchProjectDeletionPreview(projectName: string): Promise<ProjectDeletionPreview> {
+  const res = await fetch(`/api/v1/projects/${encodeURIComponent(projectName)}/deletion-preview`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Failed to preview project deletion' }));
+    throw new Error(err.error || 'Failed to preview project deletion');
+  }
+  return await res.json();
+}
+
+export async function permanentlyDeleteProject(projectName: string, removeManagedFiles: boolean): Promise<void> {
   const res = await fetch(`/api/v1/projects/${encodeURIComponent(projectName)}`, {
     method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation_name: projectName, remove_managed_files: removeManagedFiles }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Failed to delete project' }));
     throw new Error(err.error || 'Failed to delete project');
   }
-  return await res.json();
 }

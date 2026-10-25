@@ -83,6 +83,8 @@ pub struct TechStack {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub name: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub archived: bool,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo_path: Option<String>,
@@ -108,6 +110,7 @@ impl Default for ProjectConfig {
     fn default() -> Self {
         Self {
             name: String::default(),
+            archived: false,
             repo_path: None,
             tech_stacks: Vec::default(),
             global_excludes: Vec::default(),
@@ -122,7 +125,7 @@ impl Default for ProjectConfig {
 }
 
 /// Root configuration supporting both single-project (legacy) and multi-project formats
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CodePrismConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database_url: Option<String>,
@@ -130,6 +133,12 @@ pub struct CodePrismConfig {
     // Multi-project format: list of project configs
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
+
+    /// Distinguishes old single-project YAML from an intentionally empty
+    /// explicit project list. This flag is inferred from YAML and never saved.
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub legacy_project_format: bool,
 
     // Project templates keyed by template name (stored separately from projects)
     #[serde(default)]
@@ -154,16 +163,85 @@ pub struct CodePrismConfig {
     pub custom_cross_file_analyzers: HashMap<String, CrossFileAnalyzerConfig>,
 }
 
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+#[derive(Deserialize, Default)]
+struct CodePrismConfigFile {
+    #[serde(default)]
+    database_url: Option<String>,
+    projects: Option<Vec<ProjectConfig>>,
+    #[serde(default)]
+    project_templates: HashMap<String, ProjectConfig>,
+    #[serde(default)]
+    tech_stacks: Vec<TechStack>,
+    #[serde(default)]
+    global_excludes: Vec<String>,
+    #[serde(default)]
+    custom_regex_analyzers: HashMap<String, CustomAnalyzerDef>,
+    #[serde(default)]
+    custom_impl_analyzers: HashMap<String, ImplAnalyzerConfig>,
+    #[serde(default)]
+    external_analyzers: HashMap<String, String>,
+    #[serde(default)]
+    aggregation_views: indexmap::IndexMap<String, AggregationView>,
+    #[serde(default)]
+    custom_cross_file_analyzers: HashMap<String, CrossFileAnalyzerConfig>,
+}
+
+impl<'de> Deserialize<'de> for CodePrismConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let file = CodePrismConfigFile::deserialize(deserializer)?;
+        let legacy_project_format = file.projects.is_none();
+        Ok(Self {
+            database_url: file.database_url,
+            projects: file.projects.unwrap_or_default(),
+            legacy_project_format,
+            project_templates: file.project_templates,
+            tech_stacks: file.tech_stacks,
+            global_excludes: file.global_excludes,
+            custom_regex_analyzers: file.custom_regex_analyzers,
+            custom_impl_analyzers: file.custom_impl_analyzers,
+            external_analyzers: file.external_analyzers,
+            aggregation_views: file.aggregation_views,
+            custom_cross_file_analyzers: file.custom_cross_file_analyzers,
+        })
+    }
+}
+
+impl Default for CodePrismConfig {
+    fn default() -> Self {
+        Self {
+            database_url: None,
+            projects: Vec::new(),
+            legacy_project_format: true,
+            project_templates: HashMap::new(),
+            tech_stacks: Vec::new(),
+            global_excludes: Vec::new(),
+            custom_regex_analyzers: HashMap::new(),
+            custom_impl_analyzers: HashMap::new(),
+            external_analyzers: HashMap::new(),
+            aggregation_views: indexmap::IndexMap::new(),
+            custom_cross_file_analyzers: HashMap::new(),
+        }
+    }
+}
+
 impl CodePrismConfig {
     /// Get all project configurations.
     /// If using legacy format (no 'projects' list), returns a single default project.
     pub fn get_projects(&self) -> Vec<ProjectConfig> {
         if !self.projects.is_empty() {
             self.projects.clone()
-        } else {
+        } else if self.legacy_project_format {
             // Legacy format: create a default project from root-level settings
             vec![ProjectConfig {
                 name: "default".to_string(),
+                archived: false,
                 repo_path: None,
                 tech_stacks: self.tech_stacks.clone(),
                 global_excludes: self.global_excludes.clone(),
@@ -174,7 +252,32 @@ impl CodePrismConfig {
                 aggregation_views: self.aggregation_views.clone(),
                 custom_cross_file_analyzers: self.custom_cross_file_analyzers.clone(),
             }]
+        } else {
+            Vec::new()
         }
+    }
+
+    /// Convert legacy root-level settings into an explicit project list before
+    /// a lifecycle mutation, so deleting the last project cannot recreate it.
+    pub fn normalize_project_format(&mut self) {
+        if self.legacy_project_format {
+            self.projects = self.get_projects();
+            self.tech_stacks.clear();
+            self.global_excludes.clear();
+            self.custom_regex_analyzers.clear();
+            self.custom_impl_analyzers.clear();
+            self.external_analyzers.clear();
+            self.aggregation_views.clear();
+            self.custom_cross_file_analyzers.clear();
+            self.legacy_project_format = false;
+        }
+    }
+
+    pub fn active_projects(&self) -> Vec<ProjectConfig> {
+        self.get_projects()
+            .into_iter()
+            .filter(|project| !project.archived)
+            .collect()
     }
 
     /// Get project config by name
@@ -1894,6 +1997,34 @@ pub enum AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_archival_defaults_to_active_and_survives_yaml_roundtrip() {
+        let mut config: CodePrismConfig = serde_yaml::from_str(
+            "projects:\n  - name: active\n  - name: archived\n    archived: true\n",
+        )
+        .unwrap();
+        assert!(!config.get_project("active").unwrap().archived);
+        assert!(config.get_project("archived").unwrap().archived);
+        assert_eq!(config.active_projects().len(), 1);
+
+        config.projects.clear();
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        let roundtrip: CodePrismConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert!(roundtrip.get_projects().is_empty());
+    }
+
+    #[test]
+    fn normalizing_legacy_config_preserves_project_then_allows_empty_list() {
+        let mut config: CodePrismConfig = serde_yaml::from_str("tech_stacks: []\n").unwrap();
+        assert_eq!(config.get_projects().len(), 1);
+        config.normalize_project_format();
+        assert_eq!(config.get_projects().len(), 1);
+        config.projects.clear();
+        let roundtrip: CodePrismConfig =
+            serde_yaml::from_str(&serde_yaml::to_string(&config).unwrap()).unwrap();
+        assert!(roundtrip.get_projects().is_empty());
+    }
 
     #[test]
     fn script_content_block_prefers_analyzer_group_key() {

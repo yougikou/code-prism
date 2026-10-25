@@ -180,9 +180,9 @@ const Dashboard = () => {
         if (!['Summary', ...stackNames].includes(selectedTechStack)) {
           setSelectedTechStack('Summary');
         }
-      } else if (projectList.length > 0) {
+      } else if (projectList.some(p => !p.archived)) {
         // No config but we have projects — use the first one
-        setProject(projectList[0].name);
+        setProject(projectList.find(p => !p.archived)!.name);
         setViewsConfig([]);
         setAvailableTechStacks([]);
       }

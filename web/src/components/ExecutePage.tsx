@@ -200,6 +200,7 @@ export default function ExecutePage() {
 
   // ── Project name: use shared context ──
   const projectName = currentProject
+  const currentProjectArchived = projectList.some(project => project.name === projectName && project.archived)
   const setProjectName = (name: string) => { if (name) setProject(name) }
 
   // ── Template state ──
@@ -214,7 +215,6 @@ export default function ExecutePage() {
 
   // ── Delete repo confirmation state ──
   const [deleteConfirmRepoId, setDeleteConfirmRepoId] = useState<string | null>(null)
-  const [deleteRemoveFiles, setDeleteRemoveFiles] = useState(false)
 
   const commitSearchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -441,12 +441,12 @@ export default function ExecutePage() {
   }
 
   // ── Delete repo ──
-  const handleDeleteRepo = async (id: string, removeFiles: boolean) => {
+  const handleDeleteRepo = async (id: string) => {
     setDeletingRepoId(id)
     const prevList = reposList
     setReposList(prev => prev.filter(r => r.repo_id !== id))
     try {
-      await deleteRepo(id, removeFiles)
+      await deleteRepo(id)
       triggerConfigRefresh()
     } catch (err) {
       setReposList(prevList)
@@ -661,6 +661,10 @@ export default function ExecutePage() {
     <div className="h-full overflow-y-auto">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
 
+        {currentProjectArchived && <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+          {t('config.archivedReadOnly')}
+        </div>}
+
         {/* ──────────── Repo Selection ──────────── */}
         {!repoId && (
           <>
@@ -783,11 +787,11 @@ export default function ExecutePage() {
                       }}
                       onKeyDown={(e) => e.key === 'Enter' && handleClone()}
                       className="flex-1 px-4 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
-                      disabled={isCloning}
+                      disabled={isCloning || currentProjectArchived}
                     />
                     <button
                       onClick={handleClone}
-                      disabled={isCloning || !gitUrl.trim() || !projectName}
+                      disabled={isCloning || currentProjectArchived || !gitUrl.trim() || !projectName}
                       className="px-5 py-2 bg-sky-600 text-white rounded-lg font-medium hover:bg-sky-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors flex items-center gap-2 shrink-0"
                     >
                       {isCloning ? (
@@ -809,11 +813,11 @@ export default function ExecutePage() {
                       onChange={e => setLocalPath(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && handleAddLocal()}
                       className="flex-1 px-4 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50"
-                      disabled={isAddingLocal}
+                      disabled={isAddingLocal || currentProjectArchived}
                     />
                     <button
                       onClick={handleAddLocal}
-                      disabled={isAddingLocal || !localPath.trim() || !projectName}
+                      disabled={isAddingLocal || currentProjectArchived || !localPath.trim() || !projectName}
                       className="px-5 py-2 bg-sky-600 text-white rounded-lg font-medium hover:bg-sky-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors flex items-center gap-2 shrink-0"
                     >
                       {isAddingLocal ? (
@@ -899,7 +903,7 @@ export default function ExecutePage() {
               <div className="flex items-center gap-2 shrink-0 ml-4">
                 <button
                   onClick={handlePull}
-                  disabled={pulling}
+                  disabled={pulling || currentProjectArchived}
                   className="px-3 py-1.5 text-xs bg-emerald-600/20 text-emerald-400 border border-emerald-600/30 rounded-md hover:bg-emerald-600/30 disabled:opacity-50 transition-colors flex items-center gap-1.5"
                 >
                   <DownloadIcon className={`w-3.5 h-3.5 ${pulling ? 'animate-pulse' : ''}`} />
@@ -996,7 +1000,7 @@ export default function ExecutePage() {
                             {!isCurrent && (
                               <button
                                 onClick={() => requestCheckout(branch.name, false)}
-                                disabled={isLoading}
+                                disabled={isLoading || currentProjectArchived}
                                 className="px-2.5 py-1 text-xs bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-md hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 transition-colors"
                               >
                                 {isLoading ? <LoaderIcon className="w-3 h-3 animate-spin" /> : t('execute.checkout')}
@@ -1078,7 +1082,7 @@ export default function ExecutePage() {
                             {!isCurrent && (
                               <button
                                 onClick={() => requestCheckout(branch.name, true)}
-                                disabled={isLoading}
+                                disabled={isLoading || currentProjectArchived}
                                 className="px-2.5 py-1 text-xs bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-md hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 transition-colors"
                               >
                                 {isLoading ? <LoaderIcon className="w-3 h-3 animate-spin" /> : t('execute.checkout')}
@@ -1373,7 +1377,7 @@ export default function ExecutePage() {
                 {/* Start Scan */}
                 <button
                   onClick={handleScan}
-                  disabled={!ref1 || isScanning || scanMode === null}
+                  disabled={!ref1 || isScanning || scanMode === null || currentProjectArchived}
                   className="w-full px-6 py-2.5 bg-sky-600 text-white rounded-lg font-medium hover:bg-sky-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
                 >
                   {isScanning ? (
@@ -1408,24 +1412,12 @@ export default function ExecutePage() {
                   <p className="text-sm text-slate-400 mb-3">
                     {t('execute.deleteWarning')}
                   </p>
-                  <label className="flex items-start gap-3 p-3 bg-slate-100 dark:bg-slate-700/50 rounded-lg cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={deleteRemoveFiles}
-                      onChange={e => setDeleteRemoveFiles(e.target.checked)}
-                      className="mt-0.5 w-4 h-4 rounded border-slate-400 text-red-500 focus:ring-red-500"
-                    />
-                    <div className="text-xs space-y-0.5">
-                      <span className="font-medium text-slate-700 dark:text-slate-300">{t('execute.deleteRemoveFiles')}</span>
-                      <p className="text-slate-400">{t('execute.deleteRemoveFilesHint')}</p>
-                    </div>
-                  </label>
                 </div>
               </div>
             </div>
             <div className="flex items-center justify-end gap-2 px-5 py-3 bg-slate-850 border-t border-slate-200 dark:border-slate-700">
               <button
-                onClick={() => { setDeleteConfirmRepoId(null); setDeleteRemoveFiles(false) }}
+                onClick={() => setDeleteConfirmRepoId(null)}
                 className="px-4 py-2 text-sm text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
               >
                 {t('execute.cancel')}
@@ -1433,10 +1425,8 @@ export default function ExecutePage() {
               <button
                 onClick={() => {
                   const id = deleteConfirmRepoId
-                  const removeFiles = deleteRemoveFiles
                   setDeleteConfirmRepoId(null)
-                  setDeleteRemoveFiles(false)
-                  handleDeleteRepo(id, removeFiles)
+                  handleDeleteRepo(id)
                 }}
                 className="px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
               >

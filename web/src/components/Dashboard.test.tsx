@@ -55,6 +55,7 @@ describe('Dashboard', () => {
     vi.mocked(dataService.getProjectNames).mockReturnValue(['test_project']);
     vi.mocked(dataService.fetchUnifiedProjects).mockResolvedValue([{
       name: 'test_project',
+      archived: false,
       has_config: true,
       config_repo_path: null,
       has_cached_repo: false,

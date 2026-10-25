@@ -12,7 +12,9 @@ import {
   deleteTemplate,
   reloadConfig,
   createProject,
-  deleteProject as deleteProjectApi,
+  fetchProjectDeletionPreview,
+  permanentlyDeleteProject,
+  setProjectArchived,
   type FullProjectConfig,
   type FullTechStack,
   type AggregationFunc,
@@ -1379,6 +1381,7 @@ const TABS: { key: ConfigTab; labelKey: string }[] = [
 export default function ConfigPage() {
   const { t } = useTranslation()
   const { currentProject, setProject, triggerConfigRefresh, configVersion, projectList } = useApp()
+  const currentProjectArchived = projectList.some(project => project.name === currentProject && project.archived)
   const toast = useToast()
 
   const [config, setConfig] = useState<FullProjectConfig | null>(null)
@@ -1413,7 +1416,7 @@ export default function ConfigPage() {
   const hasChanges = config && originalConfig !== JSON.stringify(config)
 
   const handleSave = async () => {
-    if (!config || !currentProject) return
+    if (!config || !currentProject || currentProjectArchived) return
 
     // Validate no duplicate analyzer names across all categories
     const allNames = new Set<string>()
@@ -1530,7 +1533,7 @@ export default function ConfigPage() {
             )}
             <button
               onClick={handleSave}
-              disabled={!hasChanges || saving || loading}
+              disabled={!hasChanges || saving || loading || currentProjectArchived}
               className="p-1.5 rounded-lg bg-sky-500 text-white hover:bg-sky-600 disabled:opacity-40 transition-colors"
               title={t('config.save')}
             >
@@ -1539,7 +1542,7 @@ export default function ConfigPage() {
             {config && (
               <button
                 onClick={() => setShowSaveAsTemplate(true)}
-                disabled={loading}
+                disabled={loading || currentProjectArchived}
                 className="p-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 transition-colors"
                 title={t('templates.saveAsTemplate')}
               >
@@ -1549,7 +1552,7 @@ export default function ConfigPage() {
             {config && (
               <button
                 onClick={() => setShowCopyTo(true)}
-                disabled={loading}
+                disabled={loading || currentProjectArchived}
                 className="p-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 transition-colors"
                 title={t('config.copyTo') || 'Copy to'}
               >
@@ -1558,7 +1561,7 @@ export default function ConfigPage() {
             )}
             <button
               onClick={handleReset}
-              disabled={!hasChanges || loading}
+              disabled={!hasChanges || loading || currentProjectArchived}
               className="p-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 transition-colors"
               title={t('config.reset')}
             >
@@ -1603,13 +1606,20 @@ export default function ConfigPage() {
 
       {/* Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+          {currentProjectArchived && (
+            <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              {t('config.archivedReadOnly')}
+            </div>
+          )}
           {loading ? (
             <div className="flex items-center justify-center py-20">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
               <span className="ml-3 text-sm text-slate-500">{t('config.loading')}</span>
             </div>
           ) : config ? (
-            renderTabContent()
+            <fieldset disabled={currentProjectArchived} className="min-w-0 disabled:opacity-80">
+              {renderTabContent()}
+            </fieldset>
           ) : (
             <div className="text-center py-20 text-slate-400 space-y-4">
               <Database className="w-12 h-12 mx-auto text-slate-300 dark:text-slate-600" />
@@ -1680,9 +1690,12 @@ export default function ConfigPage() {
             }
           }}
           onDelete={async (name) => {
-            if (!confirm(t('config.deleteProjectConfirm', { name }) || `Delete project '${name}'? This will remove all config, scan data, and cached repos.`)) return
+            void name
+            triggerConfigRefresh()
+          }}
+          onArchive={async (name, archived) => {
             try {
-              await deleteProjectApi(name)
+              await setProjectArchived(name, archived)
               triggerConfigRefresh()
             } catch (err) {
               console.error(err)
@@ -1762,17 +1775,23 @@ export default function ConfigPage() {
 
 // ─── Project Management Modal ───────────────────────────────────────────
 
-function ProjectManagementModal({ projectList, currentProject, onSelect, onCreateConfig, onDelete, onClose, t }: {
+function ProjectManagementModal({ projectList, currentProject, onSelect, onCreateConfig, onDelete, onArchive, onClose, t }: {
   projectList: UnifiedProjectInfo[]
   currentProject: string
   onSelect: (name: string) => void
   onCreateConfig: (name: string) => Promise<void>
   onDelete: (name: string) => Promise<void>
+  onArchive: (name: string, archived: boolean) => Promise<void>
   onClose: () => void
   t: TFunction
 }) {
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [deletionPreview, setDeletionPreview] = useState<Awaited<ReturnType<typeof fetchProjectDeletionPreview>> | null>(null)
+  const [confirmName, setConfirmName] = useState('')
+  const [removeManagedFiles, setRemoveManagedFiles] = useState(false)
+  const [previewError, setPreviewError] = useState('')
   const [creating, setCreating] = useState<string | null>(null)
+  const [archiving, setArchiving] = useState<string | null>(null)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
@@ -1801,12 +1820,15 @@ function ProjectManagementModal({ projectList, currentProject, onSelect, onCreat
               {[...projectList].sort((a, b) => a.name.localeCompare(b.name)).map(p => (
                 <tr key={p.name} className={`border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/30 ${p.name === currentProject ? 'bg-sky-50 dark:bg-sky-900/20' : ''}`}>
                   <td className="py-2.5 px-2">
-                    <button
-                      onClick={() => onSelect(p.name)}
-                      className="text-sky-600 dark:text-sky-400 hover:underline font-medium text-left"
-                    >
-                      {p.name}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => onSelect(p.name)}
+                        className={`font-medium text-left ${p.archived ? 'text-slate-500' : 'text-sky-600 dark:text-sky-400 hover:underline'}`}
+                      >
+                        {p.name}
+                      </button>
+                      {p.archived && <span className="text-[10px] rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">{t('config.archived')}</span>}
+                    </div>
                   </td>
                   <td className="py-2.5 px-2 text-center">
                     {p.has_config ? (
@@ -1835,7 +1857,19 @@ function ProjectManagementModal({ projectList, currentProject, onSelect, onCreat
                   </td>
                   <td className="py-2.5 px-2 text-right">
                     <button
-                      onClick={async () => { setDeleting(p.name); await onDelete(p.name); setDeleting(null) }}
+                      onClick={async () => { setArchiving(p.name); await onArchive(p.name, !p.archived); setArchiving(null) }}
+                      disabled={archiving === p.name}
+                      className="text-xs px-2 py-1 rounded text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-900/20 disabled:opacity-50"
+                    >
+                      {archiving === p.name ? '...' : t(p.archived ? 'config.unarchiveProject' : 'config.archiveProject')}
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setDeleting(p.name); setPreviewError(''); setConfirmName(''); setRemoveManagedFiles(false)
+                        try { setDeletionPreview(await fetchProjectDeletionPreview(p.name)) }
+                        catch (error) { setPreviewError(error instanceof Error ? error.message : ''); }
+                        finally { setDeleting(null) }
+                      }}
                       disabled={deleting === p.name}
                       className="text-xs px-2 py-1 rounded text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50"
                     >
@@ -1855,6 +1889,40 @@ function ProjectManagementModal({ projectList, currentProject, onSelect, onCreat
           </table>
         </div>
       </div>
+      {(deletionPreview || previewError) && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60" onClick={() => { setDeletionPreview(null); setPreviewError('') }}>
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl max-w-xl w-full mx-4 p-5 space-y-4" onClick={e => e.stopPropagation()}>
+            <h3 className="font-semibold text-slate-900 dark:text-slate-100">{t('config.permanentDelete')}</h3>
+            {previewError ? <p className="text-sm text-red-600">{previewError}</p> : deletionPreview && <>
+              <p className="text-sm text-slate-600 dark:text-slate-300">{t('config.deletePreviewScans', { count: deletionPreview.scan_count })}</p>
+              <ul className="max-h-36 overflow-auto text-xs font-mono space-y-1">
+                {deletionPreview.repo_paths.map(repo => <li key={repo.repo_id} className="break-all">{repo.path} · {repo.source}</li>)}
+              </ul>
+              {deletionPreview.blockers.length > 0 && <p className="text-xs text-amber-700 dark:text-amber-300">{deletionPreview.blockers.join('；')}</p>}
+              {deletionPreview.can_remove_managed_files && <label className="flex gap-2 text-sm text-red-700 dark:text-red-300">
+                <input type="checkbox" checked={removeManagedFiles} onChange={e => setRemoveManagedFiles(e.target.checked)} />
+                {t('config.deleteManagedFiles')}
+              </label>}
+              <label className="block text-sm">{t('config.typeProjectName', { name: deletionPreview.project_name })}
+                <input className="mt-1 w-full rounded border px-2 py-1 dark:bg-slate-900 dark:border-slate-600" value={confirmName} onChange={e => setConfirmName(e.target.value)} />
+              </label>
+            </>}
+            <div className="flex justify-end gap-2">
+              <button className="px-3 py-1.5 text-sm rounded bg-slate-100 dark:bg-slate-700" onClick={() => { setDeletionPreview(null); setPreviewError('') }}>{t('execute.cancel')}</button>
+              {deletionPreview && <button disabled={confirmName !== deletionPreview.project_name} className="px-3 py-1.5 text-sm rounded bg-red-600 text-white disabled:opacity-40" onClick={async () => {
+                const target = deletionPreview.project_name
+                setDeleting(target)
+                try {
+                  await permanentlyDeleteProject(target, removeManagedFiles)
+                  setDeletionPreview(null)
+                  await onDelete(target)
+                } catch (error) { setPreviewError(error instanceof Error ? error.message : '') }
+                finally { setDeleting(null) }
+              }}>{t('config.permanentDelete')}</button>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

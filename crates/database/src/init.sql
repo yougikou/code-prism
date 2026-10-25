@@ -66,6 +66,26 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Durable intent for destructive project deletion. This remains deliberately
+-- project-specific so interrupted operations are visible and never resumed
+-- implicitly at startup.
+CREATE TABLE IF NOT EXISTS project_deletion_operations (
+    operation_id TEXT PRIMARY KEY,
+    project_name TEXT NOT NULL,
+    config_path TEXT NOT NULL,
+    database_path TEXT NOT NULL,
+    cache_path TEXT NOT NULL,
+    directories_json TEXT NOT NULL DEFAULT '[]',
+    registrations_json TEXT NOT NULL DEFAULT '[]',
+    config_before TEXT NOT NULL,
+    config_after TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    completed_steps TEXT NOT NULL DEFAULT '[]',
+    last_error TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Scan summaries (per-scan execution stats)
 CREATE TABLE IF NOT EXISTS scan_summaries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
