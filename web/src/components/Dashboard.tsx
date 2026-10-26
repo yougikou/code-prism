@@ -199,25 +199,29 @@ const Dashboard = () => {
     loadConfig();
   }, [currentProject, configVersion, projectList, selectedTechStack, setAvailableTechStacks, setProject, setSelectedTechStack]);
 
-  // Update config when currentProject changes
+  // Reset the dashboard selection only when the project changes. The config
+  // object is refreshed after a tech-stack selection, so it must not reset the
+  // selected stack back to Summary.
+  useEffect(() => {
+    setSelectedTechStack('Summary');
+    setViewDataMap({});
+  }, [currentProject, setSelectedTechStack]);
+
+  // Update config when currentProject or the loaded config changes
   useEffect(() => {
     if (appConfig) {
       const projectConfig = appConfig.projects.find(p => p.name === currentProject);
       if (projectConfig) {
         setViewsConfig(projectConfig.views);
         setAvailableTechStacks(projectConfig.tech_stacks);
-        setSelectedTechStack('Summary'); // Reset to Summary on project change
-        setViewDataMap({}); // Clear old data
       } else if (projectList.some(p => p.name === currentProject && !p.has_config)) {
         // DB-only project (no config) — show empty views
         setViewsConfig([]);
         setAvailableTechStacks([]);
-        setSelectedTechStack('Summary');
-        setViewDataMap({});
       }
       // Note: selectedRunId is handled by the fetchRuns effect
     }
-  }, [currentProject, appConfig, projectList, setAvailableTechStacks, setSelectedTechStack]);
+  }, [currentProject, appConfig, projectList, setAvailableTechStacks]);
 
   // Filter Active Views based on selection
   useEffect(() => {

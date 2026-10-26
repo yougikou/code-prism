@@ -39,21 +39,6 @@ pub(crate) fn replace_file(source: &Path, destination: &Path) -> anyhow::Result<
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn atomic_write_replaces_existing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.yaml");
-        std::fs::write(&path, "old").unwrap();
-        write_atomic(&path, b"new").unwrap();
-        assert_eq!(std::fs::read_to_string(path).unwrap(), "new");
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
-    }
-}
-
 #[cfg(windows)]
 pub(crate) fn replace_file(source: &Path, destination: &Path) -> anyhow::Result<()> {
     use std::os::windows::ffi::OsStrExt;
@@ -77,4 +62,19 @@ pub(crate) fn replace_file(source: &Path, destination: &Path) -> anyhow::Result<
         return Err(std::io::Error::last_os_error().into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_write_replaces_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(&path, "old").unwrap();
+        write_atomic(&path, b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "new");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 }
