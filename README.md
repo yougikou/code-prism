@@ -501,7 +501,7 @@ aggregation_views:
 
 **View Display Rules:**
 - Views where `tech_stacks` is **not defined** or **empty** → displayed on the **Summary** tab
-- Views where `tech_stacks` contains `"All"` → displayed on the **Summary** tab
+- Views where `tech_stacks` contains `"All"` → displayed only on the **Summary** tab
 - Views where `tech_stacks` contains specific stack names → displayed on corresponding tech stack tabs
 
 ### Aggregation View func Configuration

@@ -401,7 +401,7 @@ aggregation_views:
 
 **ビュー表示ルール：**
 - `tech_stacks` が**未定義**または**空**のビュー → **Summary** タブに表示
-- `tech_stacks` に `"All"` が含まれるビュー → **Summary** タブに表示
+- `tech_stacks` に `"All"` が含まれるビュー → **Summary** タブのみに表示
 - `tech_stacks` に特定のスタック名が含まれるビュー → 対応するテックスタックタブに表示
 
 ### 集計ビュー func 設定

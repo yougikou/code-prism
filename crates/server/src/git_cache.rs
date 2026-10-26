@@ -181,8 +181,7 @@ fn is_link_or_reparse_point(path: &std::path::Path) -> bool {
         };
         let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
         let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
-        return attributes != INVALID_FILE_ATTRIBUTES
-            && attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
     #[cfg(not(windows))]
     false

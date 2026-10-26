@@ -427,7 +427,7 @@ aggregation_views:
 
 **视图显示规则：**
 - `tech_stacks` **未定义**或**为空**的视图 → 显示在 **Summary** 标签页
-- `tech_stacks` 包含 `"All"` 的视图 → 显示在 **Summary** 标签页
+- `tech_stacks` 包含 `"All"` 的视图 → 仅显示在 **Summary** 标签页
 - `tech_stacks` 包含特定技术栈名称的视图 → 显示在对应的技术栈标签页
 
 ### 聚合视图 func 配置

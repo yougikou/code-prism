@@ -1,7 +1,7 @@
 {
   "name": "codeprism-development",
   "private": true,
-  "version": "0.4.3",
+  "version": "0.4.4",
   "engines": {
     "node": "22.23.2",
     "npm": "10.9.8"

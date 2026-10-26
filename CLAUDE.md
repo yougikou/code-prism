@@ -138,7 +138,7 @@ cargo run -- test-analyzers
 
 - Primary config file: `codeprism.yaml` (generated with `init-config`)
 - Supports multi-project configurations with per-project tech stacks and views
-- View display rules: undefined or empty `tech_stacks` → Summary tab; specific stacks → corresponding tabs; `"All"` → Summary tab
+- View display rules: undefined or empty `tech_stacks` → Summary tab; specific stacks → corresponding tabs; `"All"` → Summary tab only
 - `change_type_mode`: `"all"` (stacked chart by A/M/D), `"switchable"` (A/M/D toggle buttons), undefined (no change-type filtering)
 
 ### Analyzer Config Format

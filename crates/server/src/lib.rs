@@ -223,6 +223,23 @@ pub async fn run_server(
     host: String,
     port: u16,
 ) -> Result<()> {
+    // Resolve the config file once at startup. API handlers read and update
+    // this path later, so keep them anchored to the same file on every OS.
+    let config_path = match std::fs::canonicalize(&config_path) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let path = PathBuf::from(&config_path);
+            if path.is_absolute() {
+                path
+            } else {
+                std::env::current_dir()?.join(path)
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+    .to_string_lossy()
+    .into_owned();
+    println!("Using configuration file: {config_path}");
     let _process_lock = crate::process_lock::ProcessLock::acquire(&config_path)?;
     let api_token = crate::auth::api_token_from_env()?;
     if !crate::auth::is_loopback_host(&host) && api_token.is_none() {
